@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model GameUser {
+  id             Int      @id @default(autoincrement())
+  firstName      String
+  lastName       String
+  username       String?  @unique
+  email          String   @unique
+  password       String
+  isVerified     Boolean  @default(false)
+  activationCode String?
+  selectedDrone  String   @default("basic")
+  avatar         String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model Player {
+  id        Int      @id @default(autoincrement())
+  username  String   @unique
+  mass      Int      @default(1250)
+  drones    Int      @default(0)
+  skin      String   @default("cyan")
+  coins     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("Player")
+}
+
+model Skin {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  color     String
+  price     Int      @default(0)
+  isPremium Boolean  @default(false)
+
+  @@map("Skin")
+}
+
+// =========================================================
+// ADAUGA acest model in schema.prisma existent (langa GameUser/Player/Skin).
+// Stocheaza istoricul per meci de Battle Royale (single-player + 59 boti AI).
+// Nu modifica GameUser/Player/Skin - e complet separat, fara migrare riscanta.
+// =========================================================
+
+model MatchResult {
+  id          Int      @id @default(autoincrement())
+
+  // Legatura cu utilizatorul care a jucat (GameUser.id). Optional pentru
+  // siguranta: daca userId e null/invalid pe vreun client vechi, nu pica
+  // salvarea intregului meci.
+  userId      Int?
+
+  // Snapshot de username la momentul meciului (util chiar daca userul
+  // isi schimba username-ul mai tarziu).
+  username    String
+
+  // Mod de joc: "battle-royale" acum, posibil alte moduri pe viitor
+  // (ex "normal-pvp", "play-vs-ai") fara sa schimbi schema.
+  gameMode    String   @default("battle-royale")
+
+  kills       Int      @default(0)
+  totalCollected Int   @default(0)
+
+  // Locul ocupat la final (1 = winner). totalPlayers = cati au participat
+  // (60 = tu + 59 boti, in acest mod).
+  placement   Int
+  totalPlayers Int     @default(60)
+
+  // Durata meciului in secunde - util pentru statistici ulterioare.
+  durationSeconds Int  @default(0)
+
+  // Skin-ul folosit, ca sa poti afisa istoricul corect ("ai jucat cu X").
+  skin        String   @default("cyan")
+
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@map("MatchResult")
+}

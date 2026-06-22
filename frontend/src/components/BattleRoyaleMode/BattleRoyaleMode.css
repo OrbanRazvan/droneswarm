@@ -1,0 +1,104 @@
+/* =========================================================
+   BattleRoyale.css
+   Foloseste baza vizuala din GameArena.css (deja importat in
+   BattleRoyale.jsx alaturi de acest fisier), pentru ca HUD-ul
+   (hp-panel, collect-counter, real-leaderboard, core-notice,
+   mobile-controls, minimap etc) sa fie identic ca stil cu
+   Play vs AI. Aici adaugam doar elementele noi, specifice
+   acestui mod: cronometrul zonei si butonul de exit dedicat.
+========================================================= */
+
+.pixi-arena-layer {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 50;
+  pointer-events: none;
+  overflow: hidden;
+  contain: strict;
+}
+
+.pixi-arena-layer canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: auto;
+}
+
+.pixi-arena-renderer,
+.pixi-arena-renderer canvas {
+  image-rendering: auto !important;
+  image-rendering: smooth !important;
+}
+
+/* Cronometrul "ZONE CLOSES IN: MM:SS" - sub contorul de jucatori vii,
+   pe centru sus, in acelasi stil vizual ca restul HUD-ului. */
+.battle-royale-zone-timer {
+  position: fixed;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9997;
+
+  padding: 7px 18px;
+  border-radius: 12px;
+
+  background: rgba(2, 8, 18, 0.82);
+  border: 1px solid rgba(125, 255, 125, 0.4);
+  box-shadow: 0 0 18px rgba(125, 255, 125, 0.18);
+
+  color: #7dff7d;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  text-shadow: 0 0 10px rgba(125, 255, 125, 0.55);
+  text-align: center;
+  pointer-events: none;
+}
+
+/* Buton EXIT TO MENU dedicat acestui mod, ca sa nu se confunde stilistic
+   cu .pvp-exit-btn (PvP) - aceeasi pozitionare/comportament ca in
+   GameArena.jsx, doar clasa e separata pentru claritate. */
+.battle-royale-exit-btn {
+  position: fixed;
+  z-index: 9990;
+  left: 18px;
+  bottom: 18px;
+  padding: 11px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 234, 255, 0.35);
+  background: rgba(2, 8, 18, 0.86);
+  color: #dffcff;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.battle-royale-exit-btn:hover {
+  background: rgba(0, 234, 255, 0.12);
+}
+
+/* Pe mobil landscape, cronometrul de zona se aliniaza compact, sub restul
+   HUD-ului deja restrans de regulile din GameArena.css. */
+@media (hover: none) and (orientation: landscape), (max-height: 520px) and (orientation: landscape) {
+  .battle-royale-zone-timer {
+    top: 48px;
+    padding: 5px 12px;
+    font-size: 10px;
+    border-radius: 9px;
+  }
+
+  .battle-royale-exit-btn {
+    left: 10px;
+    bottom: 10px;
+    padding: 9px 12px;
+  }
+}
+
+@media (max-width: 760px) {
+  .battle-royale-zone-timer {
+    top: 58px;
+    font-size: 11px;
+    padding: 6px 14px;
+  }
+}

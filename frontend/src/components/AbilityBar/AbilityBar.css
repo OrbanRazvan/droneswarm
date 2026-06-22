@@ -1,0 +1,36 @@
+.ability-bar {
+  position: absolute;
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+}
+
+.ability {
+  width: 88px;
+  height: 88px;
+  background: rgba(4, 10, 20, 0.85);
+  border: 1px solid rgba(0, 234, 255, 0.24);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.ability svg {
+  font-size: 28px;
+  color: #74dfff;
+  margin-bottom: 6px;
+}
+
+.ability span {
+  font-size: 13px;
+  font-weight: bold;
+}
+
+.ability small {
+  font-size: 11px;
+  color: #9befff;
+}

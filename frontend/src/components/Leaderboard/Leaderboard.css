@@ -1,0 +1,28 @@
+.leaderboard {
+  position: absolute;
+  top: 28px;
+  right: 28px;
+  width: 240px;
+  padding: 18px;
+  background: rgba(4, 10, 20, 0.82);
+  border: 1px solid rgba(0, 234, 255, 0.25);
+  border-radius: 12px;
+  box-shadow: 0 0 22px rgba(0, 234, 255, 0.12);
+}
+
+.leaderboard h3 {
+  margin: 0 0 16px;
+  text-align: center;
+  font-size: 18px;
+}
+
+.leaderboard-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  font-size: 16px;
+}
+
+.leaderboard-row strong {
+  color: #00eaff;
+}

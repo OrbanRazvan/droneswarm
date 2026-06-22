@@ -1,0 +1,234 @@
+.auth-page {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  position: relative;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(0, 234, 255, 0.18), transparent 34%),
+    radial-gradient(circle at 20% 20%, rgba(168, 85, 255, 0.16), transparent 26%),
+    #06101d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+}
+
+.auth-grid {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+  background-size: 70px 70px;
+}
+
+.auth-card {
+  position: relative;
+  z-index: 5;
+  width: 560px;
+  padding: 48px 46px;
+  border-radius: 28px;
+  text-align: center;
+  background: rgba(4, 10, 20, 0.94);
+  border: 1px solid rgba(0, 234, 255, 0.42);
+  box-shadow: 0 0 55px rgba(0, 234, 255, 0.24);
+}
+
+.auth-card h1 {
+  margin: 14px 0 0;
+  color: #00eaff;
+  font-size: 54px;
+  letter-spacing: 3px;
+  text-shadow: 0 0 20px rgba(0,234,255,0.55);
+}
+
+.subtitle {
+  margin: 16px auto 34px;
+  max-width: 420px;
+  color: rgba(255,255,255,0.72);
+  font-size: 17px;
+  line-height: 1.5;
+}
+
+.google-btn {
+  width: 100%;
+  padding: 17px 22px;
+  border-radius: 14px;
+  border: none;
+  background: white;
+  color: #111;
+  font-size: 18px;
+  font-weight: 900;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.google-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: conic-gradient(#4285f4, #34a853, #fbbc05, #ea4335, #4285f4);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+}
+
+.login-note {
+  margin-top: 20px;
+  color: rgba(155,239,255,0.78);
+  font-size: 14px;
+}
+
+/* DRONE MODEL */
+.menu-drone-model {
+  position: relative;
+  width: 150px;
+  height: 150px;
+  margin: 0 auto;
+  animation: menuDroneFloat 4s ease-in-out infinite;
+  filter: drop-shadow(0 0 22px rgba(0,234,255,0.65));
+}
+
+.menu-arm {
+  position: absolute;
+  left: 72px;
+  top: 58px;
+  width: 5px;
+  height: 82px;
+  border-radius: 99px;
+  background: linear-gradient(#eaffff, #00eaff, #003a46);
+  transform-origin: center 2px;
+}
+
+.menu-arm-x {
+  transform: rotate(55deg);
+}
+
+.menu-arm-y {
+  transform: rotate(-55deg);
+}
+
+.menu-shell {
+  position: absolute;
+  left: 51px;
+  top: 42px;
+  width: 48px;
+  height: 70px;
+  border-radius: 45% 45% 34% 34%;
+  background:
+    radial-gradient(circle at 35% 18%, white, transparent 18%),
+    linear-gradient(160deg, #eaffff, #00eaff 46%, #005e72);
+  box-shadow:
+    0 0 22px #00eaff,
+    0 0 50px rgba(0,234,255,0.75),
+    inset 0 0 14px rgba(255,255,255,0.7);
+}
+
+.menu-camera {
+  position: absolute;
+  left: 61px;
+  top: 98px;
+  width: 28px;
+  height: 15px;
+  border-radius: 0 0 10px 10px;
+  background: #06101d;
+  box-shadow: inset 0 0 8px #00eaff;
+}
+
+.menu-light {
+  position: absolute;
+  left: 70px;
+  top: 75px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 0 12px white, 0 0 24px #00eaff;
+}
+
+.menu-rotor {
+  position: absolute;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid rgba(210,255,255,0.6);
+  background: rgba(0,234,255,0.08);
+  overflow: hidden;
+  box-shadow: 0 0 15px rgba(0,234,255,0.85);
+}
+
+.menu-rotor span {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    transparent,
+    rgba(255,255,255,0.95),
+    rgba(0,234,255,0.6),
+    transparent
+  );
+  filter: blur(1px);
+  animation: menuRotorSpin 0.055s linear infinite;
+}
+
+.menu-rotor::after {
+  content: "";
+  position: absolute;
+  inset: 15px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 0 10px white, 0 0 16px #00eaff;
+}
+
+.menu-rotor-tl { left: 15px; top: 12px; }
+.menu-rotor-tr { right: 15px; top: 12px; }
+.menu-rotor-bl { left: 15px; bottom: 12px; }
+.menu-rotor-br { right: 15px; bottom: 12px; }
+
+.floating-drone {
+  position: absolute;
+  z-index: 2;
+  opacity: 0.38;
+}
+
+.drone-a {
+  left: 9%;
+  top: 14%;
+  transform: scale(0.8);
+}
+
+.drone-b {
+  right: 10%;
+  top: 20%;
+  transform: scale(0.7);
+  animation-delay: 1s;
+}
+
+.drone-c {
+  left: 15%;
+  bottom: 14%;
+  transform: scale(0.6);
+  animation-delay: 1.7s;
+}
+
+@keyframes menuDroneFloat {
+  0%, 100% {
+    translate: 0 0;
+    scale: 1;
+  }
+
+  50% {
+    translate: 10px -18px;
+    scale: 1.06;
+  }
+}
+
+@keyframes menuRotorSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

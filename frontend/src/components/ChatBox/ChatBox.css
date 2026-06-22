@@ -1,0 +1,37 @@
+.chat-box {
+  position: absolute;
+  left: 28px;
+  bottom: 28px;
+  width: 300px;
+  background: rgba(4, 10, 20, 0.82);
+  border: 1px solid rgba(0, 234, 255, 0.18);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.chat-box p {
+  margin: 7px 0;
+  font-size: 14px;
+}
+
+.chat-box input {
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  color: white;
+}
+
+.green {
+  color: #7cff2e;
+}
+
+.purple {
+  color: #a855ff;
+}
+
+.red {
+  color: #ff4040;
+}

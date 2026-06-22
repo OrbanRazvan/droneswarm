@@ -1,0 +1,242 @@
+/* =========================================================
+   BATTLE ROYALE ONLINE (PvP multiplayer, server-authoritative)
+   Stilurile de baza pentru drona, HUD, mobile controls, toxic-overlay
+   si battle-zone vin deja din GameArena.css si PvpArena.css (importate
+   in BattleRoyaleOnline.jsx). Acest fisier adauga DOAR ce e specific
+   noului ecran de asteptare/countdown si timer-ului de zona.
+========================================================= */
+
+/* ---------------------------------------------------------
+   TOP HUD: PLAYERS ALIVE + ZONE TIMER, unul sub altul, centrat
+--------------------------------------------------------- */
+.battle-royale-online-dom-arena .br-online-top-hud {
+  position: fixed !important;
+  top: 8px !important;
+  left: 50% !important;
+  right: auto !important;
+  transform: translateX(-50%) !important;
+  z-index: 120 !important;
+  width: 360px !important;
+  min-width: 0 !important;
+  max-width: calc(100vw - 340px) !important;
+  padding: 9px 18px 11px !important;
+  border: 1px solid rgba(125, 255, 125, 0.38) !important;
+  border-radius: 12px !important;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(125, 255, 125, 0.10), transparent 60%),
+    rgba(2, 8, 18, 0.92) !important;
+  box-shadow:
+    0 0 24px rgba(125, 255, 125, 0.14),
+    inset 0 0 28px rgba(125, 255, 125, 0.03) !important;
+  text-align: center !important;
+  pointer-events: none !important;
+}
+
+.battle-royale-online-dom-arena .br-online-top-hud strong {
+  display: block !important;
+  color: #00eaff !important;
+  font-size: 26px !important;
+  line-height: 0.98 !important;
+  letter-spacing: 1.2px !important;
+  text-shadow: 0 0 14px rgba(0, 234, 255, 0.7) !important;
+}
+
+.battle-royale-online-dom-arena .br-online-top-hud span {
+  display: block !important;
+  margin-top: 7px !important;
+  color: rgba(225, 248, 255, 0.72) !important;
+  font-size: 12px !important;
+  line-height: 1 !important;
+  font-weight: 900 !important;
+  letter-spacing: 1px !important;
+}
+
+.battle-royale-online-dom-arena .br-online-zone-timer {
+  position: fixed;
+  top: 78px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 119;
+  padding: 7px 20px 8px;
+  border-radius: 0 0 12px 12px;
+  border: 1px solid rgba(125, 255, 125, 0.4);
+  border-top: 0;
+  background: rgba(2, 8, 18, 0.86);
+  box-shadow: 0 0 18px rgba(125, 255, 125, 0.16);
+  color: #7dff7d;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  text-shadow: 0 0 12px rgba(125, 255, 125, 0.6);
+  pointer-events: none;
+}
+
+/* Core drop notice se aseaza sub zone timer, fara suprapunere */
+.battle-royale-online-dom-arena .normal-pvp-core-drop-notice {
+  top: 122px !important;
+}
+
+/* ---------------------------------------------------------
+   WAITING / COUNTDOWN SCREEN
+   Afisat cat status-ul nu e 'playing' sau 'finished'.
+--------------------------------------------------------- */
+.br-online-waiting-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 50% 38%, rgba(125, 255, 125, 0.08), transparent 42%),
+    rgba(1, 7, 16, 0.93);
+  backdrop-filter: blur(8px);
+}
+
+.br-online-waiting-card {
+  width: min(440px, 92vw);
+  padding: 32px 30px 28px;
+  border-radius: 24px;
+  text-align: center;
+  background: rgba(3, 12, 24, 0.92);
+  border: 1px solid rgba(125, 255, 125, 0.4);
+  box-shadow:
+    0 0 38px rgba(125, 255, 125, 0.16),
+    inset 0 0 30px rgba(125, 255, 125, 0.045);
+}
+
+.br-online-waiting-pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(125, 255, 125, 0.42);
+  color: #7dff7d;
+  background: rgba(125, 255, 125, 0.09);
+  border-radius: 999px;
+  padding: 7px 16px;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 1.4px;
+}
+
+.br-online-waiting-card h1 {
+  margin: 16px 0 6px;
+  color: #ffffff;
+  font-size: 26px;
+  letter-spacing: 0.6px;
+  text-shadow: 0 0 16px rgba(0, 234, 255, 0.35);
+}
+
+.br-online-waiting-card p {
+  margin: 4px 0 18px;
+  color: rgba(220, 252, 255, 0.78);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.br-online-countdown-number {
+  display: block;
+  margin: 6px 0 18px;
+  color: #ffffff;
+  font-size: 64px;
+  line-height: 1;
+  font-weight: 1000;
+  letter-spacing: 1px;
+  text-shadow:
+    0 0 16px rgba(255, 255, 255, 0.8),
+    0 0 34px rgba(0, 234, 255, 0.6),
+    0 0 54px rgba(125, 255, 125, 0.35);
+}
+
+.br-online-waiting-bar {
+  height: 10px;
+  margin-bottom: 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.br-online-waiting-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #00eaff, #7dff7d);
+  box-shadow: 0 0 14px rgba(125, 255, 125, 0.55);
+  transition: width 0.25s ease-out;
+}
+
+.br-online-waiting-hint {
+  display: block;
+  margin-bottom: 20px;
+  color: rgba(180, 245, 255, 0.62);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.br-online-waiting-card button {
+  width: 100%;
+  padding: 13px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 234, 255, 0.45);
+  background: rgba(0, 234, 255, 0.12);
+  color: #dffcff;
+  font-weight: 1000;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+
+.br-online-waiting-card button:hover {
+  background: rgba(0, 234, 255, 0.2);
+}
+
+/* ---------------------------------------------------------
+   Mobile: compact top HUD + zone timer
+--------------------------------------------------------- */
+@media (orientation: landscape) and (max-width: 950px),
+       (hover: none) and (pointer: coarse) and (orientation: landscape) {
+  .battle-royale-online-dom-arena .br-online-top-hud {
+    top: 6px !important;
+    width: min(280px, calc(100vw - 40px)) !important;
+    max-width: calc(100vw - 40px) !important;
+    padding: 6px 14px 8px !important;
+  }
+
+  .battle-royale-online-dom-arena .br-online-top-hud strong {
+    font-size: 18px !important;
+  }
+
+  .battle-royale-online-dom-arena .br-online-zone-timer {
+    top: 54px;
+    font-size: 10px;
+    padding: 5px 14px 6px;
+  }
+
+  .battle-royale-online-dom-arena .normal-pvp-core-drop-notice {
+    top: 90px !important;
+  }
+
+  .br-online-waiting-card {
+    padding: 24px 20px 22px;
+  }
+
+  .br-online-countdown-number {
+    font-size: 48px;
+  }
+}
+
+@media (orientation: portrait) and (max-width: 760px) {
+  .battle-royale-online-dom-arena .br-online-top-hud {
+    top: 6px !important;
+    width: min(300px, calc(100vw - 28px)) !important;
+    max-width: calc(100vw - 28px) !important;
+  }
+
+  .battle-royale-online-dom-arena .br-online-zone-timer {
+    top: 56px;
+  }
+
+  .battle-royale-online-dom-arena .normal-pvp-core-drop-notice {
+    top: 96px !important;
+  }
+}
