@@ -488,7 +488,7 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
               setScreen("arena");
             }}
           >
-            Normal PvP !
+            Normal PvP !!!!
           </button>
 
           <button
