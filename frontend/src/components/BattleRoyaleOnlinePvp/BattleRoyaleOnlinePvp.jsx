@@ -5,7 +5,6 @@ import PixiArenaRenderer from "../PixiArenaRenderer/PixiArenaRenderer";
 import "../GameArena/GameArena.css";
 import "../NormalPvpArena/NormalPvpArena.css";
 import "./BattleRoyaleOnlinePvp.css";
-import { isMobile } from "pixi.js";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
@@ -45,7 +44,20 @@ const LOCAL_ENERGY_COLLECT_DISTANCE = 135;
 const LOCAL_CORE_COLLECT_DISTANCE = 155;
 const LOCAL_COLLECT_HIDE_TTL = 2200;
 
-const MAX_VISIBLE_REMOTE_PLAYERS = 25;
+// ---------------------------------------------------------------------------
+// Battle Royale Online suporta pana la 50 jucatori reali simultan (vezi
+// BR_ONLINE_ROOM_MAX_PLAYERS in game.gateway.ts). Limita de mai jos e
+// adaptiva: pe desktop putem permite mai multi jucatori randati la calitate
+// completa (CPU/GPU mai puternic), pe mobil reducem agresiv ca sa protejam
+// FPS-ul exact in scenariul cel mai dens posibil - finalul partidei, cand
+// zona s-a strans si toti supravietuitorii sunt aglomerati in spatiu mic.
+// PixiArenaRenderer aplica oricum propriul LOD (quality budget) peste
+// aceasta lista, dar a limita aici, la nivel de client, reduce costul de
+// reconciliere/predictie (dampPoint etc) facut pentru fiecare jucator de
+// la distanta, inainte sa ajunga la randare.
+// ---------------------------------------------------------------------------
+const MAX_VISIBLE_REMOTE_PLAYERS_DESKTOP = 30;
+const MAX_VISIBLE_REMOTE_PLAYERS_MOBILE = 18;
 
 const CORE_TYPES = [
   { type: "nano", name: "Nano Core", shortName: "Nano", color: "#00eaff", effect: "+10 MAX HP" },
@@ -523,17 +535,6 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
   const hiddenEnergyIdsRef = useRef(new Map());
   const hiddenCoreIdsRef = useRef(new Map());
 
-  // ---------------------------------------------------------------------
-  // DIAGNOSTIC TEMPORAR: masuram timpul real intre 2 pachete de stare
-  // consecutive primite de la server, plus dimensiunea ultimului pachet
-  // (jucatori/orburi/proiectile), fara a avea nevoie de DevTools - vizibil
-  // direct pe ecran printr-un panel mic. Asta ne spune daca lag-ul vine
-  // din RETEA/SERVER (pachete intarziate/cu jitter mare) sau din CLIENT
-  // (pachetele vin la timp, dar randarea locala e lenta).
-  // ---------------------------------------------------------------------
-  const diagLastPacketAtRef = useRef(0);
-  const diagPacketGapsRef = useRef([]);
-
   const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [isMobileControls, setIsMobileControls] = useState(() => isRealMobileDevice());
   const [renderData, setRenderData] = useState(() => ({ ...worldRef.current, fps: 60 }));
@@ -556,20 +557,6 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
 
     const applyState = (state) => {
       const now = performance.now();
-
-      // --- DIAGNOSTIC: masurare gap intre pachete + dimensiune pachet ---
-      const lastAt = diagLastPacketAtRef.current;
-      if (lastAt > 0) {
-        const gap = now - lastAt;
-        const gaps = diagPacketGapsRef.current;
-        gaps.push(gap);
-        if (gaps.length > 60) gaps.shift();
-
-        const avgGapMs = gaps.reduce((a, b) => a + b, 0) / gaps.length;
-        const maxGapMs = Math.max(...gaps);
-        const packetsPerSec = avgGapMs > 0 ? Math.round(1000 / avgGapMs) : 0;
-      }
-      diagLastPacketAtRef.current = now;
 
       cleanupHiddenCollected(hiddenOrbIdsRef.current, now);
       cleanupHiddenCollected(hiddenEnergyIdsRef.current, now);
@@ -900,6 +887,10 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
         spectatorTargetRef.current = currentSpectatorTarget;
       }
 
+      const maxVisibleRemotePlayers = isMobileControls
+        ? MAX_VISIBLE_REMOTE_PLAYERS_MOBILE
+        : MAX_VISIBLE_REMOTE_PLAYERS_DESKTOP;
+
       const incomingPlayers = new Map((data.players || []).filter((p) => p?.id && p.id !== me?.id).map((p) => [p.id, p]));
 
       for (const [id, target] of incomingPlayers.entries()) {
@@ -1039,7 +1030,7 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
       const livePlayers = collectVisible(
         remoteMap.values(),
         (player) => player?.id !== liveYou?.id && isVisible(player, liveBounds, 380),
-        MAX_VISIBLE_REMOTE_PLAYERS,
+        maxVisibleRemotePlayers,
         (player) => ({ ...player, skin: normalizeSkin(player.skin), isBot: false })
       );
       const liveOrbs = collectVisible(
@@ -1100,7 +1091,7 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
 
     rafId = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(rafId);
-  }, []);
+  }, [isMobileControls]);
 
   useEffect(() => {
     const movementKeys = new Set(["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"]);
@@ -1449,17 +1440,15 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
   const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y : 0;
   const bounds = getViewportBounds(cameraX, cameraY, viewport, isMobileControls ? 350 : 820);
 
-  const MAX_VISIBLE_ORBS =
-  isMobileControls ? 120 : 520;
+  const maxVisibleOrbs = isMobileControls ? 120 : 520;
+  const maxVisibleRemotePlayersForRender = isMobileControls
+    ? MAX_VISIBLE_REMOTE_PLAYERS_MOBILE
+    : MAX_VISIBLE_REMOTE_PLAYERS_DESKTOP;
 
-  const visibleOrbs = collectVisible(
-  renderData.orbs || [],
-  (orb) => isVisible(orb, bounds, 40),
-  MAX_VISIBLE_ORBS
-);
+  const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), maxVisibleOrbs);
   const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), 120);
   const visibleCores = collectVisible(renderData.cores || [], (core) => isVisible(core, bounds, 120), 18);
-  const visiblePlayers = collectVisible(renderData.players || [], (player) => isVisible(player, bounds, 360), MAX_VISIBLE_REMOTE_PLAYERS);
+  const visiblePlayers = collectVisible(renderData.players || [], (player) => isVisible(player, bounds, 360), maxVisibleRemotePlayersForRender);
   const visibleProjectiles = collectVisible(renderData.projectiles || [], (projectile) => isVisible(projectile, bounds, 160), 100);
 
   const rendererPlayer = isDead && spectatorTarget
