@@ -535,6 +535,25 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
   const hiddenEnergyIdsRef = useRef(new Map());
   const hiddenCoreIdsRef = useRef(new Map());
 
+  // ---------------------------------------------------------------------
+  // DIAGNOSTIC TEMPORAR #2: masuram costul real (in ms) al fiecarei
+  // sectiuni majore din bucla tick(), plus gap-ul real intre 2 apeluri
+  // consecutive de rAF. Asta ne arata EXACT unde se duce timpul pe acest
+  // telefon specific, fara nevoie de DevTools conectat prin USB.
+  // ---------------------------------------------------------------------
+  const timingRef = useRef({
+    rafGapSamples: [],
+    youSamples: [],
+    remoteSamples: [],
+    projectileSamples: [],
+    pixiRefSamples: [],
+    setStateSamples: [],
+    lastTickAt: 0,
+  });
+  const [timingDisplay, setTimingDisplay] = useState({
+    rafGap: 0, you: 0, remote: 0, projectile: 0, pixiRef: 0, setState: 0,
+  });
+
   const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [isMobileControls, setIsMobileControls] = useState(() => isRealMobileDevice());
   const [renderData, setRenderData] = useState(() => ({ ...worldRef.current, fps: 60 }));
@@ -725,6 +744,14 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
     let rafId = 0;
 
     const tick = (now) => {
+      const timing = timingRef.current;
+      if (timing.lastTickAt > 0) {
+        const rafGap = now - timing.lastTickAt;
+        timing.rafGapSamples.push(rafGap);
+        if (timing.rafGapSamples.length > 40) timing.rafGapSamples.shift();
+      }
+      timing.lastTickAt = now;
+
       const data = worldRef.current;
       const dt = Math.min(0.05, Math.max(0.001, (now - lastFrameRef.current) / 1000));
       lastFrameRef.current = now;
@@ -859,6 +886,10 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
         }
       }
 
+      const youSectionEnd = performance.now();
+      timing.youSamples.push(youSectionEnd - now);
+      if (timing.youSamples.length > 40) timing.youSamples.shift();
+
       const me = predictedYouRef.current || data.you;
       const remoteMap = remotePlayersRef.current;
 
@@ -940,6 +971,10 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
       for (const id of remoteMap.keys()) {
         if (!incomingPlayers.has(id)) remoteMap.delete(id);
       }
+
+      const remoteSectionEnd = performance.now();
+      timing.remoteSamples.push(remoteSectionEnd - youSectionEnd);
+      if (timing.remoteSamples.length > 40) timing.remoteSamples.shift();
 
       const projectileMap = projectilesRef.current;
       const incomingProjectiles = new Map((data.projectiles || []).filter((p) => p?.id).map((p) => [p.id, p]));
@@ -1054,6 +1089,10 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
         120
       );
 
+      const projectileSectionEnd = performance.now();
+      timing.projectileSamples.push(projectileSectionEnd - remoteSectionEnd);
+      if (timing.projectileSamples.length > 40) timing.projectileSamples.shift();
+
       pixiLiveRef.current = {
         player: liveYou,
         players: livePlayers,
@@ -1074,6 +1113,10 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
         otherPlayerQuality: 2,
       };
 
+      const pixiRefSectionEnd = performance.now();
+      timing.pixiRefSamples.push(pixiRefSectionEnd - projectileSectionEnd);
+      if (timing.pixiRefSamples.length > 40) timing.pixiRefSamples.shift();
+
       if (now - lastRenderSyncRef.current >= (isMobileControls ? 100 : 66)) {
         lastRenderSyncRef.current = now;
         setRenderData({
@@ -1083,6 +1126,23 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
           players: Array.from(remoteMap.values()),
           projectiles: Array.from(projectileMap.values()),
           fps: fpsRef.current.value,
+        });
+
+        const setStateEnd = performance.now();
+        timing.setStateSamples.push(setStateEnd - pixiRefSectionEnd);
+        if (timing.setStateSamples.length > 40) timing.setStateSamples.shift();
+      }
+
+      if (!timing.lastDisplayUpdateAt || now - timing.lastDisplayUpdateAt > 500) {
+        timing.lastDisplayUpdateAt = now;
+        const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
+        setTimingDisplay({
+          rafGap: avg(timing.rafGapSamples),
+          you: avg(timing.youSamples),
+          remote: avg(timing.remoteSamples),
+          projectile: avg(timing.projectileSamples),
+          pixiRef: avg(timing.pixiRefSamples),
+          setState: avg(timing.setStateSamples),
         });
       }
 
@@ -1608,6 +1668,33 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
       )}
 
       <div className={`fps-counter ${renderData.fps < 50 ? "fps-low" : ""}`}>FPS: {renderData.fps || 60}</div>
+
+      <div
+        style={{
+          position: "fixed",
+          top: "40px",
+          right: "8px",
+          zIndex: 99999,
+          background: "rgba(0,0,0,0.85)",
+          color: "#0f0",
+          fontSize: "10px",
+          fontFamily: "monospace",
+          padding: "6px 8px",
+          borderRadius: "6px",
+          lineHeight: "1.4",
+          pointerEvents: "none",
+        }}
+      >
+        <div>rafGap: {timingDisplay.rafGap.toFixed(1)}ms</div>
+        <div>you: {timingDisplay.you.toFixed(2)}ms</div>
+        <div>remote: {timingDisplay.remote.toFixed(2)}ms</div>
+        <div>proj: {timingDisplay.projectile.toFixed(2)}ms</div>
+        <div>pixiRef: {timingDisplay.pixiRef.toFixed(2)}ms</div>
+        <div>setState: {timingDisplay.setState.toFixed(2)}ms</div>
+        <div>players: {(renderData.players || []).length}</div>
+        <div>orbs: {(renderData.orbs || []).length}</div>
+        <div>proj#: {(renderData.projectiles || []).length}</div>
+      </div>
 
       <div className="hp-panel">
         <span>DRONE HP</span>
