@@ -1156,7 +1156,7 @@ function PixiArenaRenderer({
         // dezactivam complet; marginile sunt usor mai aspre, dar framerate-ul
         // devine mult mai stabil.
         antialias: !device.isVeryLowEndMobile,
-        resolution: 1,
+        resolution: Math.max(1, device.resolution),
         autoDensity: true,
         powerPreference: "high-performance",
         preference: "webgl",
