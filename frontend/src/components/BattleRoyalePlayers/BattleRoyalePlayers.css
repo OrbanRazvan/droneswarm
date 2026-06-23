@@ -1,0 +1,777 @@
+/* =========================================================
+   BATTLE ROYALE PLAYERS - ZERO ANIMATION STYLESHEET
+   Reguli stricte respectate in tot acest fisier:
+   - Niciun @keyframes
+   - Niciun animation: ...
+   - Niciun transition: ... (exceptie: knob-ul joystick-ului foloseste un
+     transform instant pe pointer move, nu transition CSS)
+   - Niciun backdrop-filter / blur (costisitor pe GPU mobil slab)
+   - Fundaluri solide, fara gradient-uri complexe suprapuse
+   ========================================================= */
+
+.brp-arena {
+  background: #06101d;
+}
+
+.brp-world {
+  will-change: transform;
+}
+
+.brp-battle-zone {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 3;
+  border: 4px solid #7dff7d;
+  box-shadow: 0 0 18px rgba(125, 255, 125, 0.55);
+}
+
+/* ---------- AIM LINE (static, no dash animation) ---------- */
+
+.brp-aim-svg {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.brp-aim-line {
+  stroke: rgba(0, 234, 255, 0.32);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+
+.brp-aim-circle {
+  fill: rgba(0, 234, 255, 0.03);
+  stroke: rgba(0, 234, 255, 0.22);
+  stroke-width: 1.2;
+}
+
+/* ---------- FPS ---------- */
+
+.brp-fps-counter {
+  position: fixed;
+  top: 12px;
+  right: 24px;
+  z-index: 9999;
+  color: #67ffb1;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+/* ---------- HP / ENERGY PANEL ---------- */
+
+.brp-hp-panel {
+  position: fixed;
+  left: 22px;
+  top: 20px;
+  z-index: 50;
+  width: 180px;
+  padding: 13px 15px;
+  border-radius: 12px;
+  background: rgba(2, 8, 18, 0.88);
+  border: 1px solid rgba(0, 234, 255, 0.24);
+}
+
+.brp-hp-panel span {
+  display: block;
+  color: rgba(180, 245, 255, 0.72);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.brp-hp-panel strong {
+  display: block;
+  margin-top: 3px;
+  color: #ffffff;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.brp-hp-bar {
+  margin-top: 9px;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.brp-hp-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: #00eaff;
+}
+
+.brp-energy-row {
+  margin-top: 11px;
+}
+
+.brp-energy-row span {
+  display: block;
+  color: rgba(180, 245, 255, 0.72);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.brp-energy-row strong {
+  display: block;
+  margin-top: 3px;
+  color: #ffffff;
+  font-size: 19px;
+  line-height: 1;
+}
+
+.brp-energy-bar {
+  margin-top: 7px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.brp-energy-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: #67ffb1;
+}
+
+/* ---------- ORB / CORES PANEL ---------- */
+
+.brp-collect-counter {
+  position: fixed;
+  top: 20px;
+  left: 222px;
+  z-index: 50;
+  width: 175px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(2, 8, 18, 0.88);
+  border: 1px solid rgba(0, 234, 255, 0.24);
+  text-align: center;
+}
+
+.brp-collect-counter span {
+  display: block;
+  font-size: 10px;
+  color: #8bdcff;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.brp-collect-counter strong {
+  display: block;
+  color: #00eaff;
+  font-size: 23px;
+  margin: 3px 0;
+}
+
+.brp-collect-counter small {
+  display: block;
+  color: rgba(213, 231, 239, 0.78);
+  font-size: 10px;
+  margin-top: 2px;
+}
+
+.brp-active-cores-panel {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(0, 234, 255, 0.18);
+}
+
+.brp-active-cores-panel b {
+  display: block;
+  color: rgba(180, 245, 255, 0.72);
+  font-size: 9px;
+  letter-spacing: 0.8px;
+  margin-bottom: 5px;
+}
+
+.brp-active-cores-panel em {
+  display: block;
+  font-style: normal;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 9px;
+  font-weight: 800;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+  padding: 5px 7px;
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brp-core-badge-nano { color: #00eaff !important; }
+.brp-core-badge-rotor { color: #ffae3d !important; }
+.brp-core-badge-piercing { color: #b45cff !important; }
+.brp-core-badge-overclock { color: #ff4040 !important; }
+.brp-core-badge-berserk { color: #ff7a18 !important; }
+.brp-core-badge-shield-breaker { color: #d946ef !important; }
+.brp-core-badge-swarm { color: #00ffd5 !important; }
+.brp-core-badge-vampire { color: #00c46a !important; }
+.brp-core-badge-emp { color: #faff00 !important; }
+.brp-core-badge-rapid { color: #67ffb1 !important; }
+
+/* ---------- TOP HUD ---------- */
+
+.brp-top-hud {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  min-width: 280px;
+  padding: 9px 22px;
+  border-radius: 12px;
+  background: rgba(2, 8, 18, 0.88);
+  border: 1px solid rgba(0, 234, 255, 0.3);
+  text-align: center;
+}
+
+.brp-top-hud strong {
+  display: block;
+  color: #67ffb1;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.brp-top-hud span {
+  display: block;
+  margin-top: 5px;
+  color: rgba(225, 248, 255, 0.7);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.brp-zone-timer {
+  position: fixed;
+  top: 68px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  padding: 7px 18px;
+  border-radius: 10px;
+  background: rgba(2, 8, 18, 0.82);
+  border: 1px solid rgba(125, 255, 125, 0.4);
+  color: #9dff9d;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+}
+
+/* ---------- LEADERBOARD ---------- */
+
+.brp-leaderboard {
+  position: fixed;
+  top: 20px;
+  right: 24px;
+  z-index: 50;
+  width: 230px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: rgba(2, 8, 18, 0.88);
+  border: 1px solid rgba(0, 234, 255, 0.3);
+}
+
+.brp-leaderboard h3 {
+  margin: 0 0 10px;
+  color: #dbeafe;
+  font-size: 15px;
+  text-align: center;
+}
+
+.brp-leaderboard-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: #d5e7ef;
+  font-size: 13px;
+  margin: 6px 0;
+}
+
+.brp-leaderboard-row strong {
+  color: #00eaff;
+}
+
+.brp-leaderboard-row.is-me {
+  color: #67ffb1;
+  font-weight: 800;
+}
+
+.brp-leaderboard-row.is-dead {
+  opacity: 0.45;
+}
+
+/* ---------- CORE DROP NOTICE (no blink) ---------- */
+
+.brp-core-notice {
+  position: fixed;
+  top: 110px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  width: 260px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: rgba(2, 8, 18, 0.92);
+  border: 1px solid rgba(255, 64, 64, 0.5);
+  text-align: center;
+}
+
+.brp-core-notice strong {
+  display: block;
+  color: #ffae3d;
+  font-size: 13px;
+}
+
+.brp-core-notice b {
+  display: block;
+  margin: 6px 0;
+  color: #ff4040;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.brp-core-notice span {
+  display: block;
+  color: rgba(210, 250, 255, 0.75);
+  font-size: 10px;
+}
+
+/* ---------- WAITING SCREEN (no spinner) ---------- */
+
+.brp-waiting-panel {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #06101d;
+}
+
+.brp-waiting-card {
+  width: min(460px, calc(100vw - 32px));
+  padding: 30px 28px;
+  border-radius: 18px;
+  background: rgba(2, 8, 18, 0.94);
+  border: 1px solid rgba(0, 234, 255, 0.32);
+  text-align: center;
+  color: #dffcff;
+}
+
+.brp-waiting-pill {
+  display: inline-block;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(0, 234, 255, 0.1);
+  border: 1px solid rgba(0, 234, 255, 0.3);
+  color: #00eaff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.2px;
+  margin-bottom: 14px;
+}
+
+.brp-waiting-card h1 {
+  margin: 0 0 12px;
+  color: #ffffff;
+  font-size: 26px;
+}
+
+.brp-waiting-card p {
+  margin: 6px 0;
+  color: rgba(220, 252, 255, 0.78);
+}
+
+.brp-countdown-number {
+  display: block;
+  font-size: 52px;
+  color: #67ffb1;
+  margin: 8px 0;
+}
+
+.brp-waiting-bar {
+  margin: 16px 0;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.brp-waiting-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: #00eaff;
+}
+
+.brp-waiting-hint {
+  display: block;
+  margin-top: 12px;
+  color: rgba(180, 245, 255, 0.6);
+  font-size: 12px;
+}
+
+.brp-waiting-card button {
+  margin-top: 20px;
+  padding: 11px 18px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 234, 255, 0.4);
+  background: rgba(0, 234, 255, 0.1);
+  color: #dffcff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.brp-error {
+  color: #ff6b6b !important;
+}
+
+/* ---------- DEATH / SPECTATOR PANEL ---------- */
+
+.brp-death-panel {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 140;
+}
+
+.brp-death-card {
+  width: min(380px, calc(100vw - 32px));
+  padding: 16px 20px 18px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 64, 64, 0.5);
+  background: rgba(2, 8, 18, 0.94);
+  text-align: center;
+}
+
+.brp-spectator-pill {
+  display: inline-block;
+  margin-bottom: 8px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  color: #00eaff;
+  background: rgba(0, 234, 255, 0.08);
+  border: 1px solid rgba(0, 234, 255, 0.22);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.2px;
+}
+
+.brp-death-card h1 {
+  margin: 0;
+  color: #ff4040;
+  font-size: 28px;
+  letter-spacing: 1px;
+}
+
+.brp-death-card p {
+  margin: 8px 0 13px;
+  color: rgba(225, 248, 255, 0.78);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.brp-death-stats {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 140px;
+  margin-bottom: 10px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 234, 255, 0.26);
+  background: rgba(0, 234, 255, 0.06);
+}
+
+.brp-death-stats span {
+  color: rgba(180, 245, 255, 0.74);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.brp-death-stats strong {
+  color: #67ffb1;
+  font-size: 19px;
+  line-height: 1;
+}
+
+.brp-death-card button {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 11px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 234, 255, 0.4);
+  background: rgba(0, 234, 255, 0.1);
+  color: #dffcff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+/* ---------- FINISHED SCREEN ---------- */
+
+.brp-finished-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 5, 12, 0.92);
+}
+
+.brp-finished-screen h1 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 46px;
+  letter-spacing: 3px;
+}
+
+.brp-finished-screen p {
+  margin-top: 14px;
+  color: #bffaff;
+  font-size: 16px;
+}
+
+.brp-finished-screen button {
+  margin-top: 20px;
+  padding: 11px 18px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 234, 255, 0.4);
+  background: rgba(0, 234, 255, 0.1);
+  color: #dffcff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+/* ---------- EXIT BUTTON ---------- */
+
+.brp-exit-btn {
+  position: fixed;
+  z-index: 90;
+  left: 18px;
+  bottom: 18px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 234, 255, 0.32);
+  background: rgba(2, 8, 18, 0.88);
+  color: #dffcff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+/* ---------- MOBILE CONTROLS ---------- */
+
+.brp-mobile-controls {
+  display: none;
+}
+
+.brp-arena.is-mobile-device.is-mobile-portrait {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.brp-arena.is-mobile-device.is-mobile-portrait .brp-mobile-controls {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+}
+
+.brp-mobile-joystick {
+  position: fixed;
+  left: max(28px, env(safe-area-inset-left));
+  bottom: max(140px, calc(env(safe-area-inset-bottom) + 136px));
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.brp-mobile-joystick-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 234, 255, 0.4);
+  background: rgba(2, 8, 18, 0.55);
+}
+
+.brp-mobile-joystick-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 74px;
+  height: 74px;
+  margin-left: -37px;
+  margin-top: -37px;
+  border-radius: 50%;
+  background: #00bfd6;
+  border: 1px solid rgba(215, 255, 255, 0.7);
+}
+
+.brp-mobile-buttons {
+  position: fixed;
+  right: max(20px, env(safe-area-inset-right));
+  bottom: max(230px, calc(env(safe-area-inset-bottom) + 224px));
+  display: flex;
+  align-items: flex-end;
+  gap: 13px;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.brp-mobile-action {
+  border: 1px solid rgba(0, 234, 255, 0.4);
+  border-radius: 999px;
+  background: rgba(2, 8, 18, 0.72);
+  color: #dffcff;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+}
+
+.brp-mobile-shield {
+  width: 88px;
+  height: 88px;
+  font-size: 11px;
+}
+
+.brp-mobile-attack {
+  width: 118px;
+  height: 118px;
+  font-size: 14px;
+}
+
+.brp-mobile-action.is-active {
+  border-color: rgba(103, 255, 177, 0.6);
+  background: rgba(0, 234, 255, 0.2);
+}
+
+/* ---------- MOBILE LANDSCAPE COMPACT HUD ---------- */
+
+@media (hover: none) and (orientation: landscape), (max-height: 520px) and (orientation: landscape) {
+  .brp-hp-panel {
+    top: max(8px, env(safe-area-inset-top));
+    left: max(8px, env(safe-area-inset-left));
+    width: 130px;
+    padding: 8px 9px;
+  }
+
+  .brp-hp-panel span, .brp-energy-row span {
+    font-size: 8px;
+  }
+
+  .brp-hp-panel strong, .brp-energy-row strong {
+    font-size: 15px;
+  }
+
+  .brp-collect-counter {
+    top: max(8px, env(safe-area-inset-top));
+    left: 150px;
+    width: 110px;
+    padding: 8px 9px;
+  }
+
+  .brp-collect-counter strong {
+    font-size: 17px;
+  }
+
+  .brp-top-hud {
+    top: max(8px, env(safe-area-inset-top));
+    min-width: 160px;
+    padding: 6px 14px;
+  }
+
+  .brp-top-hud strong {
+    font-size: 15px;
+  }
+
+  .brp-top-hud span {
+    display: none;
+  }
+
+  .brp-zone-timer {
+    top: max(46px, calc(env(safe-area-inset-top) + 42px));
+    font-size: 10px;
+    padding: 5px 12px;
+  }
+
+  .brp-leaderboard {
+    top: max(8px, env(safe-area-inset-top));
+    right: max(8px, env(safe-area-inset-right));
+    width: 130px;
+    padding: 8px 9px;
+  }
+
+  .brp-leaderboard h3 {
+    font-size: 9px;
+    margin-bottom: 5px;
+  }
+
+  .brp-leaderboard-row {
+    font-size: 8px;
+    margin: 2px 0;
+  }
+
+  .brp-mobile-joystick {
+    width: 150px;
+    height: 150px;
+    bottom: max(16px, calc(env(safe-area-inset-bottom) + 12px));
+  }
+
+  .brp-mobile-joystick-knob {
+    width: 58px;
+    height: 58px;
+    margin-left: -29px;
+    margin-top: -29px;
+  }
+
+  .brp-mobile-buttons {
+    bottom: max(40px, calc(env(safe-area-inset-bottom) + 36px));
+  }
+
+  .brp-mobile-shield {
+    width: 70px;
+    height: 70px;
+    font-size: 9px;
+  }
+
+  .brp-mobile-attack {
+    width: 92px;
+    height: 92px;
+    font-size: 11px;
+  }
+
+  .brp-exit-btn {
+    left: max(8px, env(safe-area-inset-left));
+    bottom: max(8px, env(safe-area-inset-bottom));
+    padding: 8px 12px;
+  }
+}
+
+/* ---------- GLOBAL: NO ANIMATIONS, NO TRANSITIONS, ANYWHERE ----------
+   Cerinta explicita: zero animatii pe acest mod, peste tot, pe orice device.
+   Aceasta regula e scoped strict la .brp-arena, ca sa nu afecteze alte
+   componente/moduri din aceeasi pagina daca vreodata coexista in DOM. */
+.brp-arena,
+.brp-arena *,
+.brp-arena *::before,
+.brp-arena *::after {
+  animation: none !important;
+  transition: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}

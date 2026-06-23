@@ -2543,3 +2543,31 @@
   font-size: 18px;
   letter-spacing: 0.4px;
 }
+
+/* =========================================================
+   BATTLE ROYALE PLAYERS BUTTON
+   Adauga acest bloc la finalul Dashboard.css existent.
+   Stilat distinct (albastru-cyan/verde, sugereaza multiplayer live
+   intre jucatori reali, fara boti), in familia vizuala "secondary-wide"
+   din pilot-card, alaturi de Normal PvP / Battle Royale / Battle Royale Online.
+========================================================= */
+
+.battle-royale-players-wide {
+  color: #021a1f;
+  background: linear-gradient(135deg, #00eaff, #67ffb1);
+  border: 0 !important;
+  box-shadow: 0 0 24px rgba(0, 234, 255, 0.24);
+  letter-spacing: 0.4px;
+  margin-top: 12px;
+}
+
+.battle-royale-players-wide:hover {
+  background: linear-gradient(135deg, #4ff3ff, #8dffc7);
+  box-shadow: 0 0 30px rgba(0, 234, 255, 0.32);
+}
+
+.pilot-card .battle-royale-players-wide {
+  min-height: 64px;
+  font-size: 18px;
+  letter-spacing: 0.4px;
+}

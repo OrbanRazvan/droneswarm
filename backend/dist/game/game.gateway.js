@@ -15,21 +15,52 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.GameGateway = void 0;
 const websockets_1 = require("@nestjs/websockets");
 const socket_io_1 = require("socket.io");
-const WORLD_WIDTH = 10000;
-const WORLD_HEIGHT = 10000;
-const ROOM_MAX_PLAYERS = 50;
+const WORLD_WIDTH = 16000;
+const WORLD_HEIGHT = 16000;
+const ROOM_MAX_PLAYERS = 100;
 const ROOM_MIN_PLAYERS = 2;
 const NORMAL_ROOM_MAX_PLAYERS = 50;
 const NORMAL_ROOM_MIN_PLAYERS = 1;
 const NORMAL_ROOM_ZONE_RADIUS = 100000;
 const NORMAL_VISIBLE_PLAYERS_LIMIT = 60;
-const BR_ONLINE_ROOM_MAX_PLAYERS = 50;
+const BR_ONLINE_ROOM_MAX_PLAYERS = 60;
 const BR_ONLINE_ROOM_MIN_PLAYERS = 2;
 const BR_ONLINE_START_COUNTDOWN_MS = 5000;
 const BR_ONLINE_ZONE_SHRINK_DURATION = 600000;
 const BR_ONLINE_ZONE_DAMAGE = 10;
 const BR_ONLINE_ZONE_DAMAGE_INTERVAL = 1000;
 const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 60;
+const BR_ONLINE_MAX_ORBS = 350;
+const BR_ONLINE_MAX_ENERGY_CELLS = 40;
+const BRP_WORLD_WIDTH = 8000;
+const BRP_WORLD_HEIGHT = 8000;
+const BRP_ROOM_MAX_PLAYERS = 50;
+const BRP_ROOM_MIN_PLAYERS = 2;
+const BRP_START_COUNTDOWN_MS = 5000;
+const BRP_MAP_MIN_SIZE = Math.min(BRP_WORLD_WIDTH, BRP_WORLD_HEIGHT);
+const BRP_ZONE_START_RADIUS = BRP_MAP_MIN_SIZE * 0.47;
+const BRP_ZONE_END_RADIUS = BRP_MAP_MIN_SIZE * 0.07;
+const BRP_ZONE_SHRINK_DURATION = 600000;
+const BRP_ZONE_DAMAGE = 10;
+const BRP_ZONE_DAMAGE_INTERVAL = 1000;
+const BRP_PLAYER_SPEED = 2.15;
+const BRP_PLAYER_RADIUS = 80;
+const BRP_VIEW_DISTANCE = 1800;
+const BRP_VISIBLE_PLAYERS_LIMIT = 50;
+const BRP_MAX_ORBS = 260;
+const BRP_VISIBLE_ORB_LIMIT = 200;
+const BRP_ORB_COLLECT_DISTANCE = 180;
+const BRP_MAX_ENERGY_CELLS = 30;
+const BRP_VISIBLE_ENERGY_LIMIT = 45;
+const BRP_ENERGY_CELL_COLLECT_DISTANCE = 160;
+const BRP_CORE_WAVE_SIZE = 9;
+const BRP_CORE_RESPAWN_DELAY = 60000;
+const BRP_CORE_WARNING_DELAY = 5000;
+const BRP_CORE_COLLECT_DISTANCE = 175;
+const BRP_VISIBLE_PROJECTILE_LIMIT = 100;
+const BRP_BODY_COLLISION_DISTANCE = 145;
+const BRP_BODY_COLLISION_COOLDOWN = 450;
+const BRP_COLLISION_GRID_CELL_SIZE = 600;
 const COLLISION_GRID_CELL_SIZE = 600;
 const ROOM_START_COUNTDOWN_MS = 5000;
 const MAP_MIN_SIZE = Math.min(WORLD_WIDTH, WORLD_HEIGHT);
@@ -39,7 +70,7 @@ const ZONE_SHRINK_DURATION = 300000;
 const PLAYER_SPEED = 2.15;
 const PLAYER_RADIUS = 80;
 const VIEW_DISTANCE = 2400;
-const MAX_ORBS = 1200;
+const MAX_ORBS = 1500;
 const MIN_ORBS = 220;
 const VISIBLE_ORB_LIMIT = 260;
 const ORB_COLLECT_DISTANCE = 180;
@@ -116,6 +147,8 @@ let GameGateway = class GameGateway {
         this.normalSocketRoom = new Map();
         this.battleRoyaleOnlineRooms = new Map();
         this.battleRoyaleOnlineSocketRoom = new Map();
+        this.battleRoyalePlayersRooms = new Map();
+        this.battleRoyalePlayersSocketRoom = new Map();
         this.loop = null;
         this.lastLoopAt = Date.now();
     }
@@ -126,6 +159,7 @@ let GameGateway = class GameGateway {
         this.removePlayer(client.id);
         this.removeNormalPlayer(client.id);
         this.removeBattleRoyaleOnlinePlayer(client.id);
+        this.removeBattleRoyalePlayersPlayer(client.id);
     }
     handlePvpJoin(client, data) {
         this.removePlayer(client.id);
@@ -373,6 +407,92 @@ let GameGateway = class GameGateway {
         };
         player.lastSeenAt = Date.now();
     }
+    handleBattleRoyalePlayersJoin(client, data) {
+        this.removePlayer(client.id);
+        this.removeNormalPlayer(client.id);
+        this.removeBattleRoyaleOnlinePlayer(client.id);
+        this.removeBattleRoyalePlayersPlayer(client.id);
+        const room = this.findOrCreateBattleRoyalePlayersRoom();
+        const zoneRadius = this.getBattleRoyalePlayersZoneRadius(room);
+        const spawn = this.getBattleRoyalePlayersSafeSpawn(room, zoneRadius);
+        const player = {
+            id: client.id,
+            userId: data?.userId,
+            username: String(data?.username || 'Player').slice(0, 18),
+            skin: normalizeSkin(data?.skin),
+            x: spawn.x,
+            y: spawn.y,
+            hp: START_HP,
+            maxHp: START_HP,
+            energy: START_ENERGY,
+            drones: 0,
+            progress: 0,
+            nextDroneAt: DRONE_REQUIREMENTS[0],
+            totalCollected: 0,
+            kills: 0,
+            killStreak: 0,
+            rapidFireUntil: 0,
+            attackCooldownMultiplier: 1,
+            alive: true,
+            input: {},
+            lastSeenAt: Date.now(),
+            lastEnergyDrainAt: Date.now(),
+            lastZoneDamageAt: Date.now(),
+            lastFireAt: 0,
+            lastShieldAt: 0,
+            shieldActive: false,
+            shieldUntil: 0,
+            knockbackX: 0,
+            knockbackY: 0,
+            gridKey: null,
+        };
+        room.players.set(client.id, player);
+        this.battleRoyalePlayersSocketRoom.set(client.id, room.id);
+        client.join(room.id);
+        if (room.players.size >= BRP_ROOM_MIN_PLAYERS && room.status === 'waiting') {
+            room.status = 'countdown';
+            room.countdownStartedAt = Date.now();
+        }
+        client.emit('battle-royale-players:joined', {
+            status: room.status,
+            playerId: client.id,
+            worldWidth: BRP_WORLD_WIDTH,
+            worldHeight: BRP_WORLD_HEIGHT,
+            safeZoneRadius: zoneRadius,
+            playerCount: this.getAlivePlayers(room).length,
+            minPlayers: BRP_ROOM_MIN_PLAYERS,
+            maxPlayers: BRP_ROOM_MAX_PLAYERS,
+            you: this.serializePlayer(player),
+            players: [],
+            orbs: [],
+            minimapOrbs: [],
+            minimapEnergyCells: [],
+            energyCells: [],
+            cores: [],
+            projectiles: [],
+            leaderboard: [],
+        });
+    }
+    handleBattleRoyalePlayersLeave(client) {
+        this.removeBattleRoyalePlayersPlayer(client.id);
+    }
+    handleBattleRoyalePlayersInput(client, input) {
+        const room = this.getBattleRoyalePlayersRoomBySocket(client.id);
+        const player = room?.players.get(client.id);
+        if (!player || !player.alive)
+            return;
+        player.input = {
+            w: Boolean(input?.w),
+            a: Boolean(input?.a),
+            s: Boolean(input?.s),
+            d: Boolean(input?.d),
+            attacking: Boolean(input?.attacking),
+            shield: Boolean(input?.shield),
+            mouseX: Number(input?.mouseX || player.x),
+            mouseY: Number(input?.mouseY || player.y),
+        };
+        player.lastSeenAt = Date.now();
+    }
     startLoop() {
         if (this.loop)
             return;
@@ -436,6 +556,27 @@ let GameGateway = class GameGateway {
                     this.broadcastBattleRoyaleOnlineRoomState(room, now);
                 }
                 this.cleanupBattleRoyaleOnlineRoom(room, now);
+            }
+            for (const room of this.battleRoyalePlayersRooms.values()) {
+                this.updateBattleRoyalePlayersRoomStatus(room, now);
+                if (room.status === 'playing') {
+                    const zoneRadius = this.getBattleRoyalePlayersZoneRadius(room);
+                    this.updateBattleRoyalePlayersPlayers(room, now, zoneRadius, deltaFrames);
+                    this.applyBattleRoyalePlayersZoneDamage(room, now, zoneRadius);
+                    this.handleBattleRoyalePlayersBodyCollisions(room, now, zoneRadius);
+                    this.collectBattleRoyalePlayersOrbs(room, zoneRadius);
+                    this.collectBattleRoyalePlayersEnergy(room, zoneRadius);
+                    this.collectBattleRoyalePlayersCores(room, zoneRadius);
+                    this.updateBattleRoyalePlayersProjectiles(room, deltaFrames);
+                    this.maintainBattleRoyalePlayersWorldItems(room, zoneRadius, now);
+                    this.updateBattleRoyalePlayersWinCondition(room, now);
+                }
+                const broadcastInterval = room.players.size > 30 ? 33 : 25;
+                if (!room.lastBroadcastAt || now - room.lastBroadcastAt >= broadcastInterval) {
+                    room.lastBroadcastAt = now;
+                    this.broadcastBattleRoyalePlayersRoomState(room, now);
+                }
+                this.cleanupBattleRoyalePlayersRoom(room, now);
             }
         }, 1000 / 60);
     }
@@ -1087,10 +1228,12 @@ let GameGateway = class GameGateway {
         room.orbs = room.orbs.filter((orb) => this.isInsideSafeZone(orb.x, orb.y, zoneRadius, 120));
         room.energyCells = room.energyCells.filter((cell) => this.isInsideSafeZone(cell.x, cell.y, zoneRadius, 120));
         room.cores = room.cores.filter((core) => this.isInsideSafeZone(core.x, core.y, zoneRadius, 420));
-        while (room.orbs.length < MAX_ORBS) {
+        const targetOrbs = room.battleRoyaleOnlineMode ? BR_ONLINE_MAX_ORBS : MAX_ORBS;
+        const targetEnergyCells = room.battleRoyaleOnlineMode ? BR_ONLINE_MAX_ENERGY_CELLS : MAX_ENERGY_CELLS;
+        while (room.orbs.length < targetOrbs) {
             room.orbs.push(this.createOrb(zoneRadius));
         }
-        while (room.energyCells.length < MAX_ENERGY_CELLS) {
+        while (room.energyCells.length < targetEnergyCells) {
             room.energyCells.push(this.createEnergyCell(zoneRadius));
         }
         if (room.normalMode || room.battleRoyaleOnlineMode) {
@@ -1454,8 +1597,8 @@ let GameGateway = class GameGateway {
             id: `br-online-${crypto.randomUUID()}`,
             status: 'waiting',
             players: new Map(),
-            orbs: Array.from({ length: MAX_ORBS }, () => this.createOrb(ZONE_START_RADIUS)),
-            energyCells: Array.from({ length: MAX_ENERGY_CELLS }, () => this.createEnergyCell(ZONE_START_RADIUS)),
+            orbs: Array.from({ length: BR_ONLINE_MAX_ORBS }, () => this.createOrb(ZONE_START_RADIUS)),
+            energyCells: Array.from({ length: BR_ONLINE_MAX_ENERGY_CELLS }, () => this.createEnergyCell(ZONE_START_RADIUS)),
             cores: [],
             pendingCores: [],
             projectiles: [],
@@ -1751,27 +1894,29 @@ let GameGateway = class GameGateway {
     }
     ensureLocalItemsAroundPlayers(room, zoneRadius) {
         const alive = this.getAlivePlayers(room);
+        const maxOrbsForRoom = room.battleRoyaleOnlineMode ? BR_ONLINE_MAX_ORBS : MAX_ORBS;
+        const maxEnergyForRoom = room.battleRoyaleOnlineMode ? BR_ONLINE_MAX_ENERGY_CELLS : MAX_ENERGY_CELLS;
         for (const player of alive) {
             const nearbyOrbs = room.orbs.filter((orb) => this.isNear(player, orb, 1800)).length;
             const nearbyEnergy = room.energyCells.filter((cell) => this.isNear(player, cell, 1800)).length;
-            if (nearbyOrbs < 90 && room.orbs.length < MAX_ORBS + alive.length * 90) {
+            if (nearbyOrbs < 90 && room.orbs.length < maxOrbsForRoom + alive.length * 90) {
                 const toAdd = Math.min(90 - nearbyOrbs, 45);
                 for (let i = 0; i < toAdd; i += 1) {
                     room.orbs.push(this.createOrb(zoneRadius, player.x, player.y));
                 }
             }
-            if (nearbyEnergy < 4 && room.energyCells.length < MAX_ENERGY_CELLS + alive.length * 6) {
+            if (nearbyEnergy < 4 && room.energyCells.length < maxEnergyForRoom + alive.length * 6) {
                 const toAdd = Math.min(4 - nearbyEnergy, 3);
                 for (let i = 0; i < toAdd; i += 1) {
                     room.energyCells.push(this.createEnergyCell(zoneRadius, player.x, player.y));
                 }
             }
         }
-        if (room.orbs.length > MAX_ORBS + alive.length * 90) {
-            room.orbs = room.orbs.slice(-(MAX_ORBS + alive.length * 90));
+        if (room.orbs.length > maxOrbsForRoom + alive.length * 90) {
+            room.orbs = room.orbs.slice(-(maxOrbsForRoom + alive.length * 90));
         }
-        if (room.energyCells.length > MAX_ENERGY_CELLS + alive.length * 6) {
-            room.energyCells = room.energyCells.slice(-(MAX_ENERGY_CELLS + alive.length * 6));
+        if (room.energyCells.length > maxEnergyForRoom + alive.length * 6) {
+            room.energyCells = room.energyCells.slice(-(maxEnergyForRoom + alive.length * 6));
         }
     }
     randomSafePointNear(nearX, nearY, zoneRadius, margin = 120, minDistance = 300, maxDistance = 1400) {
@@ -1865,6 +2010,690 @@ let GameGateway = class GameGateway {
     clamp(value, min, max) {
         return Math.max(min, Math.min(max, value));
     }
+    findOrCreateBattleRoyalePlayersRoom() {
+        for (const room of this.battleRoyalePlayersRooms.values()) {
+            if (room.status === 'waiting' && room.players.size < BRP_ROOM_MAX_PLAYERS) {
+                return room;
+            }
+        }
+        const room = {
+            id: `brp-${crypto.randomUUID()}`,
+            status: 'waiting',
+            players: new Map(),
+            orbs: Array.from({ length: BRP_MAX_ORBS }, () => this.createBattleRoyalePlayersOrb(BRP_ZONE_START_RADIUS)),
+            energyCells: Array.from({ length: BRP_MAX_ENERGY_CELLS }, () => this.createBattleRoyalePlayersEnergyCell(BRP_ZONE_START_RADIUS)),
+            cores: [],
+            projectiles: [],
+            countdownStartedAt: null,
+            createdAt: Date.now(),
+            matchStartedAt: null,
+            lastCoreWaveAt: Date.now() - BRP_CORE_RESPAWN_DELAY + BRP_CORE_WARNING_DELAY,
+            nextCoreWaveAt: null,
+            lastLocalItemAt: 0,
+            lastBroadcastAt: 0,
+            winnerId: null,
+            winnerName: null,
+            finishedAt: null,
+            collisionCooldowns: new Map(),
+        };
+        this.battleRoyalePlayersRooms.set(room.id, room);
+        return room;
+    }
+    getBattleRoyalePlayersRoomBySocket(socketId) {
+        const roomId = this.battleRoyalePlayersSocketRoom.get(socketId);
+        if (!roomId)
+            return null;
+        return this.battleRoyalePlayersRooms.get(roomId) || null;
+    }
+    removeBattleRoyalePlayersPlayer(socketId) {
+        const roomId = this.battleRoyalePlayersSocketRoom.get(socketId);
+        if (!roomId)
+            return;
+        const room = this.battleRoyalePlayersRooms.get(roomId);
+        if (room) {
+            room.players.delete(socketId);
+            this.server.sockets.sockets.get(socketId)?.leave(roomId);
+            if (room.players.size < BRP_ROOM_MIN_PLAYERS && room.status === 'countdown') {
+                room.status = 'waiting';
+                room.countdownStartedAt = null;
+            }
+        }
+        this.battleRoyalePlayersSocketRoom.delete(socketId);
+    }
+    cleanupBattleRoyalePlayersRoom(room, now) {
+        for (const player of room.players.values()) {
+            const socketOnline = this.server.sockets.sockets.has(player.id);
+            if (!socketOnline || now - player.lastSeenAt > 30000) {
+                this.removeBattleRoyalePlayersPlayer(player.id);
+            }
+        }
+        if (room.players.size === 0 && now - room.createdAt > 15000) {
+            this.battleRoyalePlayersRooms.delete(room.id);
+            return;
+        }
+        if (room.status === 'finished' && room.finishedAt && now - room.finishedAt > 90000) {
+            this.battleRoyalePlayersRooms.delete(room.id);
+        }
+    }
+    updateBattleRoyalePlayersRoomStatus(room, now) {
+        if (room.status === 'countdown' && room.countdownStartedAt) {
+            if (room.players.size < BRP_ROOM_MIN_PLAYERS) {
+                room.status = 'waiting';
+                room.countdownStartedAt = null;
+                return;
+            }
+            if (now - room.countdownStartedAt >= BRP_START_COUNTDOWN_MS) {
+                room.status = 'playing';
+                room.countdownStartedAt = null;
+                room.matchStartedAt = now;
+                room.lastCoreWaveAt = now - BRP_CORE_RESPAWN_DELAY + 5000;
+            }
+        }
+    }
+    getBattleRoyalePlayersZoneRadius(room) {
+        if (!room.matchStartedAt)
+            return BRP_ZONE_START_RADIUS;
+        const elapsed = Math.max(0, Date.now() - room.matchStartedAt);
+        const progress = Math.min(1, elapsed / BRP_ZONE_SHRINK_DURATION);
+        return BRP_ZONE_START_RADIUS + (BRP_ZONE_END_RADIUS - BRP_ZONE_START_RADIUS) * progress;
+    }
+    isInsideBattleRoyalePlayersSafeZone(x, y, radius, margin = 80) {
+        const dx = x - BRP_WORLD_WIDTH / 2;
+        const dy = y - BRP_WORLD_HEIGHT / 2;
+        return Math.hypot(dx, dy) <= Math.max(120, radius - margin);
+    }
+    keepInsideBattleRoyalePlayersSafeZone(x, y, radius, margin = 80) {
+        const centerX = BRP_WORLD_WIDTH / 2;
+        const centerY = BRP_WORLD_HEIGHT / 2;
+        const dx = x - centerX;
+        const dy = y - centerY;
+        const distance = Math.hypot(dx, dy) || 1;
+        const maxDistance = Math.max(120, radius - margin);
+        if (distance <= maxDistance)
+            return { x, y };
+        return {
+            x: centerX + (dx / distance) * maxDistance,
+            y: centerY + (dy / distance) * maxDistance,
+        };
+    }
+    randomBattleRoyalePlayersSafePoint(zoneRadius, margin = 120) {
+        const safeRadius = Math.max(300, zoneRadius - margin);
+        for (let attempt = 0; attempt < 80; attempt += 1) {
+            const angle = Math.random() * Math.PI * 2;
+            const distance = Math.sqrt(Math.random()) * safeRadius;
+            const x = BRP_WORLD_WIDTH / 2 + Math.cos(angle) * distance;
+            const y = BRP_WORLD_HEIGHT / 2 + Math.sin(angle) * distance;
+            if (this.isInsideBattleRoyalePlayersSafeZone(x, y, zoneRadius, margin)) {
+                return {
+                    x: this.clamp(x, BRP_PLAYER_RADIUS, BRP_WORLD_WIDTH - BRP_PLAYER_RADIUS),
+                    y: this.clamp(y, BRP_PLAYER_RADIUS, BRP_WORLD_HEIGHT - BRP_PLAYER_RADIUS),
+                };
+            }
+        }
+        return {
+            x: BRP_WORLD_WIDTH / 2,
+            y: BRP_WORLD_HEIGHT / 2,
+        };
+    }
+    getBattleRoyalePlayersSafeSpawn(room, zoneRadius) {
+        const existing = [...room.players.values()];
+        if (existing.length === 0) {
+            return {
+                x: BRP_WORLD_WIDTH / 2 - 260,
+                y: BRP_WORLD_HEIGHT / 2,
+            };
+        }
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+            const angle = Math.random() * Math.PI * 2;
+            const distance = Math.sqrt(Math.random()) * Math.max(500, zoneRadius - 500);
+            const x = BRP_WORLD_WIDTH / 2 + Math.cos(angle) * distance;
+            const y = BRP_WORLD_HEIGHT / 2 + Math.sin(angle) * distance;
+            let safe = true;
+            for (const player of existing) {
+                const dx = player.x - x;
+                const dy = player.y - y;
+                if (dx * dx + dy * dy < 500 * 500) {
+                    safe = false;
+                    break;
+                }
+            }
+            if (safe && this.isInsideBattleRoyalePlayersSafeZone(x, y, zoneRadius, 300)) {
+                return {
+                    x: this.clamp(x, BRP_PLAYER_RADIUS, BRP_WORLD_WIDTH - BRP_PLAYER_RADIUS),
+                    y: this.clamp(y, BRP_PLAYER_RADIUS, BRP_WORLD_HEIGHT - BRP_PLAYER_RADIUS),
+                };
+            }
+        }
+        return this.randomBattleRoyalePlayersSafePoint(zoneRadius, 300);
+    }
+    createBattleRoyalePlayersOrb(zoneRadius) {
+        const point = this.randomBattleRoyalePlayersSafePoint(zoneRadius, 120);
+        return {
+            id: crypto.randomUUID(),
+            x: point.x,
+            y: point.y,
+            color: COLORS[Math.floor(Math.random() * COLORS.length)],
+        };
+    }
+    createBattleRoyalePlayersEnergyCell(zoneRadius) {
+        const point = this.randomBattleRoyalePlayersSafePoint(zoneRadius, 120);
+        return {
+            id: crypto.randomUUID(),
+            x: point.x,
+            y: point.y,
+        };
+    }
+    createBattleRoyalePlayersCore(zoneRadius) {
+        const point = this.randomBattleRoyalePlayersSafePoint(zoneRadius, 360);
+        return {
+            id: crypto.randomUUID(),
+            type: CORE_TYPES[Math.floor(Math.random() * CORE_TYPES.length)],
+            x: point.x,
+            y: point.y,
+        };
+    }
+    updateBattleRoyalePlayersPlayers(room, now, zoneRadius, deltaFrames = 1) {
+        for (const player of room.players.values()) {
+            if (!player.alive)
+                continue;
+            let dx = 0;
+            let dy = 0;
+            const input = player.input || {};
+            if (input.w)
+                dy -= 1;
+            if (input.s)
+                dy += 1;
+            if (input.a)
+                dx -= 1;
+            if (input.d)
+                dx += 1;
+            const isMovingInput = dx !== 0 || dy !== 0;
+            if (isMovingInput && now - player.lastEnergyDrainAt >= ENERGY_DRAIN_INTERVAL) {
+                player.energy = Math.max(0, player.energy - ENERGY_DRAIN_AMOUNT);
+                player.lastEnergyDrainAt = now;
+                if (player.energy <= 0) {
+                    player.hp = 0;
+                    player.alive = false;
+                    player.input = {};
+                    player.killedById = null;
+                    player.spectatorTargetId = null;
+                    continue;
+                }
+            }
+            player.shieldActive = Boolean(player.shieldUntil && player.shieldUntil > now);
+            if (player.input.shield &&
+                (player.drones || 0) > 0 &&
+                player.energy >= 20 &&
+                !player.shieldActive &&
+                now - player.lastShieldAt > 600) {
+                player.drones = Math.max(0, player.drones - 1);
+                player.progress = 0;
+                player.nextDroneAt = this.getNextDroneAt(player.drones);
+                player.energy = Math.max(0, player.energy - 20);
+                player.shieldActive = true;
+                player.shieldUntil = now + 3000;
+                player.lastShieldAt = now;
+            }
+            player.prevX = player.x;
+            player.prevY = player.y;
+            const length = Math.hypot(dx, dy) || 1;
+            const rawX = player.x + (dx / length) * BRP_PLAYER_SPEED * deltaFrames;
+            const rawY = player.y + (dy / length) * BRP_PLAYER_SPEED * deltaFrames;
+            const safe = this.keepInsideBattleRoyalePlayersSafeZone(rawX, rawY, zoneRadius, BRP_PLAYER_RADIUS + 18);
+            player.x = this.clamp(safe.x, BRP_PLAYER_RADIUS, BRP_WORLD_WIDTH - BRP_PLAYER_RADIUS);
+            player.y = this.clamp(safe.y, BRP_PLAYER_RADIUS, BRP_WORLD_HEIGHT - BRP_PLAYER_RADIUS);
+            this.applyBattleRoyalePlayersKnockbackStep(player, zoneRadius);
+            if (dx || dy) {
+                player.moveX = dx / length;
+                player.moveY = dy / length;
+                player.moveAngle = Math.atan2(dy, dx);
+                player.isMoving = true;
+            }
+            else {
+                player.moveX = 0;
+                player.moveY = 0;
+                player.isMoving = false;
+            }
+            if (input.attacking) {
+                this.tryFireBattleRoyalePlayersProjectile(room, player, now);
+            }
+        }
+    }
+    applyBattleRoyalePlayersKnockbackStep(player, zoneRadius) {
+        const kx = player.knockbackX || 0;
+        const ky = player.knockbackY || 0;
+        const power = Math.hypot(kx, ky);
+        if (power < BODY_COLLISION_PUSH_MIN) {
+            player.knockbackX = 0;
+            player.knockbackY = 0;
+            return;
+        }
+        const safe = this.keepInsideBattleRoyalePlayersSafeZone(player.x + kx, player.y + ky, zoneRadius, BRP_PLAYER_RADIUS + 18);
+        player.x = this.clamp(safe.x, BRP_PLAYER_RADIUS, BRP_WORLD_WIDTH - BRP_PLAYER_RADIUS);
+        player.y = this.clamp(safe.y, BRP_PLAYER_RADIUS, BRP_WORLD_HEIGHT - BRP_PLAYER_RADIUS);
+        player.knockbackX = kx * BODY_COLLISION_PUSH_DECAY;
+        player.knockbackY = ky * BODY_COLLISION_PUSH_DECAY;
+    }
+    tryFireBattleRoyalePlayersProjectile(room, player, now) {
+        if ((player.drones || 0) <= 0)
+            return;
+        const cooldown = this.getFireCooldown(player, now);
+        if (now - player.lastFireAt < cooldown)
+            return;
+        const targetX = player.input.mouseX || player.x + 1;
+        const targetY = player.input.mouseY || player.y;
+        const angle = Math.atan2(targetY - player.y, targetX - player.x);
+        const rapidBonus = player.rapidFireUntil && player.rapidFireUntil > now ? 0.75 : 0;
+        const overclockBonus = player.overclockUntil && player.overclockUntil > now ? 1.25 : 0;
+        const speed = PROJECTILE_SPEED + (player.projectileSpeedBonus || 0) + rapidBonus + overclockBonus;
+        player.lastFireAt = now;
+        player.drones = Math.max(0, player.drones - 1);
+        this.resetDroneProgress(player);
+        room.projectiles.push({
+            id: crypto.randomUUID(),
+            ownerId: player.id,
+            x: player.x + Math.cos(angle) * 120,
+            y: player.y + Math.sin(angle) * 120,
+            startX: player.x,
+            startY: player.y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            angle,
+            skin: player.skin,
+            damage: player.berserkUntil && player.berserkUntil > now
+                ? BERSERK_PROJECTILE_DAMAGE
+                : PROJECTILE_DAMAGE,
+            pierceLeft: (player.piercingShots || 0) > 0 ? 3 : 1,
+            shieldBreaker: (player.shieldBreakerShots || 0) > 0,
+            piercesShield: (player.shieldBreakerShots || 0) > 0,
+            createdAt: now,
+        });
+        if ((player.piercingShots || 0) > 0) {
+            player.piercingShots = Math.max(0, (player.piercingShots || 0) - 1);
+        }
+        if ((player.shieldBreakerShots || 0) > 0) {
+            player.shieldBreakerShots = Math.max(0, (player.shieldBreakerShots || 0) - 1);
+        }
+    }
+    updateBattleRoyalePlayersProjectiles(room, deltaFrames = 1) {
+        const nextProjectiles = [];
+        for (const projectile of room.projectiles) {
+            projectile.x += projectile.vx * deltaFrames;
+            projectile.y += projectile.vy * deltaFrames;
+            const traveled = Math.hypot(projectile.x - projectile.startX, projectile.y - projectile.startY);
+            const age = Date.now() - (projectile.createdAt || Date.now());
+            if (traveled > PROJECTILE_MAX_DISTANCE || age > PROJECTILE_MAX_LIFETIME)
+                continue;
+            let keepProjectile = true;
+            for (const target of room.players.values()) {
+                if (!target.alive || target.id === projectile.ownerId)
+                    continue;
+                const dx = target.x - projectile.x;
+                const dy = target.y - projectile.y;
+                if (dx * dx + dy * dy > 105 * 105)
+                    continue;
+                const owner = room.players.get(projectile.ownerId);
+                const damageBlocked = target.shieldActive && !projectile.shieldBreaker;
+                if (!damageBlocked) {
+                    target.hp = Math.max(0, target.hp - projectile.damage);
+                    if (owner && owner.vampireUntil && owner.vampireUntil > Date.now()) {
+                        owner.hp = Math.min(owner.maxHp, owner.hp + Math.floor(projectile.damage * VAMPIRE_HEAL_RATIO));
+                    }
+                    if (target.hp <= 0) {
+                        target.alive = false;
+                        target.input = {};
+                        target.killStreak = 0;
+                        target.rapidFireUntil = 0;
+                        target.attackCooldownMultiplier = 1;
+                        target.shieldActive = false;
+                        target.shieldUntil = 0;
+                        target.killedById = owner?.id || null;
+                        target.spectatorTargetId = owner?.alive !== false ? owner?.id || null : null;
+                        if (owner) {
+                            this.applyKillReward(owner);
+                        }
+                    }
+                }
+                projectile.pierceLeft -= 1;
+                if (projectile.pierceLeft <= 0)
+                    keepProjectile = false;
+                break;
+            }
+            if (keepProjectile)
+                nextProjectiles.push(projectile);
+        }
+        room.projectiles = nextProjectiles.slice(-160);
+    }
+    applyBattleRoyalePlayersZoneDamage(room, now, zoneRadius) {
+        const centerX = BRP_WORLD_WIDTH / 2;
+        const centerY = BRP_WORLD_HEIGHT / 2;
+        for (const player of room.players.values()) {
+            if (!player.alive)
+                continue;
+            const distance = Math.hypot(player.x - centerX, player.y - centerY);
+            if (distance <= zoneRadius)
+                continue;
+            if (now - (player.lastZoneDamageAt || 0) < BRP_ZONE_DAMAGE_INTERVAL)
+                continue;
+            player.lastZoneDamageAt = now;
+            player.hp = Math.max(0, player.hp - BRP_ZONE_DAMAGE);
+            if (player.hp <= 0) {
+                player.alive = false;
+                player.input = {};
+                player.killStreak = 0;
+                player.rapidFireUntil = 0;
+                player.attackCooldownMultiplier = 1;
+                player.shieldActive = false;
+                player.shieldUntil = 0;
+                player.killedById = null;
+                player.spectatorTargetId = null;
+            }
+        }
+    }
+    buildBattleRoyalePlayersCollisionGrid(alivePlayers) {
+        const grid = new Map();
+        for (const player of alivePlayers) {
+            const cellX = Math.floor(player.x / BRP_COLLISION_GRID_CELL_SIZE);
+            const cellY = Math.floor(player.y / BRP_COLLISION_GRID_CELL_SIZE);
+            const key = `${cellX}:${cellY}`;
+            player.gridKey = key;
+            let bucket = grid.get(key);
+            if (!bucket) {
+                bucket = [];
+                grid.set(key, bucket);
+            }
+            bucket.push(player);
+        }
+        return grid;
+    }
+    getNearbyBattleRoyalePlayersCellPlayers(grid, player) {
+        const cellX = Math.floor(player.x / BRP_COLLISION_GRID_CELL_SIZE);
+        const cellY = Math.floor(player.y / BRP_COLLISION_GRID_CELL_SIZE);
+        const nearby = [];
+        for (let ox = -1; ox <= 1; ox += 1) {
+            for (let oy = -1; oy <= 1; oy += 1) {
+                const bucket = grid.get(`${cellX + ox}:${cellY + oy}`);
+                if (bucket)
+                    nearby.push(...bucket);
+            }
+        }
+        return nearby;
+    }
+    handleBattleRoyalePlayersBodyCollisions(room, now, zoneRadius) {
+        const alive = this.getAlivePlayers(room);
+        if (alive.length <= 12) {
+            for (let i = 0; i < alive.length; i += 1) {
+                for (let j = i + 1; j < alive.length; j += 1) {
+                    this.resolveBattleRoyalePlayersPairCollision(alive[i], alive[j], room, now, zoneRadius);
+                }
+            }
+            return;
+        }
+        const grid = this.buildBattleRoyalePlayersCollisionGrid(alive);
+        const checkedPairs = new Set();
+        for (const a of alive) {
+            const nearby = this.getNearbyBattleRoyalePlayersCellPlayers(grid, a);
+            for (const b of nearby) {
+                if (a.id === b.id)
+                    continue;
+                const pairKey = this.getCollisionKey(a.id, b.id);
+                if (checkedPairs.has(pairKey))
+                    continue;
+                checkedPairs.add(pairKey);
+                this.resolveBattleRoyalePlayersPairCollision(a, b, room, now, zoneRadius);
+            }
+        }
+    }
+    resolveBattleRoyalePlayersPairCollision(a, b, room, now, zoneRadius) {
+        const key = this.getCollisionKey(a.id, b.id);
+        const lastAt = room.collisionCooldowns.get(key) || 0;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        if (dist > BRP_BODY_COLLISION_DISTANCE)
+            return;
+        const dirX = dx / dist;
+        const dirY = dy / dist;
+        const overlap = BRP_BODY_COLLISION_DISTANCE - dist;
+        const separation = Math.min(7, Math.max(BODY_COLLISION_LIGHT_PUSH, overlap * 0.08));
+        this.addSmoothKnockback(a, -dirX, -dirY, separation);
+        this.addSmoothKnockback(b, dirX, dirY, separation);
+        this.applyBattleRoyalePlayersKnockbackStep(a, zoneRadius);
+        this.applyBattleRoyalePlayersKnockbackStep(b, zoneRadius);
+        if (now - lastAt < BRP_BODY_COLLISION_COOLDOWN)
+            return;
+        room.collisionCooldowns.set(key, now);
+        const outcome = this.getBodyCollisionOutcome(a, b);
+        const aWasAlive = a.alive;
+        const bWasAlive = b.alive;
+        this.applyBodyCollisionDamage(a, outcome.aHpDamage, outcome.aDroneLoss);
+        this.applyBodyCollisionDamage(b, outcome.bHpDamage, outcome.bDroneLoss);
+        this.addSmoothKnockback(a, -dirX, -dirY, outcome.push);
+        this.addSmoothKnockback(b, dirX, dirY, outcome.push);
+        if (aWasAlive && !a.alive && b.alive)
+            this.applyKillReward(b);
+        if (bWasAlive && !b.alive && a.alive)
+            this.applyKillReward(a);
+    }
+    collectBattleRoyalePlayersOrbs(room, zoneRadius) {
+        const collectedIndexes = new Set();
+        for (const player of room.players.values()) {
+            if (!player.alive)
+                continue;
+            let collected = 0;
+            for (let i = 0; i < room.orbs.length; i += 1) {
+                if (collectedIndexes.has(i))
+                    continue;
+                const orb = room.orbs[i];
+                const endDx = orb.x - player.x;
+                const endDy = orb.y - player.y;
+                const pathDistance = this.distancePointToSegment(orb.x, orb.y, player.prevX ?? player.x, player.prevY ?? player.y, player.x, player.y);
+                if (endDx * endDx + endDy * endDy > BRP_ORB_COLLECT_DISTANCE * BRP_ORB_COLLECT_DISTANCE &&
+                    pathDistance > BRP_ORB_COLLECT_DISTANCE) {
+                    continue;
+                }
+                collectedIndexes.add(i);
+                collected += 1;
+            }
+            if (collected > 0) {
+                player.totalCollected += collected;
+                player.progress += collected;
+                while (player.drones < MAX_DRONES && player.progress >= player.nextDroneAt) {
+                    player.progress -= player.nextDroneAt;
+                    player.drones += 1;
+                    player.nextDroneAt = this.getNextDroneAt(player.drones);
+                }
+            }
+        }
+        if (collectedIndexes.size > 0) {
+            room.orbs = room.orbs.filter((_, index) => !collectedIndexes.has(index));
+        }
+    }
+    collectBattleRoyalePlayersEnergy(room, zoneRadius) {
+        const collectedIndexes = new Set();
+        for (const player of room.players.values()) {
+            if (!player.alive)
+                continue;
+            for (let i = 0; i < room.energyCells.length; i += 1) {
+                if (collectedIndexes.has(i))
+                    continue;
+                const cell = room.energyCells[i];
+                const endDx = cell.x - player.x;
+                const endDy = cell.y - player.y;
+                const pathDistance = this.distancePointToSegment(cell.x, cell.y, player.prevX ?? player.x, player.prevY ?? player.y, player.x, player.y);
+                if (endDx * endDx + endDy * endDy > BRP_ENERGY_CELL_COLLECT_DISTANCE * BRP_ENERGY_CELL_COLLECT_DISTANCE &&
+                    pathDistance > BRP_ENERGY_CELL_COLLECT_DISTANCE) {
+                    continue;
+                }
+                collectedIndexes.add(i);
+                player.energy = Math.min(100, player.energy + 25);
+            }
+        }
+        if (collectedIndexes.size > 0) {
+            room.energyCells = room.energyCells.filter((_, index) => !collectedIndexes.has(index));
+        }
+    }
+    collectBattleRoyalePlayersCores(room, zoneRadius) {
+        const collectedIndexes = new Set();
+        for (const player of room.players.values()) {
+            if (!player.alive)
+                continue;
+            for (let i = 0; i < room.cores.length; i += 1) {
+                if (collectedIndexes.has(i))
+                    continue;
+                const core = room.cores[i];
+                const endDx = core.x - player.x;
+                const endDy = core.y - player.y;
+                const pathDistance = this.distancePointToSegment(core.x, core.y, player.prevX ?? player.x, player.prevY ?? player.y, player.x, player.y);
+                if (endDx * endDx + endDy * endDy > BRP_CORE_COLLECT_DISTANCE * BRP_CORE_COLLECT_DISTANCE &&
+                    pathDistance > BRP_CORE_COLLECT_DISTANCE) {
+                    continue;
+                }
+                if (!this.canUseCore(player, core))
+                    continue;
+                this.applyCore(player, core);
+                collectedIndexes.add(i);
+            }
+        }
+        if (collectedIndexes.size > 0) {
+            room.cores = room.cores.filter((_, index) => !collectedIndexes.has(index));
+        }
+    }
+    maintainBattleRoyalePlayersWorldItems(room, zoneRadius, now) {
+        room.orbs = room.orbs.filter((orb) => this.isInsideBattleRoyalePlayersSafeZone(orb.x, orb.y, zoneRadius, 120));
+        room.energyCells = room.energyCells.filter((cell) => this.isInsideBattleRoyalePlayersSafeZone(cell.x, cell.y, zoneRadius, 120));
+        room.cores = room.cores.filter((core) => this.isInsideBattleRoyalePlayersSafeZone(core.x, core.y, zoneRadius, 360));
+        while (room.orbs.length < BRP_MAX_ORBS) {
+            room.orbs.push(this.createBattleRoyalePlayersOrb(zoneRadius));
+        }
+        while (room.energyCells.length < BRP_MAX_ENERGY_CELLS) {
+            room.energyCells.push(this.createBattleRoyalePlayersEnergyCell(zoneRadius));
+        }
+        if (room.cores.length > 0) {
+            room.nextCoreWaveAt = null;
+        }
+        else {
+            if (!room.nextCoreWaveAt) {
+                room.nextCoreWaveAt = now + BRP_CORE_WARNING_DELAY;
+            }
+            if (now >= room.nextCoreWaveAt) {
+                room.cores = Array.from({ length: BRP_CORE_WAVE_SIZE }, () => this.createBattleRoyalePlayersCore(zoneRadius));
+                room.lastCoreWaveAt = now;
+                room.nextCoreWaveAt = null;
+            }
+        }
+    }
+    updateBattleRoyalePlayersWinCondition(room, now) {
+        if (room.status !== 'playing')
+            return;
+        const alive = this.getAlivePlayers(room);
+        if (room.players.size >= BRP_ROOM_MIN_PLAYERS && alive.length <= 1) {
+            const winner = alive[0] || null;
+            room.status = 'finished';
+            room.winnerId = winner?.id || null;
+            room.winnerName = winner?.username || null;
+            room.finishedAt = now;
+            room.projectiles = [];
+            for (const player of room.players.values()) {
+                player.input = {};
+                player.shieldActive = false;
+                player.shieldUntil = 0;
+            }
+        }
+    }
+    broadcastBattleRoyalePlayersRoomState(room, now) {
+        const players = [...room.players.values()];
+        const alivePlayers = players.filter((player) => player.alive);
+        const zoneRadius = this.getBattleRoyalePlayersZoneRadius(room);
+        const leaderboard = players
+            .slice()
+            .sort((a, b) => (b.kills || 0) - (a.kills || 0) || (b.totalCollected || 0) - (a.totalCollected || 0))
+            .slice(0, 8)
+            .map((player) => ({
+            id: player.id,
+            username: player.username,
+            kills: player.kills || 0,
+            drones: player.drones || 0,
+            progress: player.progress || 0,
+            nextDroneAt: player.nextDroneAt || DRONE_REQUIREMENTS[0],
+            totalCollected: player.totalCollected || 0,
+            alive: player.alive,
+        }));
+        const countdown = room.status === 'countdown' && room.countdownStartedAt
+            ? Math.max(1, Math.ceil((BRP_START_COUNTDOWN_MS - (now - room.countdownStartedAt)) / 1000))
+            : null;
+        const secondsUntilCoreDrop = room.cores.length === 0 && room.nextCoreWaveAt
+            ? Math.ceil(Math.max(0, room.nextCoreWaveAt - now) / 1000)
+            : null;
+        const coreDropCountdown = secondsUntilCoreDrop && secondsUntilCoreDrop > 0 && secondsUntilCoreDrop <= Math.ceil(BRP_CORE_WARNING_DELAY / 1000)
+            ? secondsUntilCoreDrop
+            : null;
+        const minimapOrbs = [...room.orbs]
+            .sort((a, b) => a.id.localeCompare(b.id))
+            .filter((_, index) => index % 2 === 0)
+            .slice(0, 130);
+        const minimapEnergyCells = [...room.energyCells]
+            .sort((a, b) => a.id.localeCompare(b.id))
+            .slice(0, 40);
+        const minimapCores = [...room.cores]
+            .sort((a, b) => a.id.localeCompare(b.id))
+            .slice(0, 12);
+        for (const player of players) {
+            const socket = this.server.sockets.sockets.get(player.id);
+            if (!socket)
+                continue;
+            const aliveOthers = players.filter((other) => other.id !== player.id && other.alive !== false);
+            let spectatorTarget = null;
+            if (player.alive === false) {
+                spectatorTarget = player.killedById
+                    ? aliveOthers.find((other) => other.id === player.killedById) || null
+                    : null;
+                if (!spectatorTarget && player.spectatorTargetId) {
+                    spectatorTarget = aliveOthers.find((other) => other.id === player.spectatorTargetId) || null;
+                }
+                if (!spectatorTarget && aliveOthers.length > 0) {
+                    spectatorTarget = aliveOthers[Math.floor(Math.random() * aliveOthers.length)];
+                }
+                player.spectatorTargetId = spectatorTarget?.id || null;
+            }
+            else {
+                player.spectatorTargetId = null;
+                player.killedById = null;
+            }
+            const viewAnchor = spectatorTarget || player;
+            const visiblePlayers = player.alive === false
+                ? this.filterNear(viewAnchor, aliveOthers, BRP_VIEW_DISTANCE + 1000, BRP_VISIBLE_PLAYERS_LIMIT)
+                    .map((other) => this.serializePlayer(other))
+                : this.filterNear(player, players.filter((other) => other.id !== player.id), BRP_VIEW_DISTANCE, BRP_VISIBLE_PLAYERS_LIMIT).map((other) => this.serializePlayer(other));
+            socket.volatile.emit('battle-royale-players:state', {
+                status: room.status,
+                countdown,
+                coreDropCountdown,
+                winnerId: room.winnerId,
+                winnerName: room.winnerName,
+                playerCount: alivePlayers.length,
+                minPlayers: BRP_ROOM_MIN_PLAYERS,
+                maxPlayers: BRP_ROOM_MAX_PLAYERS,
+                worldWidth: BRP_WORLD_WIDTH,
+                worldHeight: BRP_WORLD_HEIGHT,
+                safeZoneRadius: zoneRadius,
+                zoneShrinkDuration: BRP_ZONE_SHRINK_DURATION,
+                matchStartedAt: room.matchStartedAt,
+                you: this.serializePlayer(player),
+                players: visiblePlayers,
+                spectatorTargetId: spectatorTarget?.id || null,
+                spectatingPlayer: spectatorTarget ? this.serializePlayer(spectatorTarget) : null,
+                orbs: this.filterNear(viewAnchor, room.orbs, BRP_VIEW_DISTANCE, BRP_VISIBLE_ORB_LIMIT),
+                energyCells: this.filterNear(viewAnchor, room.energyCells, BRP_VIEW_DISTANCE, BRP_VISIBLE_ENERGY_LIMIT),
+                cores: this.filterNear(viewAnchor, room.cores, BRP_VIEW_DISTANCE + 500, 18),
+                projectiles: this.filterNear(viewAnchor, room.projectiles, BRP_VIEW_DISTANCE + 300, BRP_VISIBLE_PROJECTILE_LIMIT),
+                minimapOrbs,
+                minimapEnergyCells,
+                minimapCores,
+                leaderboard,
+            });
+        }
+    }
 };
 exports.GameGateway = GameGateway;
 __decorate([
@@ -1940,6 +2769,29 @@ __decorate([
     __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
     __metadata("design:returntype", void 0)
 ], GameGateway.prototype, "handleBattleRoyaleOnlineInput", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('battle-royale-players:join'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", void 0)
+], GameGateway.prototype, "handleBattleRoyalePlayersJoin", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('battle-royale-players:leave'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket]),
+    __metadata("design:returntype", void 0)
+], GameGateway.prototype, "handleBattleRoyalePlayersLeave", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('battle-royale-players:input'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", void 0)
+], GameGateway.prototype, "handleBattleRoyalePlayersInput", null);
 exports.GameGateway = GameGateway = __decorate([
     (0, websockets_1.WebSocketGateway)({
         cors: {

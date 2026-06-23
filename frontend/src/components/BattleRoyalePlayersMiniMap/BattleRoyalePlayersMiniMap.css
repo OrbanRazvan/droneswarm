@@ -1,0 +1,106 @@
+.brp-minimap {
+  position: absolute;
+  right: 20px;
+  bottom: 20px;
+  width: 240px;
+  height: 180px;
+  background: rgba(3, 10, 20, 0.88);
+  border: 1px solid rgba(0, 234, 255, 0.3);
+  border-radius: 12px;
+  overflow: hidden;
+  z-index: 25;
+  contain: layout style paint;
+}
+
+.brp-minimap-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.brp-minimap-title {
+  position: absolute;
+  top: 9px;
+  left: 11px;
+  color: #cdf7ff;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+  z-index: 10;
+}
+
+.brp-minimap-map-area {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+/* Punct simplu, fara forma de drona, fara animatie de radar.
+   Cel mai ieftin de randat posibil pe un device foarte slab. */
+.brp-minimap-player-dot {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 14;
+  background: #00eaff;
+  box-shadow: 0 0 4px rgba(0, 234, 255, 0.85);
+}
+
+.brp-minimap-dot-red { background: #ff4040; box-shadow: 0 0 4px rgba(255, 64, 64, 0.85); }
+.brp-minimap-dot-purple { background: #9b5cff; box-shadow: 0 0 4px rgba(155, 92, 255, 0.85); }
+.brp-minimap-dot-orange { background: #ff9f1c; box-shadow: 0 0 4px rgba(255, 159, 28, 0.85); }
+.brp-minimap-dot-green { background: #19ff8a; box-shadow: 0 0 4px rgba(25, 255, 138, 0.85); }
+.brp-minimap-dot-pink { background: #ff4fd8; box-shadow: 0 0 4px rgba(255, 79, 216, 0.85); }
+
+@media (hover: none) and (orientation: landscape), (max-height: 520px) and (orientation: landscape) {
+  .brp-minimap {
+    width: clamp(150px, 20vw, 200px);
+    height: clamp(96px, 20vh, 128px);
+    right: max(8px, env(safe-area-inset-right));
+    bottom: max(8px, env(safe-area-inset-bottom));
+    border-radius: 10px;
+  }
+
+  .brp-minimap-title {
+    font-size: 8px;
+    top: 6px;
+    left: 8px;
+  }
+
+  .brp-minimap-player-dot {
+    width: 7px;
+    height: 7px;
+  }
+}
+
+@media (hover: none) and (orientation: portrait), (max-width: 760px) and (orientation: portrait) {
+  .brp-minimap {
+    width: clamp(130px, 30vw, 170px);
+    height: clamp(98px, 24vw, 130px);
+    right: max(10px, env(safe-area-inset-right));
+    bottom: max(96px, env(safe-area-inset-bottom));
+    border-radius: 10px;
+  }
+
+  .brp-minimap-title {
+    font-size: 8px;
+    top: 6px;
+    left: 8px;
+  }
+}
+
+/* Niciun element din acest fisier nu foloseste transition sau animation -
+   cerinta explicita: zero animatii pe acest mod, peste tot, pe orice device. */
+.brp-minimap,
+.brp-minimap *,
+.brp-minimap *::before,
+.brp-minimap *::after {
+  transition: none !important;
+  animation: none !important;
+}
