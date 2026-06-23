@@ -56,8 +56,7 @@ const LOCAL_COLLECT_HIDE_TTL = 2200;
 // reconciliere/predictie (dampPoint etc) facut pentru fiecare jucator de
 // la distanta, inainte sa ajunga la randare.
 // ---------------------------------------------------------------------------
-const MAX_VISIBLE_REMOTE_PLAYERS_DESKTOP = 30;
-const MAX_VISIBLE_REMOTE_PLAYERS_MOBILE = 18;
+const MAX_VISIBLE_REMOTE_PLAYERS = 25;
 
 const CORE_TYPES = [
   { type: "nano", name: "Nano Core", shortName: "Nano", color: "#00eaff", effect: "+10 MAX HP" },
@@ -1498,12 +1497,23 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
 
   const cameraX = cameraSubject ? viewport.width / 2 - cameraSubject.x : 0;
   const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y : 0;
-  const bounds = getViewportBounds(cameraX, cameraY, viewport, isMobileControls ? 350 : 820);
+  const bounds = getViewportBounds(
+  cameraX,
+  cameraY,
+  viewport,
+  450
+);
 
   const maxVisibleOrbs = isMobileControls ? 120 : 520;
-  const maxVisibleRemotePlayersForRender = isMobileControls
-    ? MAX_VISIBLE_REMOTE_PLAYERS_MOBILE
-    : MAX_VISIBLE_REMOTE_PLAYERS_DESKTOP;
+const activePlayers = (renderData.players || []).filter(
+  (player) => player?.alive !== false
+);
+
+const visiblePlayers = collectVisible(
+  activePlayers,
+  (player) => isVisible(player, bounds, 360),
+  MAX_VISIBLE_REMOTE_PLAYERS
+);
 
   const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), maxVisibleOrbs);
   const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), 120);
