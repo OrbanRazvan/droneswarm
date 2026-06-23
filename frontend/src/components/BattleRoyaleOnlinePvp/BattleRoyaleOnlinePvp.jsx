@@ -44,20 +44,11 @@ const LOCAL_ENERGY_COLLECT_DISTANCE = 135;
 const LOCAL_CORE_COLLECT_DISTANCE = 155;
 const LOCAL_COLLECT_HIDE_TTL = 2200;
 
-// ---------------------------------------------------------------------------
-// Battle Royale Online suporta pana la 50 jucatori reali simultan (vezi
-// BR_ONLINE_ROOM_MAX_PLAYERS in game.gateway.ts). Limita de mai jos e
-// adaptiva: pe desktop putem permite mai multi jucatori randati la calitate
-// completa (CPU/GPU mai puternic), pe mobil reducem agresiv ca sa protejam
-// FPS-ul exact in scenariul cel mai dens posibil - finalul partidei, cand
-// zona s-a strans si toti supravietuitorii sunt aglomerati in spatiu mic.
-// PixiArenaRenderer aplica oricum propriul LOD (quality budget) peste
-// aceasta lista, dar a limita aici, la nivel de client, reduce costul de
-// reconciliere/predictie (dampPoint etc) facut pentru fiecare jucator de
-// la distanta, inainte sa ajunga la randare.
-// ---------------------------------------------------------------------------
-const MAX_VISIBLE_REMOTE_PLAYERS_DESKTOP = 30;
-const MAX_VISIBLE_REMOTE_PLAYERS_MOBILE = 18;
+// Battle Royale Online suporta pana la 50 jucatori reali (BR_ONLINE_ROOM_MAX_PLAYERS
+// in game.gateway.ts). Aceeasi valoare ca in NormalPvpArena.jsx (versiunea curenta,
+// document care ruleaza la 60fps), ca sa eliminam orice diferenta intre cele doua
+// componente la acest nivel.
+const MAX_VISIBLE_REMOTE_PLAYERS = 25;
 
 const CORE_TYPES = [
   { type: "nano", name: "Nano Core", shortName: "Nano", color: "#00eaff", effect: "+10 MAX HP" },
@@ -887,10 +878,6 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
         spectatorTargetRef.current = currentSpectatorTarget;
       }
 
-      const maxVisibleRemotePlayers = isMobileControls
-        ? MAX_VISIBLE_REMOTE_PLAYERS_MOBILE
-        : MAX_VISIBLE_REMOTE_PLAYERS_DESKTOP;
-
       const incomingPlayers = new Map((data.players || []).filter((p) => p?.id && p.id !== me?.id).map((p) => [p.id, p]));
 
       for (const [id, target] of incomingPlayers.entries()) {
@@ -948,8 +935,6 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
         projectileMap.set(id, advanceProjectile(current, dt));
       }
 
-      const localProjectilesToRemove = new Set();
-
       for (const [id, target] of incomingProjectiles.entries()) {
         const current = projectileMap.get(id) || target;
 
@@ -965,8 +950,6 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
           y: damp(current.y ?? target.y, target.y, PROJECTILE_SMOOTHING, dt),
         });
       }
-
-      localProjectilesToRemove.forEach((id) => projectileMap.delete(id));
 
       const projectileTargets = [me, ...remoteMap.values()].filter(Boolean);
 
@@ -1030,7 +1013,7 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
       const livePlayers = collectVisible(
         remoteMap.values(),
         (player) => player?.id !== liveYou?.id && isVisible(player, liveBounds, 380),
-        maxVisibleRemotePlayers,
+        MAX_VISIBLE_REMOTE_PLAYERS,
         (player) => ({ ...player, skin: normalizeSkin(player.skin), isBot: false })
       );
       const liveOrbs = collectVisible(
@@ -1074,7 +1057,7 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
         otherPlayerQuality: 2,
       };
 
-      if (now - lastRenderSyncRef.current >= (isMobileControls ? 100 : 66)) {
+      if (now - lastRenderSyncRef.current >= 66) {
         lastRenderSyncRef.current = now;
         setRenderData({
           ...data,
@@ -1091,7 +1074,7 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
 
     rafId = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(rafId);
-  }, [isMobileControls]);
+  }, []);
 
   useEffect(() => {
     const movementKeys = new Set(["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"]);
@@ -1303,10 +1286,6 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
     updateJoystickFromPointer(event);
   };
 
-  const updateMobileAimFromPointer = (event) => {
-    mouseRef.current = { x: event.clientX, y: event.clientY };
-  };
-
   const updateMobileAimFromAttackButton = (event) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const cx = rect.left + rect.width / 2;
@@ -1438,17 +1417,12 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
 
   const cameraX = cameraSubject ? viewport.width / 2 - cameraSubject.x : 0;
   const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y : 0;
-  const bounds = getViewportBounds(cameraX, cameraY, viewport, isMobileControls ? 350 : 820);
+  const bounds = getViewportBounds(cameraX, cameraY, viewport, 750);
 
-  const maxVisibleOrbs = isMobileControls ? 120 : 520;
-  const maxVisibleRemotePlayersForRender = isMobileControls
-    ? MAX_VISIBLE_REMOTE_PLAYERS_MOBILE
-    : MAX_VISIBLE_REMOTE_PLAYERS_DESKTOP;
-
-  const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), maxVisibleOrbs);
+  const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), 520);
   const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), 120);
   const visibleCores = collectVisible(renderData.cores || [], (core) => isVisible(core, bounds, 120), 18);
-  const visiblePlayers = collectVisible(renderData.players || [], (player) => isVisible(player, bounds, 360), maxVisibleRemotePlayersForRender);
+  const visiblePlayers = collectVisible(renderData.players || [], (player) => isVisible(player, bounds, 360), MAX_VISIBLE_REMOTE_PLAYERS);
   const visibleProjectiles = collectVisible(renderData.projectiles || [], (projectile) => isVisible(projectile, bounds, 160), 100);
 
   const rendererPlayer = isDead && spectatorTarget
@@ -1557,15 +1531,6 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
         }}
       >
         <div
-          className="toxic-overlay"
-          style={{
-            "--zone-x": `${worldWidth / 2}px`,
-            "--zone-y": `${worldHeight / 2}px`,
-            "--zone-radius": `${safeZoneRadius}px`,
-          }}
-        />
-
-        <div
           className="battle-zone"
           style={{
             left: worldWidth / 2,
@@ -1665,7 +1630,17 @@ function BattleRoyaleOnlinePvp({ user, onExitToMenu }) {
         ))}
       </div>
 
-
+      {cameraSubject && (
+        <MiniMap
+          player={cameraSubject}
+          worldWidth={worldWidth}
+          worldHeight={worldHeight}
+          orbs={renderData.minimapOrbs || []}
+          cores={renderData.minimapCores || renderData.cores || []}
+          safeZoneRadius={safeZoneRadius}
+          players={renderData.players || []}
+        />
+      )}
 
       {coreDropCountdown && (
         <div className="core-notice core-notice-overclock normal-pvp-core-drop-notice">

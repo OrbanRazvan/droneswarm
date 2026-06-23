@@ -57,6 +57,30 @@ function MiniMap({
   const stableCoresRef = useRef([]);
   const lastOrbsUpdateRef = useRef(0);
 
+  // ---------------------------------------------------------------------
+  // IMPORTANT: safeZoneRadius, worldWidth si worldHeight sunt citite din
+  // refs in interiorul buclei requestAnimationFrame, NU mai sunt dependente
+  // ale useEffect-ului de mai jos. In Battle Royale (Online sau cu boti),
+  // safeZoneRadius se schimba continuu (zona se strange tot timpul
+  // meciului) - daca ar fi in array-ul de dependente, React ar rula
+  // cleanup (cancelAnimationFrame) + re-pornire (requestAnimationFrame)
+  // a buclei de desen la FIECARE schimbare de raza, de mai multe ori pe
+  // secunda, in plus fata de bucla RAF deja existenta in draw() insusi.
+  // Practic insemna 2 bucle RAF concurente recreate constant, dublul
+  // costului de randare pe canvas - exact cauza FPS-ului scazut raportat
+  // pe mobil la Battle Royale Online (la Normal PvP, safeZoneRadius e
+  // mereu null/constant, deci problema nu aparea niciodata acolo).
+  // Acum bucla RAF porneste o singura data la montare si ruleaza stabil
+  // tot meciul; valorile cele mai recente sunt mereu citite din refs.
+  // ---------------------------------------------------------------------
+  const safeZoneRadiusRef = useRef(safeZoneRadius);
+  const worldWidthRef = useRef(worldWidth);
+  const worldHeightRef = useRef(worldHeight);
+
+  safeZoneRadiusRef.current = safeZoneRadius;
+  worldWidthRef.current = worldWidth;
+  worldHeightRef.current = worldHeight;
+
   const playerX = clamp(((player?.x || 0) / Math.max(1, worldWidth || 1)) * 100, 0, 100);
   const playerY = clamp(((player?.y || 0) / Math.max(1, worldHeight || 1)) * 100, 0, 100);
 
@@ -99,6 +123,10 @@ function MiniMap({
     let frame = 0;
 
     const draw = () => {
+      const currentSafeZoneRadius = safeZoneRadiusRef.current;
+      const currentWorldWidth = worldWidthRef.current;
+      const currentWorldHeight = worldHeightRef.current;
+
       const rect = canvas.getBoundingClientRect();
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const width = Math.max(1, Math.round(rect.width * dpr));
@@ -123,12 +151,12 @@ function MiniMap({
       // Battle Royale zone se deseneaza DOAR cand raza este mai mica decat lumea.
       // Normal PvP trimite safeZoneRadius={null}, deci nu apare cerc/linie verde.
       const shouldDrawZone =
-        Number(safeZoneRadius) > 0 &&
-        Number(safeZoneRadius) < Math.min(Number(worldWidth) || 0, Number(worldHeight) || 0) / 2;
+        Number(currentSafeZoneRadius) > 0 &&
+        Number(currentSafeZoneRadius) < Math.min(Number(currentWorldWidth) || 0, Number(currentWorldHeight) || 0) / 2;
 
       if (shouldDrawZone) {
-        const zoneW = clamp(((safeZoneRadius * 2) / Math.max(1, worldWidth || 1)) * w, 0, w - 8);
-        const zoneH = clamp(((safeZoneRadius * 2) / Math.max(1, worldHeight || 1)) * h, 0, h - 8);
+        const zoneW = clamp(((currentSafeZoneRadius * 2) / Math.max(1, currentWorldWidth || 1)) * w, 0, w - 8);
+        const zoneH = clamp(((currentSafeZoneRadius * 2) / Math.max(1, currentWorldHeight || 1)) * h, 0, h - 8);
 
         ctx.save();
         ctx.beginPath();
@@ -142,7 +170,7 @@ function MiniMap({
       }
 
       for (const orb of stableOrbsRef.current) {
-        const point = mapPoint(orb, worldWidth, worldHeight, w, h, 5);
+        const point = mapPoint(orb, currentWorldWidth, currentWorldHeight, w, h, 5);
         const color = ORB_COLORS[orb.color] || ORB_COLORS.cyan;
 
         ctx.save();
@@ -157,7 +185,7 @@ function MiniMap({
       }
 
       for (const core of stableCoresRef.current) {
-        const point = mapPoint(core, worldWidth, worldHeight, w, h, 12);
+        const point = mapPoint(core, currentWorldWidth, currentWorldHeight, w, h, 12);
         const color = CORE_COLORS[core.type] || "#00eaff";
         ctx.save();
         ctx.beginPath();
@@ -182,7 +210,11 @@ function MiniMap({
 
     frame = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(frame);
-  }, [worldWidth, worldHeight, safeZoneRadius]);
+    // IMPORTANT: array de dependente VID in mod intentionat. Bucla de desen
+    // porneste o singura data la montarea componentei si ruleaza pana la
+    // demontare. worldWidth/worldHeight/safeZoneRadius sunt citite din refs
+    // (actualizate mai sus, la fiecare render), nu mai sunt dependente aici.
+  }, []);
 
   return (
     <div className="minimap">
