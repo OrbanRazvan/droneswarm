@@ -27,6 +27,46 @@
   box-shadow: 0 0 18px rgba(125, 255, 125, 0.55);
 }
 
+/* Fum toxic verde STATIC in spatele liniei zonei - exact ca in BattleRoyaleMode
+   (battle-zone::before), dar fara nicio animatie/pulsatie, conform cerintei
+   de zero animatii a acestui mod. Gradientul incepe transparent inauntrul
+   zonei sigure si devine progresiv mai opac catre exterior, dand senzatia
+   de "ceata toxica" care acopera tot ce e in afara cercului verde. */
+.brp-battle-zone::before {
+  content: "";
+  position: absolute;
+  left: -600px;
+  top: -600px;
+  width: calc(100% + 1200px);
+  height: calc(100% + 1200px);
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(
+    circle,
+    transparent 44%,
+    transparent 48%,
+    rgba(60, 255, 80, 0.07) 52%,
+    rgba(60, 255, 80, 0.14) 58%,
+    rgba(60, 255, 80, 0.24) 64%,
+    rgba(60, 255, 80, 0.4) 72%,
+    rgba(60, 255, 80, 0.58) 82%,
+    rgba(60, 255, 80, 0.74) 100%
+  );
+}
+
+.brp-battle-zone::after {
+  content: "";
+  position: absolute;
+  left: -90px;
+  top: -90px;
+  width: calc(100% + 180px);
+  height: calc(100% + 180px);
+  border-radius: 50%;
+  pointer-events: none;
+  border: 36px solid rgba(80, 255, 120, 0.16);
+  box-shadow: 0 0 32px rgba(80, 255, 120, 0.32);
+}
+
 /* ---------- AIM LINE (static, no dash animation) ---------- */
 
 .brp-aim-svg {
@@ -606,8 +646,12 @@
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  border: 1px solid rgba(0, 234, 255, 0.4);
-  background: rgba(2, 8, 18, 0.55);
+  border: 1px solid rgba(0, 234, 255, 0.42);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(0, 234, 255, 0.14), rgba(2, 8, 18, 0.4) 58%, rgba(2, 8, 18, 0.7) 100%);
+  box-shadow:
+    0 0 22px rgba(0, 234, 255, 0.2),
+    inset 0 0 20px rgba(0, 234, 255, 0.1);
 }
 
 .brp-mobile-joystick-knob {
@@ -619,8 +663,12 @@
   margin-left: -37px;
   margin-top: -37px;
   border-radius: 50%;
-  background: #00bfd6;
-  border: 1px solid rgba(215, 255, 255, 0.7);
+  background:
+    radial-gradient(circle at 33% 26%, #ffffff, #5ff7ff 32%, #00bfd6 70%, #036579 100%);
+  border: 1px solid rgba(215, 255, 255, 0.78);
+  box-shadow:
+    0 0 16px rgba(0, 234, 255, 0.7),
+    inset 0 0 12px rgba(255, 255, 255, 0.4);
 }
 
 .brp-mobile-buttons {
@@ -635,29 +683,244 @@
 }
 
 .brp-mobile-action {
-  border: 1px solid rgba(0, 234, 255, 0.4);
+  border: 1px solid rgba(0, 234, 255, 0.42);
   border-radius: 999px;
-  background: rgba(2, 8, 18, 0.72);
-  color: #dffcff;
+  background:
+    radial-gradient(circle at 34% 24%, rgba(255, 255, 255, 0.22), transparent 18%),
+    radial-gradient(circle at 50% 55%, rgba(0, 234, 255, 0.18), rgba(2, 8, 18, 0.86) 62%, rgba(0, 0, 0, 0.92) 100%);
+  color: #eaffff;
   font-weight: 800;
   letter-spacing: 0.6px;
+  box-shadow:
+    0 0 18px rgba(0, 234, 255, 0.22),
+    inset 0 0 16px rgba(0, 234, 255, 0.08);
 }
 
 .brp-mobile-shield {
   width: 88px;
   height: 88px;
   font-size: 11px;
+  border-color: rgba(103, 255, 177, 0.46);
 }
 
 .brp-mobile-attack {
   width: 118px;
   height: 118px;
   font-size: 14px;
+  border-color: rgba(0, 234, 255, 0.5);
 }
 
 .brp-mobile-action.is-active {
-  border-color: rgba(103, 255, 177, 0.6);
-  background: rgba(0, 234, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.85);
+  background:
+    radial-gradient(circle at 34% 24%, rgba(255, 255, 255, 0.32), transparent 18%),
+    radial-gradient(circle at 50% 55%, rgba(103, 255, 177, 0.28), rgba(0, 234, 255, 0.18) 50%, rgba(2, 8, 18, 0.88) 100%);
+  box-shadow:
+    0 0 24px rgba(103, 255, 177, 0.32),
+    inset 0 0 18px rgba(255, 255, 255, 0.12);
+}
+
+/* ---------- MOBILE PORTRAIT COMPACT HUD ----------
+   Inainte, doar landscape avea reguli de compactare - pe portret (orientarea
+   din captura primita) HUD-ul ramanea la dimensiunile de desktop, motiv
+   pentru care textul se suprapunea sus pe ecran. Aceste reguli rearanjeaza
+   tot HUD-ul de sus pe randuri clare, fara nicio suprapunere, si repozitioneaza
+   minimap-ul + butoanele mobile ca sa nu se mai intersecteze. */
+
+@media (hover: none) and (orientation: portrait), (max-width: 760px) and (orientation: portrait) {
+  /* Randul 1: HP (stanga), Players Alive (centru), Leaderboard (dreapta) */
+  .brp-hp-panel {
+    top: max(8px, env(safe-area-inset-top));
+    left: max(8px, env(safe-area-inset-left));
+    width: 118px;
+    padding: 8px 9px;
+    border-radius: 10px;
+  }
+
+  .brp-hp-panel span,
+  .brp-energy-row span {
+    font-size: 7.5px;
+    letter-spacing: 0.6px;
+  }
+
+  .brp-hp-panel strong,
+  .brp-energy-row strong {
+    font-size: 14px;
+  }
+
+  .brp-hp-bar,
+  .brp-energy-bar {
+    height: 5px;
+    margin-top: 5px;
+  }
+
+  .brp-energy-row {
+    margin-top: 7px;
+  }
+
+  .brp-top-hud {
+    top: max(8px, env(safe-area-inset-top));
+    left: 50%;
+    min-width: 0;
+    width: 132px;
+    padding: 7px 10px;
+    border-radius: 10px;
+  }
+
+  .brp-top-hud strong {
+    font-size: 13px;
+  }
+
+  .brp-top-hud span {
+    font-size: 7.5px;
+    margin-top: 3px;
+  }
+
+  .brp-leaderboard {
+    top: max(8px, env(safe-area-inset-top));
+    right: max(8px, env(safe-area-inset-right));
+    width: 118px;
+    padding: 8px 9px;
+    border-radius: 10px;
+  }
+
+  .brp-leaderboard h3 {
+    font-size: 9px;
+    margin-bottom: 5px;
+  }
+
+  .brp-leaderboard-row {
+    font-size: 7.5px;
+    margin: 2px 0;
+    gap: 6px;
+  }
+
+  /* Randul 2, sub randul 1: Orb count (centru) si Zone timer (centru, sub orb count) */
+  .brp-collect-counter {
+    top: max(64px, calc(env(safe-area-inset-top) + 60px));
+    left: 50%;
+    transform: translateX(-50%);
+    width: 132px;
+    padding: 8px 10px;
+    border-radius: 10px;
+  }
+
+  .brp-collect-counter span {
+    font-size: 7.5px;
+  }
+
+  .brp-collect-counter strong {
+    font-size: 17px;
+    margin: 2px 0;
+  }
+
+  .brp-collect-counter small {
+    font-size: 7.5px;
+  }
+
+  .brp-active-cores-panel {
+    margin-top: 6px;
+    padding-top: 6px;
+  }
+
+  .brp-active-cores-panel b {
+    font-size: 7px;
+  }
+
+  .brp-active-cores-panel em {
+    font-size: 7px;
+    padding: 4px 6px;
+  }
+
+  .brp-zone-timer {
+    top: max(140px, calc(env(safe-area-inset-top) + 134px));
+    left: 50%;
+    font-size: 10px;
+    padding: 5px 12px;
+  }
+
+  /* Core drop notice: sub zone timer, fara sa atinga nimic */
+  .brp-core-notice {
+    top: max(176px, calc(env(safe-area-inset-top) + 170px));
+    width: 220px;
+    padding: 10px 14px;
+  }
+
+  /* Minimap: coltul dreapta-jos, deasupra butoanelor mobile, fara sa le atinga */
+  .brp-minimap {
+    right: max(14px, env(safe-area-inset-right));
+    bottom: max(330px, calc(env(safe-area-inset-bottom) + 324px));
+  }
+
+  /* Butoanele mobile: jos, joystick stanga, attack/shield dreapta - spatiate
+     ca sa nu se ciocneasca intre ele si sa lase loc minimap-ului deasupra. */
+  .brp-mobile-joystick {
+    left: max(22px, env(safe-area-inset-left));
+    bottom: max(28px, calc(env(safe-area-inset-bottom) + 22px));
+    width: 184px;
+    height: 184px;
+  }
+
+  .brp-mobile-joystick-knob {
+    width: 68px;
+    height: 68px;
+    margin-left: -34px;
+    margin-top: -34px;
+  }
+
+  .brp-mobile-buttons {
+    right: max(18px, env(safe-area-inset-right));
+    bottom: max(118px, calc(env(safe-area-inset-bottom) + 112px));
+    gap: 12px;
+  }
+
+  .brp-mobile-shield {
+    width: 78px;
+    height: 78px;
+    font-size: 10px;
+  }
+
+  .brp-mobile-attack {
+    width: 102px;
+    height: 102px;
+    font-size: 13px;
+  }
+
+  .brp-exit-btn {
+    left: max(8px, env(safe-area-inset-left));
+    bottom: max(8px, env(safe-area-inset-bottom));
+    padding: 8px 12px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 400px) and (orientation: portrait) {
+  .brp-collect-counter,
+  .brp-top-hud {
+    width: 118px;
+  }
+
+  .brp-leaderboard,
+  .brp-hp-panel {
+    width: 104px;
+  }
+
+  .brp-mobile-joystick {
+    width: 164px;
+    height: 164px;
+  }
+
+  .brp-mobile-attack {
+    width: 90px;
+    height: 90px;
+    font-size: 11px;
+  }
+
+  .brp-mobile-shield {
+    width: 70px;
+    height: 70px;
+    font-size: 9px;
+  }
 }
 
 /* ---------- MOBILE LANDSCAPE COMPACT HUD ---------- */

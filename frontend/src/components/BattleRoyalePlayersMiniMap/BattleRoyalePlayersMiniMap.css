@@ -83,8 +83,8 @@
   .brp-minimap {
     width: clamp(130px, 30vw, 170px);
     height: clamp(98px, 24vw, 130px);
-    right: max(10px, env(safe-area-inset-right));
-    bottom: max(96px, env(safe-area-inset-bottom));
+    right: max(14px, env(safe-area-inset-right));
+    bottom: max(330px, calc(env(safe-area-inset-bottom) + 324px));
     border-radius: 10px;
   }
 
@@ -92,6 +92,14 @@
     font-size: 8px;
     top: 6px;
     left: 8px;
+  }
+}
+
+@media (max-width: 400px) and (orientation: portrait) {
+  .brp-minimap {
+    width: clamp(110px, 28vw, 145px);
+    height: clamp(84px, 22vw, 112px);
+    bottom: max(300px, calc(env(safe-area-inset-bottom) + 294px));
   }
 }
 
