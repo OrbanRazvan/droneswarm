@@ -101,6 +101,22 @@
   font-weight: 800;
 }
 
+.brp-quality-toggle {
+  position: fixed;
+  top: 38px;
+  right: 24px;
+  z-index: 9999;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 234, 255, 0.32);
+  background: rgba(2, 8, 18, 0.82);
+  color: #9bdcff;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  cursor: pointer;
+}
+
 /* ---------- HP / ENERGY PANEL ---------- */
 
 .brp-hp-panel {
@@ -777,7 +793,7 @@
   }
 
   .brp-leaderboard {
-    top: max(8px, env(safe-area-inset-top));
+    top: max(46px, calc(env(safe-area-inset-top) + 42px));
     right: max(8px, env(safe-area-inset-right));
     width: 118px;
     padding: 8px 9px;
@@ -793,6 +809,19 @@
     font-size: 7.5px;
     margin: 2px 0;
     gap: 6px;
+  }
+
+  .brp-fps-counter {
+    top: max(8px, env(safe-area-inset-top));
+    right: max(8px, env(safe-area-inset-right));
+    font-size: 11px;
+  }
+
+  .brp-quality-toggle {
+    top: max(26px, calc(env(safe-area-inset-top) + 22px));
+    right: max(8px, env(safe-area-inset-right));
+    font-size: 8px;
+    padding: 3px 7px;
   }
 
   /* Randul 2, sub randul 1: Orb count (centru) si Zone timer (centru, sub orb count) */
@@ -973,7 +1002,7 @@
   }
 
   .brp-leaderboard {
-    top: max(8px, env(safe-area-inset-top));
+    top: max(40px, calc(env(safe-area-inset-top) + 36px));
     right: max(8px, env(safe-area-inset-right));
     width: 130px;
     padding: 8px 9px;
@@ -987,6 +1016,19 @@
   .brp-leaderboard-row {
     font-size: 8px;
     margin: 2px 0;
+  }
+
+  .brp-fps-counter {
+    top: max(8px, env(safe-area-inset-top));
+    right: max(8px, env(safe-area-inset-right));
+    font-size: 11px;
+  }
+
+  .brp-quality-toggle {
+    top: max(24px, calc(env(safe-area-inset-top) + 20px));
+    right: max(8px, env(safe-area-inset-right));
+    font-size: 8px;
+    padding: 3px 7px;
   }
 
   .brp-mobile-joystick {

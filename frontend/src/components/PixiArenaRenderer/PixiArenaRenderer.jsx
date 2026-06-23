@@ -53,6 +53,13 @@ const MOBILE_PERF_PROFILES = {
   HIGH: "high",
 };
 
+// Rezultatul detectiei de refresh rate ridicat (ProMotion 90Hz/120Hz). Pornim
+// detectia o singura data, devreme, asincron (~300ms) - getDeviceProfile()
+// citeste valoarea curenta de fiecare data cand e chemat (la mount si la
+// resize), asa ca rezultatul se aplica retroactiv de cum e disponibil, fara
+// sa blocheze primul randare al componentei.
+const highRefreshRateDetectedRef = { value: false };
+
 // ---------------------------------------------------------------------------
 // IMPORTANT: device-urile vechi (Huawei P20/P30/Mate, telefoane Android cu
 // Adreno/Mali low-end) au GPU mult mai slab la alpha blending/glow-uri si CPU
@@ -73,6 +80,37 @@ const MOBILE_PERF_PROFILES = {
 // pe care GPU-ul il poate sustine, dar fara mismatch fata de rAF-ul de joc.
 // ---------------------------------------------------------------------------
 
+function detectHighRefreshRate(callback) {
+  // Detectie asincrona, simpla, fara dependinte: masoara cate frame-uri rAF
+  // se intampla intr-un interval scurt de timp. Pe ecrane ProMotion (90Hz/
+  // 120Hz, comune pe iPhone 14+ inclusiv iPhone 17 si pe multe Android
+  // flagship), rezultatul va fi clar peste 75 - pe ecrane standard 60Hz va fi
+  // sub 70. Rulam o singura data, devreme, si nu blocam randarea initiala -
+  // callback-ul ajusteaza profilul retroactiv dupa ~300ms.
+  if (typeof window === "undefined") {
+    callback(false);
+    return;
+  }
+
+  let frames = 0;
+  const startedAt = performance.now();
+
+  const sample = () => {
+    frames += 1;
+    const elapsed = performance.now() - startedAt;
+
+    if (elapsed < 300) {
+      window.requestAnimationFrame(sample);
+      return;
+    }
+
+    const measuredFps = (frames * 1000) / elapsed;
+    callback(measuredFps > 75);
+  };
+
+  window.requestAnimationFrame(sample);
+}
+
 function getDeviceProfile() {
   if (typeof window === "undefined" || typeof navigator === "undefined") {
     return {
@@ -81,6 +119,7 @@ function getDeviceProfile() {
       isLowEndMobile: false,
       isVeryLowEndMobile: false,
       isWeakDesktop: false,
+      isHighRefreshRate: false,
       tier: MOBILE_PERF_PROFILES.HIGH,
       dpr: 1,
       resolution: 1,
@@ -133,19 +172,38 @@ function getDeviceProfile() {
       (cores <= 4 || (reportedMemory !== null && reportedMemory <= 8))
   );
 
+  // ---------------------------------------------------------------------
+  // IMPORTANT: telefoanele flagship moderne (iPhone 14+ inclusiv 17, multe
+  // Android high-end) au cores >= 6 si nu raporteaza deviceMemory (Safari)
+  // sau raporteaza valori mari - cu metrica veche, erau clasificate corect
+  // ca "nu sunt low-end", dar tier-ul MID/HIGH rezultat le da resolution
+  // ridicata (Math.min(dpr, 1.5) sau 2) pe un ecran cu dpr=3 SI refresh rate
+  // de 120Hz (ProMotion). Combinatia "rezolutie mare + randare de 2x ori mai
+  // des" dubleaza/tripleaza costul real de randare fata de un telefon
+  // mid-range standard cu ecran 60Hz, desi CPU-ul telefonului e mai puternic -
+  // motiv exact pentru raportul de "merge greu pe iPhone 17 dar bine pe
+  // laptop slab". isHighRefreshRate e detectat separat (vezi
+  // detectHighRefreshRate) si folosit ca semnal independent in
+  // getQualityBudget pentru a limita rezolutia de randare, NU pentru a
+  // marca device-ul drept "slab" in sens clasic.
+  // ---------------------------------------------------------------------
+  const isHighRefreshRate = Boolean(highRefreshRateDetectedRef.value);
+
   const tier = !isMobile
     ? (isWeakDesktop ? MOBILE_PERF_PROFILES.MID : MOBILE_PERF_PROFILES.HIGH)
     : isLowEndMobile
       ? MOBILE_PERF_PROFILES.LOW
       : MOBILE_PERF_PROFILES.MID;
 
+  const resolutionCap = isHighRefreshRate ? 1.5 : 2;
+
   const resolution = !isMobile
-    ? Math.min(dpr, 2)
+    ? Math.min(dpr, resolutionCap)
     : isVeryLowEndMobile
       ? 1 // pe device foarte slab, randam la rezolutie nativa CSS, fara supersampling
       : isLowEndMobile
         ? Math.min(dpr, 1.25)
-        : Math.min(dpr, 1.5);
+        : Math.min(dpr, isHighRefreshRate ? 1.25 : 1.5);
 
   return {
     isMobile,
@@ -153,6 +211,7 @@ function getDeviceProfile() {
     isLowEndMobile,
     isVeryLowEndMobile,
     isWeakDesktop,
+    isHighRefreshRate,
     tier,
     dpr,
     resolution,
@@ -1085,6 +1144,12 @@ function PixiArenaRenderer({
   otherPlayerSize = STANDARD_DRONE_SIZE,
   otherPlayerQuality = 1,
   liveDataRef = null,
+  // Permite componentelor parinte (ex. selectorul de Graphics Quality din
+  // BattleRoyalePlayers.jsx) sa forteze calitatea, peste detectia automata.
+  // Se citeste live in ticker, deci schimbarea are efect imediat, fara sa
+  // remonteze PIXI.Application. Valori acceptate: { value: "auto" | "low" }.
+  // "auto" (sau ref absent) = comportament normal, neschimbat.
+  qualityOverrideRef = null,
 }) {
   const hostRef = useRef(null);
   const appRef = useRef(null);
@@ -1137,6 +1202,17 @@ function PixiArenaRenderer({
 
       app = new PIXI.Application();
 
+      // Pornim detectia de refresh rate inainte de init - daca rezultatul nu
+      // e inca disponibil (~300ms), primul init foloseste valoarea implicita
+      // (false) si rezolutia se corecteaza automat cand detectHighRefreshRate
+      // termina, prin re-apelarea lui resize() de mai jos.
+      let resizeRef = null;
+      detectHighRefreshRate((isHighRefreshRate) => {
+        if (highRefreshRateDetectedRef.value === isHighRefreshRate) return;
+        highRefreshRateDetectedRef.value = isHighRefreshRate;
+        if (!destroyed && resizeRef) resizeRef();
+      });
+
       const device = getDeviceProfile();
       performanceRef.current.device = device;
 
@@ -1186,13 +1262,18 @@ function PixiArenaRenderer({
         const nextDevice = getDeviceProfile();
         performanceRef.current.device = nextDevice;
 
-        if (app.renderer?.resolution !== nextDevice.resolution) {
-          app.renderer.resolution = Math.max(1, nextDevice.resolution);
+        const manualQuality = qualityOverrideRef?.current?.value || "auto";
+        const targetResolution = manualQuality === "low" ? 1 : nextDevice.resolution;
+
+        if (app.renderer?.resolution !== targetResolution) {
+          app.renderer.resolution = Math.max(1, targetResolution);
         }
 
         app.renderer.resize(width, height);
+        performanceRef.current.lastSeenManualQuality = manualQuality;
       };
 
+      resizeRef = resize;
       window.addEventListener("resize", resize);
       resize();
 
@@ -1235,6 +1316,21 @@ function PixiArenaRenderer({
         const perf = performanceRef.current;
         const device = perf.device || getDeviceProfile();
 
+        // Override manual de calitate (selector Graphics Quality din UI).
+        // Cand e "low", fortam comportamentul identic cu "isVeryLowEndMobile":
+        // calitate dinamica 0, fara glow, fara animatii de rotire/orbita,
+        // indiferent ce a detectat automat profilul device-ului. Citit live
+        // din ref, deci schimbarea selectorului are efect din frame-ul urmator.
+        const manualQuality = qualityOverrideRef?.current?.value || "auto";
+        const isManualLow = manualQuality === "low";
+
+        if (perf.lastSeenManualQuality !== undefined && perf.lastSeenManualQuality !== manualQuality) {
+          // Utilizatorul a schimbat selectorul intre timp - reaplicam imediat
+          // rezolutia de randare (resize() seteaza si performanceRef.current.
+          // lastSeenManualQuality), fara sa asteptam un eveniment window resize.
+          resizeRef?.();
+        }
+
         perf.frames += 1;
         if (time - perf.fpsStartedAt >= 1000) {
           perf.fps = Math.round((perf.frames * 1000) / Math.max(1, time - perf.fpsStartedAt));
@@ -1271,9 +1367,14 @@ function PixiArenaRenderer({
           }
         }
 
-        const budget = getQualityBudget(device, time < perf.lowQualityUntil ? Math.min(perf.dynamicQuality, 1) : perf.dynamicQuality);
+        const budget = isManualLow
+          ? getQualityBudget(
+              { ...device, isVeryLowEndMobile: true, isLowEndMobile: true, isWeakDesktop: false, tier: MOBILE_PERF_PROFILES.LOW },
+              0
+            )
+          : getQualityBudget(device, time < perf.lowQualityUntil ? Math.min(perf.dynamicQuality, 1) : perf.dynamicQuality);
         const lowQuality = budget.quality <= 0;
-        const disableGlow = Boolean(budget.disableGlow);
+        const disableGlow = Boolean(budget.disableGlow) || isManualLow;
         // IMPORTANT: pe device foarte slab (isVeryLowEndMobile), pe mobil
         // slab generic (isLowEndMobile), SAU pe laptop/PC slab (isWeakDesktop,
         // RAM <= 8GB SAU <= 4 nuclee), dezactivam complet animatia de rotire
@@ -1282,9 +1383,11 @@ function PixiArenaRenderer({
         // aferenta apare direct pe pozitia ei (fixa), fara sa se mai
         // roteasca. Asta elimina calculul de Math.cos/Math.sin per rotor/
         // mini-drona la fiecare frame, cel mai vizibil cu pana la 69 de boti
-        // simultan pe ecran.
+        // simultan pe ecran. isManualLow forteaza acelasi comportament cand
+        // utilizatorul selecteaza explicit "Low" din UI, indiferent de
+        // profilul de device auto-detectat.
         const disableAnimations = Boolean(
-          device.isVeryLowEndMobile || device.isLowEndMobile || device.isWeakDesktop
+          device.isVeryLowEndMobile || device.isLowEndMobile || device.isWeakDesktop || isManualLow
         );
         const viewBounds = getWorldViewBounds(cx, cy, worldScale, vw, vh, budget.margin);
 
