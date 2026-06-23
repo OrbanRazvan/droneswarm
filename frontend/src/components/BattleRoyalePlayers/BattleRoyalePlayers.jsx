@@ -350,12 +350,6 @@ function BattleRoyalePlayers({ user, onExitToMenu }) {
   const fpsRef = useRef({ frames: 0, lastAt: performance.now(), value: 60 });
   const lastRenderSyncRef = useRef(0);
   const pixiLiveRef = useRef(null);
-  // Selector manual de calitate grafica (Normal/Low), cerut explicit pentru
-  // device-uri puternice cu ecran de refresh rate ridicat (ex. iPhone cu
-  // ProMotion 120Hz) unde detectia automata nu reduce suficient randarea.
-  // Citit live din PixiArenaRenderer prin ref (fara remount), persistat in
-  // localStorage ca preferinta sa ramana intre sesiuni.
-  const qualityOverrideRef = useRef({ value: "auto" });
   const coreColorMapRef = useRef(
     CORE_TYPES.reduce((acc, core) => {
       acc[core.type] = core.color;
@@ -414,23 +408,6 @@ function BattleRoyalePlayers({ user, onExitToMenu }) {
   const [mobileJoystick, setMobileJoystick] = useState({ active: false, knobX: 0, knobY: 0 });
   const [mobileAttackActive, setMobileAttackActive] = useState(false);
   const [mobileShieldActive, setMobileShieldActive] = useState(false);
-  const [graphicsQuality, setGraphicsQuality] = useState(() => {
-    try {
-      const stored = localStorage.getItem("drone-swarm-graphics-quality");
-      return stored === "low" ? "low" : "auto";
-    } catch {
-      return "auto";
-    }
-  });
-
-  useEffect(() => {
-    qualityOverrideRef.current = { value: graphicsQuality };
-    try {
-      localStorage.setItem("drone-swarm-graphics-quality", graphicsQuality);
-    } catch {
-      // localStorage poate fi blocat in unele browsere - nu blocam jocul.
-    }
-  }, [graphicsQuality]);
 
   useEffect(() => {
     const socket = io(API_URL, {
@@ -606,41 +583,8 @@ function BattleRoyalePlayers({ user, onExitToMenu }) {
 
   useEffect(() => {
     let rafId = 0;
-    // IMPORTANT: pe ecrane ProMotion (iPhone 14+, inclusiv iPhone 17),
-    // requestAnimationFrame este chemat la cadenta nativa a ecranului - de
-    // multe ori 120Hz, fata de 60Hz pe ecrane normale (confirmat oficial:
-    // Safari clamps the rate to the device refresh rate, including 120Hz on
-    // ProMotion iPhones and iPads, si reprodus explicit ca bug de performanta
-    // PixiJS pe iPhone 14 cu ProMotion). Inainte, TOATA logica grea (predictie,
-    // reconciliere remote players, coliziuni vizuale proiectile, populare
-    // pixiLiveRef) rula la fiecare apel rAF - pe un iPhone modern asta
-    // inseamna de 2x mai multa munca CPU/secunda fata de un laptop sau telefon
-    // cu ecran de 60Hz, fara niciun beneficiu vizual perceptibil (ochiul uman
-    // nu distinge diferenta intre actualizare logica la 60Hz vs 120Hz pentru
-    // acest tip de joc). Plafonam logica la ~60Hz explicit prin acumulare de
-    // timp, NU prin limitarea rAF-ului insusi (asta ar reintroduce senzatia
-    // de "salt in trepte" descoperita anterior cand Pixi era plafonat direct).
-    // Bucla rAF continua sa ruleze la cadenta nativa a ecranului (Pixi
-    // deseneaza la 120Hz, miscarea ramane vizual fluida), dar blocul de logica
-    // grea se executa cel mult o data la ~16.6ms.
-    const LOGIC_TICK_INTERVAL_MS = 1000 / 60;
-    let logicAccumulatorMs = 0;
-    let lastRafAt = performance.now();
 
     const tick = (now) => {
-      const rafDt = now - lastRafAt;
-      lastRafAt = now;
-      logicAccumulatorMs += rafDt;
-
-      if (logicAccumulatorMs < LOGIC_TICK_INTERVAL_MS) {
-        rafId = window.requestAnimationFrame(tick);
-        return;
-      }
-
-      // Pastram doar restul sub-pasului (nu resetam la 0), ca acumularea sa
-      // ramana corecta pe termen lung si sa nu se piarda timp intre tick-uri.
-      logicAccumulatorMs %= LOGIC_TICK_INTERVAL_MS;
-
       const data = worldRef.current;
       const dt = Math.min(0.05, Math.max(0.001, (now - lastFrameRef.current) / 1000));
       lastFrameRef.current = now;
@@ -1317,6 +1261,24 @@ function BattleRoyalePlayers({ user, onExitToMenu }) {
   const winnerName = hudData.winnerName || renderData.winnerName;
   const coreDropCountdown = hudData.coreDropCountdown || renderData.coreDropCountdown;
 
+  // IMPORTANT: cand ramane un singur jucator (server-ul seteaza status =
+  // "finished" si winnerId/winnerName), nu mai asteptam un click manual pe
+  // "EXIT TO MENU" - scoatem automat jucatorul din sesiune, dupa un mic delay
+  // ca sa poata citi cine a castigat (identic cu pattern-ul deja dovedit din
+  // BattleRoyaleMode.jsx la finishMatch). Sesiunea insasi e deja inchisa pe
+  // server in acel moment (room.status = 'finished'), camera nu mai accepta
+  // jucatori noi indiferent de asta - acest efect doar scoate clientul curent
+  // din ecranul de joc.
+  useEffect(() => {
+    if (!isFinished) return;
+
+    const timeout = window.setTimeout(() => {
+      if (onExitToMenu) onExitToMenu();
+    }, 6000);
+
+    return () => window.clearTimeout(timeout);
+  }, [isFinished, onExitToMenu]);
+
   const matchStartedAt = hudData.matchStartedAt || renderData.matchStartedAt;
   const zoneShrinkDuration = hudData.zoneShrinkDuration || renderData.zoneShrinkDuration || 600000;
 
@@ -1407,7 +1369,6 @@ function BattleRoyalePlayers({ user, onExitToMenu }) {
         otherPlayerSize={112}
         otherPlayerQuality={2}
         liveDataRef={pixiLiveRef}
-        qualityOverrideRef={qualityOverrideRef}
       />
 
       {you && !isDead && (
@@ -1418,15 +1379,6 @@ function BattleRoyalePlayers({ user, onExitToMenu }) {
       )}
 
       <div className="brp-fps-counter">FPS: {renderData.fps || 60}</div>
-
-      <button
-        type="button"
-        className="brp-quality-toggle"
-        onClick={() => setGraphicsQuality((current) => (current === "low" ? "auto" : "low"))}
-        title="Graphics quality: Normal foloseste detectia automata, Low scoate toate animatiile si reduce randarea pentru performanta maxima."
-      >
-        QUALITY: {graphicsQuality === "low" ? "LOW" : "NORMAL"}
-      </button>
 
       <div className="brp-hp-panel">
         <span>DRONE HP</span>
@@ -1524,6 +1476,7 @@ function BattleRoyalePlayers({ user, onExitToMenu }) {
         <div className="brp-finished-screen">
           <h1>{winnerName ? `${winnerName} WINS` : "MATCH FINISHED"}</h1>
           <p>{hudYou?.id === (hudData.winnerId || renderData.winnerId) ? "Ai castigat meciul." : "Meciul s-a terminat."}</p>
+          <p className="brp-finished-auto-exit">Revenire automata la meniu in cateva secunde...</p>
           <button onClick={onExitToMenu}>EXIT TO MENU</button>
         </div>
       )}
