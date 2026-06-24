@@ -491,6 +491,7 @@ function ZonePvpArena({ user, onExitToMenu }) {
     }, {})
   );
   const worldElementRef = useRef(null);
+  const zoneElementRef = useRef(null);
   const sendInputRef = useRef(() => {});
 
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
@@ -994,6 +995,19 @@ function ZonePvpArena({ user, onExitToMenu }) {
         worldElementRef.current.style.transform = `translate3d(${liveCameraX}px, ${liveCameraY}px, 0)`;
       }
 
+      // IMPORTANT: actualizam dimensiunea zonei direct pe element (ref), NU prin
+      // React state. safeZoneRadius vine din data (worldRef.current, actualizat
+      // la fiecare frame din rAF), nu din renderData (care se sincronizeaza cu
+      // React doar la ~15Hz si declanseaza layout+repaint pe acest element la
+      // fiecare schimbare de dimensiune). Aici scriem direct in style, ca pentru
+      // camera - elimina complet reflow-ul de React pentru zona care se strange
+      // continuu, principala cauza a lag-ului pe mobil pentru acest mod.
+      if (zoneElementRef.current) {
+        const diameter = zoneRadius * 2;
+        zoneElementRef.current.style.width = `${diameter}px`;
+        zoneElementRef.current.style.height = `${diameter}px`;
+      }
+
       const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 820);
       const livePlayers = collectVisible(
         remoteMap.values(),
@@ -1478,7 +1492,8 @@ function ZonePvpArena({ user, onExitToMenu }) {
         }}
       >
         <div
-          className="battle-zone"
+          ref={zoneElementRef}
+          className="zone-pvp-battle-zone"
           style={{
             left: worldWidth / 2,
             top: worldHeight / 2,
