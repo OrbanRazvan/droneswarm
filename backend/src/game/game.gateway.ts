@@ -34,33 +34,13 @@ const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 50;
 // ca zona sa acopere intreaga harta de 10000x10000 la fel ca celelalte moduri
 // care au deja zona.
 // ---------------------------------------------------------------------------
-const ZONE_PVP_REAL_PLAYER_MAX = 2;
-const ZONE_PVP_ROOM_MAX_PLAYERS = 50;
+const ZONE_PVP_ROOM_MAX_PLAYERS = 2;
 const ZONE_PVP_ROOM_MIN_PLAYERS = 2;
-const ZONE_PVP_BOT_COUNT = 48;
 const ZONE_PVP_START_COUNTDOWN_MS = 5000;
 const ZONE_PVP_ZONE_SHRINK_DURATION = 600000;
 const ZONE_PVP_ZONE_DAMAGE = 10;
 const ZONE_PVP_ZONE_DAMAGE_INTERVAL = 1000;
 const ZONE_PVP_VISIBLE_PLAYERS_LIMIT = 60;
-
-// ---------------------------------------------------------------------------
-// ZONE PVP BOTS - AI inspirat din BattleRoyaleMode:
-// spawn random cu distanta intre participanti, farm inteligent, atac agresiv,
-// evitare margine zona, cautare energy/core/orbs si strafing in lupta.
-// ---------------------------------------------------------------------------
-const ZONE_PVP_BOT_VIEW_RANGE = 1900;
-const ZONE_PVP_BOT_ATTACK_RANGE = 900;
-const ZONE_PVP_BOT_FARM_UNTIL_DRONES = 2;
-const ZONE_PVP_BOT_LOW_HP = 35;
-const ZONE_PVP_BOT_SAFE_DISTANCE = 620;
-const ZONE_PVP_BOT_ZONE_EDGE_BUFFER = 560;
-const ZONE_PVP_BOT_MIN_SPAWN_DISTANCE = 1250;
-const ZONE_PVP_REAL_PLAYER_BOT_SPAWN_DISTANCE = 1450;
-const ZONE_PVP_SPAWN_SAFE_ZONE_MARGIN = 1250;
-const ZONE_PVP_BOT_AVOID_RADIUS = 340;
-const ZONE_PVP_BOT_DECISION_INTERVAL_MIN = 120;
-const ZONE_PVP_BOT_DECISION_INTERVAL_MAX = 260;
 
 const COLLISION_GRID_CELL_SIZE = 600;
 
@@ -69,7 +49,7 @@ const MAP_MIN_SIZE = Math.min(WORLD_WIDTH, WORLD_HEIGHT);
 const ZONE_START_RADIUS = MAP_MIN_SIZE * 0.47;
 const ZONE_END_RADIUS = MAP_MIN_SIZE * 0.07;
 const ZONE_SHRINK_DURATION = 300000;
-const PLAYER_SPEED = 2.15;
+const PLAYER_SPEED = 2.6;
 const PLAYER_RADIUS = 80;
 const VIEW_DISTANCE = 2400;
 const MAX_ORBS = 500;
@@ -79,13 +59,13 @@ const ORB_COLLECT_DISTANCE = 180;
 const COLORS = ['cyan', 'green', 'orange', 'purple', 'red', 'pink'];
 const START_HP = 100;
 const MAX_HP = 150;
-const START_ENERGY = 50;
+const START_ENERGY = 100;
 const ENERGY_DRAIN_INTERVAL = 1000;
 const ENERGY_DRAIN_AMOUNT = 1;
 const ZONE_DAMAGE = 10;
 const ZONE_DAMAGE_INTERVAL = 1000;
-const MAX_ENERGY_CELLS = 50;
-const MIN_ENERGY_CELLS = 18;
+const MAX_ENERGY_CELLS = 70;
+const MIN_ENERGY_CELLS = 35;
 const VISIBLE_ENERGY_LIMIT = 45;
 const ENERGY_CELL_COLLECT_DISTANCE = 160;
 const DRONE_REQUIREMENTS = [5, 15, 25, 35];
@@ -509,7 +489,7 @@ export class GameGateway {
             safeZoneRadius: zoneRadius,
             zoneShrinkDuration: ZONE_PVP_ZONE_SHRINK_DURATION,
             matchStartedAt: room.matchStartedAt,
-            playerCount: this.getZonePvpRealPlayerCount(room),
+            playerCount: this.getAlivePlayers(room).length,
             minPlayers: ZONE_PVP_ROOM_MIN_PLAYERS,
             maxPlayers: ZONE_PVP_ROOM_MAX_PLAYERS,
             you: this.serializePlayer(player),
@@ -629,7 +609,6 @@ export class GameGateway {
 
                 if (room.status === 'playing') {
                     const zoneRadius = this.getZonePvpZoneRadius(room);
-                    this.updateZonePvpBots(room, now, zoneRadius);
                     this.updatePlayers(room, now, zoneRadius, deltaFrames);
                     this.applyZonePvpZoneDamage(room, now, zoneRadius);
                     this.handleBodyCollisions(room, now, zoneRadius);
@@ -686,7 +665,7 @@ export class GameGateway {
     updateZonePvpRoomStatus(room, now) {
         if (room.status !== 'countdown') return;
 
-        if (this.getZonePvpRealPlayerCount(room) < ZONE_PVP_ROOM_MIN_PLAYERS) {
+        if (room.players.size < ZONE_PVP_ROOM_MIN_PLAYERS) {
             room.status = 'waiting';
             room.locked = false;
             room.countdownStartedAt = null;
@@ -699,7 +678,6 @@ export class GameGateway {
             room.countdownStartedAt = null;
             room.matchStartedAt = now;
             room.matchHadMultiplePlayers = true;
-            this.ensureZonePvpBots(room, now);
             room.lastCoreWaveAt = now - CORE_RESPAWN_DELAY + CORE_WARNING_DELAY;
         }
     }
@@ -1571,7 +1549,6 @@ export class GameGateway {
             moveY: player.moveY || 0,
             moveAngle: player.moveAngle || 0,
             isMoving: Boolean(player.isMoving),
-            isBot: Boolean(player.isBot),
             knockbackX: player.knockbackX || 0,
             knockbackY: player.knockbackY || 0,
             nanoCoreActive: player.nanoCoreActive,
@@ -1650,7 +1627,7 @@ export class GameGateway {
             }
         }
 
-        if (this.getZonePvpRealPlayerCount(room) === 0 && now - room.createdAt > 15000) {
+        if (room.players.size === 0 && now - room.createdAt > 15000) {
             this.normalRooms.delete(room.id);
         }
     }
@@ -1723,7 +1700,6 @@ export class GameGateway {
                 nextDroneAt: player.nextDroneAt || DRONE_REQUIREMENTS[0],
                 totalCollected: player.totalCollected || 0,
                 alive: player.alive,
-                isBot: Boolean(player.isBot),
             }));
 
         const secondsUntilCoreDrop = room.cores.length === 0 && room.nextCoreWaveAt
@@ -1881,7 +1857,7 @@ export class GameGateway {
             }
         }
 
-        if (this.getZonePvpRealPlayerCount(room) === 0 && now - room.createdAt > 15000) {
+        if (room.players.size === 0 && now - room.createdAt > 15000) {
             this.battleRoyaleOnlineRooms.delete(room.id);
             return;
         }
@@ -2022,7 +1998,7 @@ export class GameGateway {
             if (
                 room.status === 'waiting' &&
                 !room.locked &&
-                this.getZonePvpRealPlayerCount(room) < ZONE_PVP_REAL_PLAYER_MAX
+                room.players.size < ZONE_PVP_ROOM_MAX_PLAYERS
             ) {
                 return room;
             }
@@ -2050,7 +2026,6 @@ export class GameGateway {
             winnerName: null,
             finishedAt: null,
             collisionCooldowns: new Map(),
-            botsInjected: false,
             zonePvpMode: true,
         };
 
@@ -2080,13 +2055,12 @@ export class GameGateway {
     cleanupZonePvpRoom(room, now) {
         for (const player of room.players.values()) {
             const socketOnline = this.server.sockets.sockets.has(player.id);
-            if (player.isBot) continue;
             if (!socketOnline || now - player.lastSeenAt > 30000) {
                 this.removeZonePvpPlayer(player.id);
             }
         }
 
-        if (this.getZonePvpRealPlayerCount(room) === 0 && now - room.createdAt > 15000) {
+        if (room.players.size === 0 && now - room.createdAt > 15000) {
             this.zonePvpRooms.delete(room.id);
             return;
         }
@@ -2101,448 +2075,6 @@ export class GameGateway {
         const elapsed = Math.max(0, Date.now() - room.matchStartedAt);
         const progress = Math.min(1, elapsed / ZONE_PVP_ZONE_SHRINK_DURATION);
         return ZONE_START_RADIUS + (ZONE_END_RADIUS - ZONE_START_RADIUS) * progress;
-    }
-
-    getZonePvpRealPlayerCount(room) {
-        return [...room.players.values()].filter((player) => !player.isBot).length;
-    }
-
-    getZonePvpRandomSpawnPoint(room, usedSpawns = [], minDistance = ZONE_PVP_BOT_MIN_SPAWN_DISTANCE) {
-        const centerX = WORLD_WIDTH / 2;
-        const centerY = WORLD_HEIGHT / 2;
-        const safeSpawnRadius = Math.max(800, ZONE_START_RADIUS - ZONE_PVP_SPAWN_SAFE_ZONE_MARGIN);
-        const existingPoints = [
-            ...[...room.players.values()].map((player) => ({ x: player.x, y: player.y })),
-            ...usedSpawns,
-        ].filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
-
-        for (let attempt = 0; attempt < 2500; attempt += 1) {
-            const angle = Math.random() * Math.PI * 2;
-            const distance = Math.sqrt(Math.random()) * safeSpawnRadius;
-            const x = this.clamp(centerX + Math.cos(angle) * distance, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
-            const y = this.clamp(centerY + Math.sin(angle) * distance, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
-
-            const isFarEnough = existingPoints.every((other) => {
-                return Math.hypot(x - other.x, y - other.y) >= minDistance;
-            });
-
-            if (isFarEnough && this.isInsideSafeZone(x, y, ZONE_START_RADIUS, 700)) {
-                return { x, y };
-            }
-        }
-
-        // Relaxare controlata pentru cazul in care 50 de unitati nu incap la distanta mare.
-        for (let attempt = 0; attempt < 1400; attempt += 1) {
-            const angle = Math.random() * Math.PI * 2;
-            const distance = Math.sqrt(Math.random()) * safeSpawnRadius;
-            const x = this.clamp(centerX + Math.cos(angle) * distance, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
-            const y = this.clamp(centerY + Math.sin(angle) * distance, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
-
-            const isFarEnough = existingPoints.every((other) => {
-                return Math.hypot(x - other.x, y - other.y) >= minDistance * 0.62;
-            });
-
-            if (isFarEnough && this.isInsideSafeZone(x, y, ZONE_START_RADIUS, 500)) {
-                return { x, y };
-            }
-        }
-
-        return {
-            x: centerX + (Math.random() - 0.5) * safeSpawnRadius * 0.55,
-            y: centerY + (Math.random() - 0.5) * safeSpawnRadius * 0.55,
-        };
-    }
-
-    createZonePvpBot(index, room, now, spawnPoint = null) {
-        const spawn = spawnPoint || this.getZonePvpRandomSpawnPoint(room, [], ZONE_PVP_BOT_MIN_SPAWN_DISTANCE);
-        const skins = [
-            'cyan', 'red', 'purple', 'orange', 'green', 'pink',
-            'ice-blue', 'solar-gold', 'shadow-black', 'toxic-lime',
-            'royal-violet', 'crimson-white', 'neon-teal', 'ember-red',
-            'arctic-silver', 'void-purple', 'plasma-pink', 'jade-black',
-            'azure-white', 'inferno-orange', 'midnight-blue', 'acid-green',
-            'ruby-black', 'ghost-white', 'cyber-yellow', 'deep-ocean',
-            'magenta-cyan', 'bronze-steel', 'electric-indigo', 'dark-emerald'
-        ];
-        const names = ['DarkNova', 'SkyHunter', 'CyberCore', 'NanoByte', 'RedPulse', 'VoidRaptor', 'OrbHunter', 'ZoneGhost'];
-
-        return {
-            id: `zone-bot-${crypto.randomUUID()}`,
-            isBot: true,
-            userId: null,
-            username: `${names[index % names.length]}-${index + 1}`,
-            skin: skins[index % skins.length],
-            x: spawn.x,
-            y: spawn.y,
-            hp: START_HP,
-            maxHp: START_HP,
-            energy: START_ENERGY,
-            drones: 0,
-            progress: 0,
-            nextDroneAt: DRONE_REQUIREMENTS[0],
-            totalCollected: 0,
-            kills: 0,
-            killStreak: 0,
-            rapidFireUntil: 0,
-            attackCooldownMultiplier: 1,
-            alive: true,
-            input: {},
-            lastSeenAt: now,
-            lastEnergyDrainAt: now,
-            lastZoneDamageAt: now,
-            lastFireAt: 0,
-            lastShieldAt: 0,
-            shieldActive: false,
-            shieldUntil: 0,
-            knockbackX: 0,
-            knockbackY: 0,
-            gridKey: null,
-            prevX: spawn.x,
-            prevY: spawn.y,
-
-            // AI BattleRoyale-like.
-            aiPlanUntil: 0,
-            aiTargetId: null,
-            aiState: 'farm',
-            aiStrafeDir: Math.random() < 0.5 ? -1 : 1,
-            aiAggression: 0.92 + Math.random() * 0.5,
-            aiCourage: 1.05 + Math.random() * 0.45,
-            aiSkill: 0.92 + Math.random() * 0.35,
-            preferredRange: 520 + Math.random() * 170,
-            desiredDroneStock: 3 + Math.floor(Math.random() * 2),
-            wanderAngle: Math.random() * Math.PI * 2,
-            vx: 0,
-            vy: 0,
-            dangerMemory: [],
-        };
-    }
-
-    ensureZonePvpBots(room, now) {
-        if (room.botsInjected) return;
-
-        const existingBots = [...room.players.values()].filter((player) => player.isBot).length;
-        const botsToAdd = Math.max(0, ZONE_PVP_BOT_COUNT - existingBots);
-        const usedSpawns = [];
-
-        for (let i = 0; i < botsToAdd; i += 1) {
-            const spawnPoint = this.getZonePvpRandomSpawnPoint(room, usedSpawns, ZONE_PVP_BOT_MIN_SPAWN_DISTANCE);
-            usedSpawns.push(spawnPoint);
-            const bot = this.createZonePvpBot(i, room, now, spawnPoint);
-            room.players.set(bot.id, bot);
-        }
-
-        room.botsInjected = true;
-    }
-
-    getZonePvpBotPower(unit) {
-        return (
-            (unit.hp || 0) +
-            (unit.drones || 0) * 38 +
-            (unit.totalCollected || 0) * 2 +
-            (unit.kills || 0) * 22
-        );
-    }
-
-    getZonePvpZoneInfo(x, y, radius) {
-        const centerX = WORLD_WIDTH / 2;
-        const centerY = WORLD_HEIGHT / 2;
-        const dx = centerX - x;
-        const dy = centerY - y;
-        const distanceFromCenter = Math.hypot(dx, dy) || 1;
-
-        return {
-            distanceFromCenter,
-            dangerDistance: radius - distanceFromCenter,
-            isInDanger: distanceFromCenter > radius - ZONE_PVP_BOT_ZONE_EDGE_BUFFER,
-            moveToCenterX: dx / distanceFromCenter,
-            moveToCenterY: dy / distanceFromCenter,
-        };
-    }
-
-    getZonePvpBotAvoidance(bot, room, avoidRadius = ZONE_PVP_BOT_AVOID_RADIUS) {
-        let avoidX = 0;
-        let avoidY = 0;
-
-        for (const other of room.players.values()) {
-            if (!other.alive || other.id === bot.id) continue;
-            const dx = bot.x - other.x;
-            const dy = bot.y - other.y;
-            const distance = Math.hypot(dx, dy) || 1;
-
-            if (distance < avoidRadius) {
-                const force = (avoidRadius - distance) / avoidRadius;
-                avoidX += (dx / distance) * force;
-                avoidY += (dy / distance) * force;
-            }
-        }
-
-        return { avoidX, avoidY };
-    }
-
-    isZonePvpPointSafeForBot(x, y, zoneRadius, margin = ZONE_PVP_BOT_ZONE_EDGE_BUFFER) {
-        return this.isInsideSafeZone(x, y, zoneRadius, margin);
-    }
-
-    findClosestZonePvpItem(bot, items, zoneRadius, maxDistance, validator = null) {
-        let best = null;
-        let bestScore = Infinity;
-
-        for (const item of items || []) {
-            if (!item) continue;
-            if (validator && !validator(item)) continue;
-            if (!this.isZonePvpPointSafeForBot(item.x, item.y, zoneRadius, 120)) continue;
-
-            const dx = (item.x || 0) - bot.x;
-            const dy = (item.y || 0) - bot.y;
-            if (Math.abs(dx) > maxDistance || Math.abs(dy) > maxDistance) continue;
-
-            const distance = Math.hypot(dx, dy);
-            let score = distance;
-
-            if ((bot.hp || 0) <= ZONE_PVP_BOT_LOW_HP && item.type === 'nano') score -= 520;
-            if ((bot.drones || 0) < 2 && item.type === 'swarm') score -= 420;
-            if ((bot.drones || 0) >= 1 && (item.type === 'overclock' || item.type === 'berserk')) score -= 320;
-            if ((bot.energy || 0) < 40 && !item.type) score -= 260;
-
-            if (score < bestScore) {
-                bestScore = score;
-                best = item;
-            }
-        }
-
-        return best;
-    }
-
-    findBestZonePvpCoreForBot(bot, room, zoneRadius) {
-        return this.findClosestZonePvpItem(
-            bot,
-            room.cores,
-            zoneRadius,
-            ZONE_PVP_BOT_VIEW_RANGE,
-            (core) => this.canUseCore(bot, core)
-        );
-    }
-
-    shouldZonePvpBotFarm(bot) {
-        return (bot.drones || 0) < ZONE_PVP_BOT_FARM_UNTIL_DRONES && (bot.hp || 0) > ZONE_PVP_BOT_LOW_HP;
-    }
-
-    findZonePvpBotEnemy(bot, room) {
-        let bestEnemy = null;
-        let bestScore = Infinity;
-        const botPower = this.getZonePvpBotPower(bot) * (bot.aiCourage || 1);
-
-        for (const enemy of room.players.values()) {
-            if (!enemy || !enemy.alive || enemy.id === bot.id) continue;
-
-            const dx = enemy.x - bot.x;
-            const dy = enemy.y - bot.y;
-            if (Math.abs(dx) > ZONE_PVP_BOT_VIEW_RANGE || Math.abs(dy) > ZONE_PVP_BOT_VIEW_RANGE) continue;
-
-            const distance = Math.hypot(dx, dy);
-            if (distance > ZONE_PVP_BOT_VIEW_RANGE) continue;
-
-            const enemyPower = this.getZonePvpBotPower(enemy);
-            const enemyWeak = enemy.hp <= 55 || (enemy.drones || 0) <= 1;
-            const hasDroneAdvantage = (bot.drones || 0) >= (enemy.drones || 0) + 1;
-            const hasEnoughAmmo = (bot.drones || 0) >= 1;
-            const canWin = hasEnoughAmmo && (hasDroneAdvantage || enemyWeak || botPower >= enemyPower * 0.95);
-
-            if (!hasEnoughAmmo) continue;
-            if ((bot.drones || 0) < ZONE_PVP_BOT_FARM_UNTIL_DRONES && !enemyWeak && !hasDroneAdvantage && distance > 420) {
-                continue;
-            }
-
-            let score = distance;
-            if (!enemy.isBot) score -= 130;
-            if (enemyWeak) score -= 300;
-            if (hasDroneAdvantage) score -= 360;
-            if (canWin) score -= 220;
-            if (enemy.hp < bot.hp) score -= 100;
-            if (!canWin) score += 320;
-            if ((bot.hp || 0) <= ZONE_PVP_BOT_LOW_HP && enemyPower > botPower * 1.15) score += 560;
-            if (distance < 260 && enemyPower > botPower * 1.15) score += 300;
-
-            if (score < bestScore) {
-                bestScore = score;
-                bestEnemy = {
-                    id: enemy.id,
-                    x: enemy.x,
-                    y: enemy.y,
-                    hp: enemy.hp,
-                    maxHp: enemy.maxHp,
-                    drones: enemy.drones,
-                    totalCollected: enemy.totalCollected || 0,
-                    kills: enemy.kills || 0,
-                    isBot: enemy.isBot,
-                    distance,
-                    enemyWeak,
-                    hasDroneAdvantage,
-                    canWin,
-                    enemyPower,
-                    botPower,
-                };
-            }
-        }
-
-        return bestEnemy;
-    }
-
-    setZonePvpBotInput(
-        bot,
-        targetX,
-        targetY,
-        options: { attacking?: boolean; shield?: boolean; mouseX?: number; mouseY?: number } = {}
-    ) {
-        const dx = targetX - bot.x;
-        const dy = targetY - bot.y;
-        const distance = Math.hypot(dx, dy) || 1;
-
-        bot.input = {
-            w: dy < -22,
-            s: dy > 22,
-            a: dx < -22,
-            d: dx > 22,
-            attacking: Boolean(options.attacking),
-            shield: Boolean(options.shield),
-            mouseX: options.mouseX ?? targetX,
-            mouseY: options.mouseY ?? targetY,
-        };
-
-        bot.moveX = dx / distance;
-        bot.moveY = dy / distance;
-        bot.moveAngle = Math.atan2(dy, dx);
-        bot.isMoving = Math.abs(dx) > 22 || Math.abs(dy) > 22;
-    }
-
-    updateZonePvpBots(room, now, zoneRadius) {
-        const centerX = WORLD_WIDTH / 2;
-        const centerY = WORLD_HEIGHT / 2;
-
-        for (const bot of room.players.values()) {
-            if (!bot.isBot || !bot.alive) continue;
-
-            bot.lastSeenAt = now;
-
-            // Nu recalculam decizia in fiecare frame pentru toti botii; miscarea continua
-            // prin input-ul ramas setat. Asta pastreaza comportamentul fluid si scade CPU.
-            if (bot.aiPlanUntil && now < bot.aiPlanUntil) {
-                continue;
-            }
-
-            bot.aiPlanUntil = now + ZONE_PVP_BOT_DECISION_INTERVAL_MIN + Math.random() * (ZONE_PVP_BOT_DECISION_INTERVAL_MAX - ZONE_PVP_BOT_DECISION_INTERVAL_MIN);
-
-            const zoneInfo = this.getZonePvpZoneInfo(bot.x, bot.y, zoneRadius);
-            const avoidance = this.getZonePvpBotAvoidance(bot, room, ZONE_PVP_BOT_AVOID_RADIUS);
-
-            let targetX = bot.x;
-            let targetY = bot.y;
-            let aimX = targetX;
-            let aimY = targetY;
-            let attacking = false;
-            let shield = false;
-            let speedPressureX = 0;
-            let speedPressureY = 0;
-
-            // 1) Zona are prioritate maxima: botii fug spre centru inainte sa ia damage.
-            if (zoneInfo.dangerDistance < ZONE_PVP_BOT_ZONE_EDGE_BUFFER) {
-                bot.aiState = 'escape-zone';
-                speedPressureX += zoneInfo.moveToCenterX * 1200;
-                speedPressureY += zoneInfo.moveToCenterY * 1200;
-                targetX = bot.x + speedPressureX;
-                targetY = bot.y + speedPressureY;
-                aimX = targetX;
-                aimY = targetY;
-            }
-            else {
-                const enemy = this.findZonePvpBotEnemy(bot, room);
-                const shouldFarm = this.shouldZonePvpBotFarm(bot);
-
-                // 2) Fight agresiv ca in BattleRoyaleMode: ataca daca are drone sau daca inamicul e aproape/slab.
-                if (enemy && (!shouldFarm || enemy.distance < 520 || enemy.enemyWeak || enemy.hasDroneAdvantage)) {
-                    const dx = enemy.x - bot.x;
-                    const dy = enemy.y - bot.y;
-                    const dist = Math.hypot(dx, dy) || 1;
-                    const desiredRange = bot.preferredRange || ZONE_PVP_BOT_SAFE_DISTANCE;
-                    const strafe = bot.aiStrafeDir || 1;
-
-                    bot.aiState = 'fight';
-                    aimX = enemy.x + (enemy.moveX || 0) * 120 * (bot.aiSkill || 1);
-                    aimY = enemy.y + (enemy.moveY || 0) * 120 * (bot.aiSkill || 1);
-                    attacking = dist <= ZONE_PVP_BOT_ATTACK_RANGE && (bot.drones || 0) > 0;
-
-                    if (dist > desiredRange) {
-                        targetX = enemy.x;
-                        targetY = enemy.y;
-                    }
-                    else if (dist < desiredRange * 0.65 || ((bot.hp || 0) <= ZONE_PVP_BOT_LOW_HP && enemy.enemyPower > enemy.botPower)) {
-                        targetX = bot.x - (dx / dist) * 680;
-                        targetY = bot.y - (dy / dist) * 680;
-                    }
-                    else {
-                        targetX = bot.x + (-dy / dist) * 560 * strafe;
-                        targetY = bot.y + (dx / dist) * 560 * strafe;
-                    }
-
-                    if (Math.random() < 0.035) {
-                        bot.aiStrafeDir *= -1;
-                    }
-
-                    shield = Boolean((bot.hp || 0) <= 45 && (bot.energy || 0) >= 20 && enemy.distance < 650 && Math.random() < 0.35);
-                }
-                else {
-                    // 3) Farm inteligent: energy daca e low, apoi core util, apoi orb.
-                    const needsEnergy = (bot.energy || 0) <= 48;
-                    const energyTarget = needsEnergy
-                        ? this.findClosestZonePvpItem(bot, room.energyCells, zoneRadius, ZONE_PVP_BOT_VIEW_RANGE)
-                        : null;
-                    const coreTarget = this.findBestZonePvpCoreForBot(bot, room, zoneRadius);
-                    const orbTarget = this.findClosestZonePvpItem(bot, room.orbs, zoneRadius, ZONE_PVP_BOT_VIEW_RANGE);
-                    const target = energyTarget || coreTarget || orbTarget;
-
-                    if (target) {
-                        bot.aiState = target.type ? 'core' : needsEnergy && energyTarget ? 'energy' : 'farm';
-                        bot.aiTargetId = target.id;
-                        targetX = target.x;
-                        targetY = target.y;
-                        aimX = target.x;
-                        aimY = target.y;
-                    }
-                    else {
-                        bot.aiState = 'wander';
-                        bot.wanderAngle = (bot.wanderAngle || 0) + (Math.random() - 0.5) * 0.9;
-                        const wanderRadius = Math.max(520, Math.min(zoneRadius * 0.52, 2100));
-                        targetX = centerX + Math.cos(bot.wanderAngle) * wanderRadius;
-                        targetY = centerY + Math.sin(bot.wanderAngle) * wanderRadius;
-                        aimX = targetX;
-                        aimY = targetY;
-                    }
-                }
-            }
-
-            // 4) Evitare aglomeratie: distanta intre toti, sa nu se lipeasca botii intre ei/playeri.
-            targetX += avoidance.avoidX * 620;
-            targetY += avoidance.avoidY * 620;
-
-            // 5) Pastreaza tinta in harta si preferabil in zona safe.
-            targetX = this.clamp(targetX, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
-            targetY = this.clamp(targetY, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
-            if (!this.isInsideSafeZone(targetX, targetY, zoneRadius, 160)) {
-                const dx = targetX - centerX;
-                const dy = targetY - centerY;
-                const dist = Math.hypot(dx, dy) || 1;
-                const safeRadius = Math.max(160, zoneRadius - 180);
-                targetX = centerX + (dx / dist) * safeRadius;
-                targetY = centerY + (dy / dist) * safeRadius;
-            }
-
-            this.setZonePvpBotInput(bot, targetX, targetY, {
-                attacking,
-                shield,
-                mouseX: aimX,
-                mouseY: aimY,
-            });
-        }
     }
 
     broadcastZonePvpRoomState(room, now) {
@@ -2635,9 +2167,7 @@ export class GameGateway {
                 coreDropCountdown,
                 winnerId: room.winnerId,
                 winnerName: room.winnerName,
-                playerCount: room.status === 'waiting' || room.status === 'countdown'
-                    ? this.getZonePvpRealPlayerCount(room)
-                    : alivePlayers.length,
+                playerCount: alivePlayers.length,
                 minPlayers: ZONE_PVP_ROOM_MIN_PLAYERS,
                 maxPlayers: ZONE_PVP_ROOM_MAX_PLAYERS,
                 worldWidth: WORLD_WIDTH,
@@ -2719,7 +2249,7 @@ export class GameGateway {
                 this.removePlayer(player.id);
             }
         }
-        if (this.getZonePvpRealPlayerCount(room) === 0 && now - room.createdAt > 15000) {
+        if (room.players.size === 0 && now - room.createdAt > 15000) {
             this.rooms.delete(room.id);
             return;
         }

@@ -8,8 +8,8 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 const COLORS = ["cyan", "green", "orange", "purple", "red", "pink"];
 
-const WORLD_WIDTH = 11000;
-const WORLD_HEIGHT = 11000;
+const WORLD_WIDTH = 12000;
+const WORLD_HEIGHT = 12000;
 const VIEW_PADDING = 120;
 
 const MAX_ORBS = 140;
@@ -29,7 +29,7 @@ const PROJECTILE_RENDER_DISTANCE = 1650;
 // VITEZA DRONEI PRINCIPALE. Identica cu GameArena.jsx (Play vs AI) si cu
 // GAME_FRAME_SPEED din PvpArena.jsx, ca senzatia de miscare sa fie aceeasi
 // in toate modurile de joc.
-const PLAYER_SPEED = 2.5;
+const PLAYER_SPEED = 2.6;
 
 const PROJECTILE_SPEED = 4.4;
 const PROJECTILE_MAX_DISTANCE = 1500;
@@ -200,7 +200,7 @@ function getSelectedUserSkin(user) {
 // ---------------------------------------------------------------------------
 // 59 boti + 1 player = 60 participanti total, exact cerinta.
 // ---------------------------------------------------------------------------
-const BOT_COUNT = 49;
+const BOT_COUNT = 59;
 const BOT_SPEED = PLAYER_SPEED;
 const BOT_VIEW_RANGE = 1900;
 const BOT_ATTACK_RANGE = 900;
