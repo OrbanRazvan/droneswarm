@@ -30,8 +30,10 @@ const BR_ONLINE_ZONE_SHRINK_DURATION = 600000;
 const BR_ONLINE_ZONE_DAMAGE = 10;
 const BR_ONLINE_ZONE_DAMAGE_INTERVAL = 1000;
 const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 50;
-const ZONE_PVP_ROOM_MAX_PLAYERS = 2;
+const ZONE_PVP_REAL_PLAYER_MAX = 2;
+const ZONE_PVP_ROOM_MAX_PLAYERS = 50;
 const ZONE_PVP_ROOM_MIN_PLAYERS = 2;
+const ZONE_PVP_BOT_COUNT = 48;
 const ZONE_PVP_START_COUNTDOWN_MS = 5000;
 const ZONE_PVP_ZONE_SHRINK_DURATION = 600000;
 const ZONE_PVP_ZONE_DAMAGE = 10;
@@ -442,7 +444,7 @@ let GameGateway = class GameGateway {
             safeZoneRadius: zoneRadius,
             zoneShrinkDuration: ZONE_PVP_ZONE_SHRINK_DURATION,
             matchStartedAt: room.matchStartedAt,
-            playerCount: this.getAlivePlayers(room).length,
+            playerCount: this.getZonePvpRealPlayerCount(room),
             minPlayers: ZONE_PVP_ROOM_MIN_PLAYERS,
             maxPlayers: ZONE_PVP_ROOM_MAX_PLAYERS,
             you: this.serializePlayer(player),
@@ -545,6 +547,7 @@ let GameGateway = class GameGateway {
                 this.updateZonePvpRoomStatus(room, now);
                 if (room.status === 'playing') {
                     const zoneRadius = this.getZonePvpZoneRadius(room);
+                    this.updateZonePvpBots(room, now, zoneRadius);
                     this.updatePlayers(room, now, zoneRadius, deltaFrames);
                     this.applyZonePvpZoneDamage(room, now, zoneRadius);
                     this.handleBodyCollisions(room, now, zoneRadius);
@@ -597,7 +600,7 @@ let GameGateway = class GameGateway {
     updateZonePvpRoomStatus(room, now) {
         if (room.status !== 'countdown')
             return;
-        if (room.players.size < ZONE_PVP_ROOM_MIN_PLAYERS) {
+        if (this.getZonePvpRealPlayerCount(room) < ZONE_PVP_ROOM_MIN_PLAYERS) {
             room.status = 'waiting';
             room.locked = false;
             room.countdownStartedAt = null;
@@ -609,6 +612,7 @@ let GameGateway = class GameGateway {
             room.countdownStartedAt = null;
             room.matchStartedAt = now;
             room.matchHadMultiplePlayers = true;
+            this.ensureZonePvpBots(room, now);
             room.lastCoreWaveAt = now - CORE_RESPAWN_DELAY + CORE_WARNING_DELAY;
         }
     }
@@ -1437,6 +1441,7 @@ let GameGateway = class GameGateway {
             moveY: player.moveY || 0,
             moveAngle: player.moveAngle || 0,
             isMoving: Boolean(player.isMoving),
+            isBot: Boolean(player.isBot),
             knockbackX: player.knockbackX || 0,
             knockbackY: player.knockbackY || 0,
             nanoCoreActive: player.nanoCoreActive,
@@ -1508,7 +1513,7 @@ let GameGateway = class GameGateway {
                 this.removeNormalPlayer(player.id);
             }
         }
-        if (room.players.size === 0 && now - room.createdAt > 15000) {
+        if (this.getZonePvpRealPlayerCount(room) === 0 && now - room.createdAt > 15000) {
             this.normalRooms.delete(room.id);
         }
     }
@@ -1564,6 +1569,7 @@ let GameGateway = class GameGateway {
             nextDroneAt: player.nextDroneAt || DRONE_REQUIREMENTS[0],
             totalCollected: player.totalCollected || 0,
             alive: player.alive,
+            isBot: Boolean(player.isBot),
         }));
         const secondsUntilCoreDrop = room.cores.length === 0 && room.nextCoreWaveAt
             ? Math.ceil(Math.max(0, room.nextCoreWaveAt - now) / 1000)
@@ -1692,7 +1698,7 @@ let GameGateway = class GameGateway {
                 this.removeBattleRoyaleOnlinePlayer(player.id);
             }
         }
-        if (room.players.size === 0 && now - room.createdAt > 15000) {
+        if (this.getZonePvpRealPlayerCount(room) === 0 && now - room.createdAt > 15000) {
             this.battleRoyaleOnlineRooms.delete(room.id);
             return;
         }
@@ -1805,7 +1811,7 @@ let GameGateway = class GameGateway {
         for (const room of this.zonePvpRooms.values()) {
             if (room.status === 'waiting' &&
                 !room.locked &&
-                room.players.size < ZONE_PVP_ROOM_MAX_PLAYERS) {
+                this.getZonePvpRealPlayerCount(room) < ZONE_PVP_REAL_PLAYER_MAX) {
                 return room;
             }
         }
@@ -1831,6 +1837,7 @@ let GameGateway = class GameGateway {
             winnerName: null,
             finishedAt: null,
             collisionCooldowns: new Map(),
+            botsInjected: false,
             zonePvpMode: true,
         };
         this.zonePvpRooms.set(room.id, room);
@@ -1856,11 +1863,13 @@ let GameGateway = class GameGateway {
     cleanupZonePvpRoom(room, now) {
         for (const player of room.players.values()) {
             const socketOnline = this.server.sockets.sockets.has(player.id);
+            if (player.isBot)
+                continue;
             if (!socketOnline || now - player.lastSeenAt > 30000) {
                 this.removeZonePvpPlayer(player.id);
             }
         }
-        if (room.players.size === 0 && now - room.createdAt > 15000) {
+        if (this.getZonePvpRealPlayerCount(room) === 0 && now - room.createdAt > 15000) {
             this.zonePvpRooms.delete(room.id);
             return;
         }
@@ -1874,6 +1883,223 @@ let GameGateway = class GameGateway {
         const elapsed = Math.max(0, Date.now() - room.matchStartedAt);
         const progress = Math.min(1, elapsed / ZONE_PVP_ZONE_SHRINK_DURATION);
         return ZONE_START_RADIUS + (ZONE_END_RADIUS - ZONE_START_RADIUS) * progress;
+    }
+    getZonePvpRealPlayerCount(room) {
+        return [...room.players.values()].filter((player) => !player.isBot).length;
+    }
+    createZonePvpBot(index, room, now) {
+        const zoneRadius = this.getZonePvpZoneRadius(room);
+        const spawn = this.getSafeSpawn(room, zoneRadius);
+        const skins = [
+            'cyan', 'red', 'purple', 'orange', 'green', 'pink',
+            'ice-blue', 'solar-gold', 'shadow-black', 'toxic-lime',
+            'royal-violet', 'crimson-white', 'neon-teal', 'ember-red',
+            'arctic-silver', 'void-purple', 'plasma-pink', 'jade-black',
+            'azure-white', 'inferno-orange', 'midnight-blue', 'acid-green',
+            'ruby-black', 'ghost-white', 'cyber-yellow', 'deep-ocean',
+            'magenta-cyan', 'bronze-steel', 'electric-indigo', 'dark-emerald'
+        ];
+        const names = ['DarkNova', 'SkyHunter', 'CyberCore', 'NanoByte', 'RedPulse', 'VoidRaptor', 'OrbHunter', 'ZoneGhost'];
+        return {
+            id: `zone-bot-${crypto.randomUUID()}`,
+            isBot: true,
+            userId: null,
+            username: `${names[index % names.length]}-${index + 1}`,
+            skin: skins[index % skins.length],
+            x: spawn.x,
+            y: spawn.y,
+            hp: START_HP,
+            maxHp: START_HP,
+            energy: START_ENERGY,
+            drones: 0,
+            progress: 0,
+            nextDroneAt: DRONE_REQUIREMENTS[0],
+            totalCollected: 0,
+            kills: 0,
+            killStreak: 0,
+            rapidFireUntil: 0,
+            attackCooldownMultiplier: 1,
+            alive: true,
+            input: {},
+            lastSeenAt: now,
+            lastEnergyDrainAt: now,
+            lastZoneDamageAt: now,
+            lastFireAt: 0,
+            lastShieldAt: 0,
+            shieldActive: false,
+            shieldUntil: 0,
+            knockbackX: 0,
+            knockbackY: 0,
+            gridKey: null,
+            aiPlanUntil: 0,
+            aiTargetId: null,
+            aiAggression: 0.85 + Math.random() * 0.45,
+            aiCourage: 0.9 + Math.random() * 0.5,
+            preferredRange: 520 + Math.random() * 240,
+        };
+    }
+    ensureZonePvpBots(room, now) {
+        if (room.botsInjected)
+            return;
+        const existingBots = [...room.players.values()].filter((player) => player.isBot).length;
+        const botsToAdd = Math.max(0, ZONE_PVP_BOT_COUNT - existingBots);
+        for (let i = 0; i < botsToAdd; i += 1) {
+            const bot = this.createZonePvpBot(i, room, now);
+            room.players.set(bot.id, bot);
+        }
+        room.botsInjected = true;
+    }
+    getZonePvpBotPower(unit) {
+        return ((unit.hp || 0) +
+            (unit.drones || 0) * 38 +
+            (unit.totalCollected || 0) * 2 +
+            (unit.kills || 0) * 22);
+    }
+    findClosestZonePvpItem(bot, items, zoneRadius, maxDistance, validator = null) {
+        let best = null;
+        let bestDistance = Infinity;
+        for (const item of items || []) {
+            if (!item)
+                continue;
+            if (validator && !validator(item))
+                continue;
+            const dx = (item.x || 0) - bot.x;
+            const dy = (item.y || 0) - bot.y;
+            if (Math.abs(dx) > maxDistance || Math.abs(dy) > maxDistance)
+                continue;
+            const distance = Math.hypot(dx, dy);
+            if (distance < bestDistance) {
+                best = item;
+                bestDistance = distance;
+            }
+        }
+        return best;
+    }
+    findZonePvpBotEnemy(bot, room) {
+        let bestEnemy = null;
+        let bestScore = Infinity;
+        const botPower = this.getZonePvpBotPower(bot) * (bot.aiCourage || 1);
+        for (const enemy of room.players.values()) {
+            if (!enemy || !enemy.alive || enemy.id === bot.id)
+                continue;
+            const dx = enemy.x - bot.x;
+            const dy = enemy.y - bot.y;
+            if (Math.abs(dx) > 2100 || Math.abs(dy) > 2100)
+                continue;
+            const distance = Math.hypot(dx, dy);
+            if (distance > 2100)
+                continue;
+            const enemyPower = this.getZonePvpBotPower(enemy);
+            const enemyWeak = enemy.hp <= 55 || (enemy.drones || 0) <= 1;
+            const hasDroneAdvantage = (bot.drones || 0) >= (enemy.drones || 0) + 1;
+            const canAttack = (bot.drones || 0) > 0;
+            if (!canAttack)
+                continue;
+            let score = distance;
+            if (!enemy.isBot)
+                score -= 140;
+            if (enemyWeak)
+                score -= 320;
+            if (hasDroneAdvantage)
+                score -= 280;
+            if (botPower >= enemyPower * 0.9)
+                score -= 180;
+            if ((bot.hp || 0) <= 30 && enemyPower > botPower * 1.2)
+                score += 520;
+            if ((bot.drones || 0) <= 1 && !enemyWeak && distance > 520)
+                score += 360;
+            if (score < bestScore) {
+                bestScore = score;
+                bestEnemy = { ...enemy, distance };
+            }
+        }
+        return bestEnemy;
+    }
+    updateZonePvpBots(room, now, zoneRadius) {
+        const centerX = WORLD_WIDTH / 2;
+        const centerY = WORLD_HEIGHT / 2;
+        for (const bot of room.players.values()) {
+            if (!bot.isBot || !bot.alive)
+                continue;
+            bot.lastSeenAt = now;
+            const zoneDx = centerX - bot.x;
+            const zoneDy = centerY - bot.y;
+            const distanceFromCenter = Math.hypot(zoneDx, zoneDy) || 1;
+            const distanceToEdge = zoneRadius - distanceFromCenter;
+            let targetX = bot.x;
+            let targetY = bot.y;
+            let attacking = false;
+            let shield = false;
+            const enemy = this.findZonePvpBotEnemy(bot, room);
+            const shouldFarm = (bot.drones || 0) < 2 && (bot.hp || 0) > 35;
+            if (distanceToEdge < 520) {
+                targetX = bot.x + (zoneDx / distanceFromCenter) * 900;
+                targetY = bot.y + (zoneDy / distanceFromCenter) * 900;
+                bot.aiTargetId = null;
+            }
+            else if (enemy && (!shouldFarm || enemy.distance < 520)) {
+                const dx = enemy.x - bot.x;
+                const dy = enemy.y - bot.y;
+                const dist = Math.hypot(dx, dy) || 1;
+                const desiredRange = bot.preferredRange || 620;
+                if (dist > desiredRange) {
+                    targetX = enemy.x;
+                    targetY = enemy.y;
+                }
+                else if (dist < desiredRange * 0.65) {
+                    targetX = bot.x - (dx / dist) * 600;
+                    targetY = bot.y - (dy / dist) * 600;
+                }
+                else {
+                    const strafe = bot.id.charCodeAt(bot.id.length - 1) % 2 === 0 ? 1 : -1;
+                    targetX = bot.x + (-dy / dist) * 520 * strafe;
+                    targetY = bot.y + (dx / dist) * 520 * strafe;
+                }
+                bot.input = {
+                    w: targetY < bot.y - 20,
+                    s: targetY > bot.y + 20,
+                    a: targetX < bot.x - 20,
+                    d: targetX > bot.x + 20,
+                    attacking: true,
+                    shield: false,
+                    mouseX: enemy.x,
+                    mouseY: enemy.y,
+                };
+                continue;
+            }
+            else {
+                const needsEnergy = (bot.energy || 0) < 45;
+                const energyTarget = needsEnergy
+                    ? this.findClosestZonePvpItem(bot, room.energyCells, zoneRadius, 1900)
+                    : null;
+                const coreTarget = this.findClosestZonePvpItem(bot, room.cores, zoneRadius, 1900);
+                const orbTarget = this.findClosestZonePvpItem(bot, room.orbs, zoneRadius, 1900);
+                const target = energyTarget || coreTarget || orbTarget;
+                if (target) {
+                    targetX = target.x;
+                    targetY = target.y;
+                    bot.aiTargetId = target.id;
+                }
+                else {
+                    const angle = ((now / 1800) + bot.id.length) % (Math.PI * 2);
+                    targetX = centerX + Math.cos(angle) * Math.max(500, zoneRadius * 0.48);
+                    targetY = centerY + Math.sin(angle) * Math.max(500, zoneRadius * 0.48);
+                }
+            }
+            if ((bot.hp || 0) <= 35 && (bot.drones || 0) > 0 && (bot.energy || 0) >= 20) {
+                shield = Math.random() < 0.12;
+            }
+            bot.input = {
+                w: targetY < bot.y - 22,
+                s: targetY > bot.y + 22,
+                a: targetX < bot.x - 22,
+                d: targetX > bot.x + 22,
+                attacking,
+                shield,
+                mouseX: targetX,
+                mouseY: targetY,
+            };
+        }
     }
     broadcastZonePvpRoomState(room, now) {
         const players = [...room.players.values()];
@@ -1946,7 +2172,9 @@ let GameGateway = class GameGateway {
                 coreDropCountdown,
                 winnerId: room.winnerId,
                 winnerName: room.winnerName,
-                playerCount: alivePlayers.length,
+                playerCount: room.status === 'waiting' || room.status === 'countdown'
+                    ? this.getZonePvpRealPlayerCount(room)
+                    : alivePlayers.length,
                 minPlayers: ZONE_PVP_ROOM_MIN_PLAYERS,
                 maxPlayers: ZONE_PVP_ROOM_MAX_PLAYERS,
                 worldWidth: WORLD_WIDTH,
@@ -2024,7 +2252,7 @@ let GameGateway = class GameGateway {
                 this.removePlayer(player.id);
             }
         }
-        if (room.players.size === 0 && now - room.createdAt > 15000) {
+        if (this.getZonePvpRealPlayerCount(room) === 0 && now - room.createdAt > 15000) {
             this.rooms.delete(room.id);
             return;
         }
