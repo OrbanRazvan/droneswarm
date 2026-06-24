@@ -1,0 +1,79 @@
+/* =========================================================
+   ZONE PVP ARENA
+   Clona exacta de stiluri din NormalPvpArena.css, cu adaugiri
+   minime pentru zona vizuala (.battle-zone, deja in GameArena.css)
+   si pentru noul timer de zona + auto-exit pe ecranul de final.
+========================================================= */
+
+.zone-pvp-dom-arena {
+  background: #06101d;
+}
+
+.zone-pvp-dom-arena .world {
+  will-change: transform;
+  transition: none;
+}
+
+.zone-pvp-dom-arena .swarm {
+  transition: none !important;
+  will-change: left, top, transform;
+}
+
+/* HUD de sus: PLAYERS ALIVE in loc de PLAYERS ONLINE, dar foloseste
+   exact aceleasi clase si pozitii ca Normal PvP - nu redefinim nimic
+   din .pvp-alive-counter / .alive-counter / .hp-panel / .collect-counter /
+   .real-leaderboard / .fps-counter / .pvp-mobile-* / .pvp-exit-btn,
+   toate sunt deja stilizate corect prin GameArena.css + NormalPvpArena.css
+   importate de componenta. */
+
+/* Timer de zona: card mic, sub PLAYERS ALIVE, cu acelasi limbaj vizual ca
+   restul HUD-ului (fundal translucid, chenar cyan, text alb/verde). */
+.zone-pvp-zone-timer {
+  position: fixed;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 69;
+  padding: 7px 18px 8px;
+  border-radius: 0 0 12px 12px;
+  border: 1px solid rgba(103, 255, 177, 0.4);
+  border-top: 0;
+  background: rgba(2, 8, 18, 0.86);
+  box-shadow: 0 0 18px rgba(103, 255, 177, 0.14);
+  color: #67ffb1;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  text-shadow: 0 0 12px rgba(103, 255, 177, 0.5);
+  pointer-events: none;
+}
+
+.zone-pvp-finished-auto-exit {
+  margin-top: 8px !important;
+  color: rgba(180, 245, 255, 0.6) !important;
+  font-size: 12px !important;
+}
+
+@media (hover: none) and (orientation: landscape), (max-height: 520px) and (orientation: landscape) {
+  .zone-pvp-zone-timer {
+    top: 42px;
+    font-size: 11px;
+    padding: 5px 12px 6px;
+  }
+}
+
+/* ===== PORTRET MOBIL: zone-timer sub HUD-ul principal, fara suprapunere ===== */
+@media (hover: none) and (orientation: portrait), (max-width: 760px) and (orientation: portrait) {
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .zone-pvp-zone-timer {
+    top: max(96px, calc(env(safe-area-inset-top) + 90px));
+    font-size: 11px;
+    padding: 5px 14px 6px;
+  }
+}
+
+@media (max-width: 430px) and (orientation: portrait) {
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .zone-pvp-zone-timer {
+    top: max(86px, calc(env(safe-area-inset-top) + 80px));
+    font-size: 10px;
+  }
+}

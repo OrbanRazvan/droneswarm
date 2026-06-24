@@ -7,8 +7,8 @@ export declare class GameGateway {
     private normalSocketRoom;
     private battleRoyaleOnlineRooms;
     private battleRoyaleOnlineSocketRoom;
-    private battleRoyalePlayersRooms;
-    private battleRoyalePlayersSocketRoom;
+    private zonePvpRooms;
+    private zonePvpSocketRoom;
     private loop;
     private lastLoopAt;
     constructor();
@@ -23,9 +23,9 @@ export declare class GameGateway {
     handleBattleRoyaleOnlineJoin(client: Socket, data: any): void;
     handleBattleRoyaleOnlineLeave(client: Socket): void;
     handleBattleRoyaleOnlineInput(client: Socket, input: any): void;
-    handleBattleRoyalePlayersJoin(client: Socket, data: any): void;
-    handleBattleRoyalePlayersLeave(client: Socket): void;
-    handleBattleRoyalePlayersInput(client: Socket, input: any): void;
+    handleZonePvpJoin(client: Socket, data: any): void;
+    handleZonePvpLeave(client: Socket): void;
+    handleZonePvpInput(client: Socket, input: any): void;
     startLoop(): void;
     updateRoomStatus(room: any, now: any): void;
     updateBattleRoyaleOnlineRoomStatus(room: any, now: any): void;
@@ -54,6 +54,7 @@ export declare class GameGateway {
     updateProjectiles(room: any, deltaFrames?: number): void;
     applyZoneDamage(room: any, now: any, zoneRadius: any): void;
     applyBattleRoyaleOnlineZoneDamage(room: any, now: any, zoneRadius: any): void;
+    applyZonePvpZoneDamage(room: any, now: any, zoneRadius: any): void;
     distancePointToSegment(px: any, py: any, ax: any, ay: any, bx: any, by: any): number;
     collectOrbs(room: any, zoneRadius: any): void;
     collectEnergy(room: any, zoneRadius: any): void;
@@ -65,6 +66,7 @@ export declare class GameGateway {
     maintainWorldItems(room: any, zoneRadius: any, now: any): void;
     updateWinCondition(room: any, now: any): void;
     updateBattleRoyaleOnlineWinCondition(room: any, now: any): void;
+    updateZonePvpWinCondition(room: any, now: any): void;
     broadcastRoomState(room: any, now: any): void;
     serializePlayer(player: any): {
         id: any;
@@ -119,6 +121,12 @@ export declare class GameGateway {
     cleanupBattleRoyaleOnlineRoom(room: any, now: any): void;
     getBattleRoyaleOnlineZoneRadius(room: any): number;
     broadcastBattleRoyaleOnlineRoomState(room: any, now: any): void;
+    findOrCreateZonePvpRoom(): any;
+    getZonePvpRoomBySocket(socketId: any): any;
+    removeZonePvpPlayer(socketId: any): void;
+    cleanupZonePvpRoom(room: any, now: any): void;
+    getZonePvpZoneRadius(room: any): number;
+    broadcastZonePvpRoomState(room: any, now: any): void;
     findOrCreateRoom(): any;
     getRoomBySocket(socketId: any): any;
     removePlayer(socketId: any): void;
@@ -163,55 +171,4 @@ export declare class GameGateway {
     filterNear(player: any, items: any, distance: any, limit: any): any[];
     getAlivePlayers(room: any): any[];
     clamp(value: any, min: any, max: any): number;
-    findOrCreateBattleRoyalePlayersRoom(): any;
-    getBattleRoyalePlayersRoomBySocket(socketId: any): any;
-    removeBattleRoyalePlayersPlayer(socketId: any): void;
-    cleanupBattleRoyalePlayersRoom(room: any, now: any): void;
-    updateBattleRoyalePlayersRoomStatus(room: any, now: any): void;
-    getBattleRoyalePlayersZoneRadius(room: any): number;
-    isInsideBattleRoyalePlayersSafeZone(x: any, y: any, radius: any, margin?: number): boolean;
-    keepInsideBattleRoyalePlayersSafeZone(x: any, y: any, radius: any, margin?: number): {
-        x: any;
-        y: any;
-    };
-    randomBattleRoyalePlayersSafePoint(zoneRadius: any, margin?: number): {
-        x: number;
-        y: number;
-    };
-    getBattleRoyalePlayersSafeSpawn(room: any, zoneRadius: any): {
-        x: number;
-        y: number;
-    };
-    createBattleRoyalePlayersOrb(zoneRadius: any): {
-        id: `${string}-${string}-${string}-${string}-${string}`;
-        x: number;
-        y: number;
-        color: string;
-    };
-    createBattleRoyalePlayersEnergyCell(zoneRadius: any): {
-        id: `${string}-${string}-${string}-${string}-${string}`;
-        x: number;
-        y: number;
-    };
-    createBattleRoyalePlayersCore(zoneRadius: any): {
-        id: `${string}-${string}-${string}-${string}-${string}`;
-        type: string;
-        x: number;
-        y: number;
-    };
-    updateBattleRoyalePlayersPlayers(room: any, now: any, zoneRadius: any, deltaFrames?: number): void;
-    applyBattleRoyalePlayersKnockbackStep(player: any, zoneRadius: any): void;
-    tryFireBattleRoyalePlayersProjectile(room: any, player: any, now: any): void;
-    updateBattleRoyalePlayersProjectiles(room: any, deltaFrames?: number): void;
-    applyBattleRoyalePlayersZoneDamage(room: any, now: any, zoneRadius: any): void;
-    buildBattleRoyalePlayersCollisionGrid(alivePlayers: any): Map<string, any[]>;
-    getNearbyBattleRoyalePlayersCellPlayers(grid: any, player: any): any[];
-    handleBattleRoyalePlayersBodyCollisions(room: any, now: any, zoneRadius: any): void;
-    resolveBattleRoyalePlayersPairCollision(a: any, b: any, room: any, now: any, zoneRadius: any): void;
-    collectBattleRoyalePlayersOrbs(room: any, zoneRadius: any): void;
-    collectBattleRoyalePlayersEnergy(room: any, zoneRadius: any): void;
-    collectBattleRoyalePlayersCores(room: any, zoneRadius: any): void;
-    maintainBattleRoyalePlayersWorldItems(room: any, zoneRadius: any, now: any): void;
-    updateBattleRoyalePlayersWinCondition(room: any, now: any): void;
-    broadcastBattleRoyalePlayersRoomState(room: any, now: any): void;
 }

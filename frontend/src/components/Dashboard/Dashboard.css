@@ -2545,29 +2545,31 @@
 }
 
 /* =========================================================
-   BATTLE ROYALE PLAYERS BUTTON
+   ZONE PVP BUTTON
    Adauga acest bloc la finalul Dashboard.css existent.
-   Stilat distinct (albastru-cyan/verde, sugereaza multiplayer live
-   intre jucatori reali, fara boti), in familia vizuala "secondary-wide"
-   din pilot-card, alaturi de Normal PvP / Battle Royale / Battle Royale Online.
+   Stilat distinct (verde toxic/cyan, sugereaza zona care se strange
+   si scoate viata cui ramane in afara ei), in familia vizuala
+   "secondary-wide" din pilot-card, alaturi de Normal PvP / Battle Royale.
 ========================================================= */
 
-.battle-royale-players-wide {
-  color: #021a1f;
-  background: linear-gradient(135deg, #00eaff, #67ffb1);
+.zone-pvp-wide {
+  color: #062014;
+  background: linear-gradient(135deg, #2dff9e, #00d4aa);
   border: 0 !important;
-  box-shadow: 0 0 24px rgba(0, 234, 255, 0.24);
+  box-shadow: 0 0 24px rgba(45, 255, 158, 0.24);
   letter-spacing: 0.4px;
   margin-top: 12px;
 }
 
-.battle-royale-players-wide:hover {
-  background: linear-gradient(135deg, #4ff3ff, #8dffc7);
-  box-shadow: 0 0 30px rgba(0, 234, 255, 0.32);
+.zone-pvp-wide:hover {
+  background: linear-gradient(135deg, #6bffba, #36e8c4);
+  box-shadow: 0 0 30px rgba(45, 255, 158, 0.32);
 }
 
-.pilot-card .battle-royale-players-wide {
+.pilot-card .zone-pvp-wide {
   min-height: 64px;
   font-size: 18px;
   letter-spacing: 0.4px;
 }
+
+

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import NormalPvpArena from "../NormalPvpArena/NormalPvpArena";
 import BattleRoyale from "../BattleRoyaleMode/BattleRoyaleMode";
-import BattleRoyalePlayers from "../BattleRoyalePlayers/BattleRoyalePlayers";
+import ZonePvpArena from "../ZonePvpArena/ZonePvpArena";
 import PixiArenaRenderer from "../PixiArenaRenderer/PixiArenaRenderer";
 import "./Dashboard.css";
 
@@ -411,8 +411,8 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
           <NormalPvpArena user={arenaUser} onExitToMenu={handleExitToHangar} />
         ) : selectedMode === "battle-royale" ? (
           <BattleRoyale user={arenaUser} onExitToMenu={handleExitToHangar} />
-        ) : selectedMode === "battle-royale-players" ? (
-          <BattleRoyalePlayers user={arenaUser} onExitToMenu={handleExitToHangar} />
+        ) : selectedMode === "zone-pvp" ? (
+          <ZonePvpArena user={arenaUser} onExitToMenu={handleExitToHangar} />
         ) : selectedMode === "battle-royale-pvp" ? (
           <BattleRoyaleOnline user={arenaUser} onExitToMenu={handleExitToHangar} />
         ) : (
@@ -504,13 +504,13 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
           </button>
 
           <button
-            className="secondary-wide battle-royale-players-wide"
+            className="secondary-wide zone-pvp-wide"
             onClick={() => {
-              setSelectedMode("battle-royale-players");
+              setSelectedMode("zone-pvp");
               setScreen("arena");
             }}
           >
-            Battle Royale Players
+            Zone PvP
           </button>
 
         </aside>
