@@ -18,9 +18,11 @@ const ORBS_PER_ALIVE_PLAYER = 5;
 const ORB_ZONE_DENSITY = 0.0000036;
 const VIEW_DISTANCE = 1400;
 
-const BOT_RENDER_DISTANCE = 1200;
-const MAX_FULL_RENDER_BOTS = 10;
-const BOT_SIMPLE_RENDER_DISTANCE = 1400;
+// Distante de randare cu buffer mare, ca botii sa nu mai apara/dispara brusc
+// cand sunt aproape de marginea camerei. Full = drona completa, Simple = punct/varianta lite.
+const BOT_RENDER_DISTANCE = 1550;
+const MAX_FULL_RENDER_BOTS = 16;
+const BOT_SIMPLE_RENDER_DISTANCE = 2200;
 
 const MAX_FULL_PROJECTILES = 18;
 const MAX_SIMPLE_PROJECTILES = 80;
@@ -201,23 +203,26 @@ function getSelectedUserSkin(user) {
 // 59 boti + 1 player = 60 participanti total, exact cerinta.
 // ---------------------------------------------------------------------------
 const BOT_COUNT = 59;
-const BOT_SPEED = PLAYER_SPEED;
-const BOT_VIEW_RANGE = 1900;
-const BOT_ATTACK_RANGE = 900;
-const BOT_FIRE_COOLDOWN = 1650;
-const BOT_LOW_HP = 30;
 
-// IMPORTANT: boti mult mai agresivi decat Play vs AI normal, conform cerintei
-// ("super inteligenti si agresivi"). Reducem cat farmeaza inainte sa atace
-// si cat de mult stoc de drone vor sa acumuleze inainte sa intre in lupta.
-const BOT_FARM_UNTIL_DRONES = 2;
-const BOT_SAFE_DISTANCE = 620;
-const BOT_ZONE_MEMORY_TIME = 14000;
-const BOT_ZONE_EDGE_BUFFER = 560;
+// Boti mai inteligenti, nu kamikaze:
+// - farmeaza mai mult inainte sa intre in duel;
+// - tin distanta mai mare;
+// - se retrag mai devreme cand au HP mic;
+// - ataca puternic doar cand au avantaj de drone/HP/core-uri.
+const BOT_SPEED = PLAYER_SPEED * 1.02;
+const BOT_VIEW_RANGE = 2300;
+const BOT_ATTACK_RANGE = 980;
+const BOT_FIRE_COOLDOWN = 1450;
+const BOT_LOW_HP = 45;
 
-const BOT_MIN_SPAWN_DISTANCE = 1250;
-const PLAYER_BOT_SPAWN_DISTANCE = 1450;
-const SPAWN_SAFE_ZONE_MARGIN = 1250;
+const BOT_FARM_UNTIL_DRONES = 3;
+const BOT_SAFE_DISTANCE = 760;
+const BOT_ZONE_MEMORY_TIME = 18000;
+const BOT_ZONE_EDGE_BUFFER = 720;
+
+const BOT_MIN_SPAWN_DISTANCE = 1350;
+const PLAYER_BOT_SPAWN_DISTANCE = 1700;
+const SPAWN_SAFE_ZONE_MARGIN = 1500;
 
 const MAP_MIN_SIZE = Math.min(WORLD_WIDTH, WORLD_HEIGHT);
 
@@ -1230,16 +1235,19 @@ function createBot(index, spawnPoint = null) {
     vy: 0,
     knockbackX: 0,
     knockbackY: 0,
-    desiredDroneStock: 3 + Math.floor(Math.random() * 2),
+    // Stoc dorit mai mare = botul intra in lupta mai pregatit.
+    desiredDroneStock: 4 + Math.floor(Math.random() * 2),
 
     totalCollected: 0,
     progress: 0,
     nextDroneAt: getNextDroneAt(0),
 
-    aiAggression: 0.92 + Math.random() * 0.5,
-    aiCourage: 1.05 + Math.random() * 0.45,
-    aiSkill: 0.92 + Math.random() * 0.35,
-    preferredRange: 520 + Math.random() * 170,
+    // AI mai tactic: mai putin impulsiv, mai curajos doar cand are avantaj,
+    // skill mai mare pentru miscari/pozitionare mai bune si range preferat mai mare.
+    aiAggression: 0.72 + Math.random() * 0.32,
+    aiCourage: 0.82 + Math.random() * 0.28,
+    aiSkill: 1.18 + Math.random() * 0.42,
+    preferredRange: 720 + Math.random() * 260,
 
     skin: BOT_SKINS[index % BOT_SKINS.length],
 
@@ -1579,6 +1587,10 @@ function BattleRoyale({ user, onExitToMenu }) {
   const perfProfileRef = useRef(getBattleRoyalePerfProfile());
   const aiBatchIndexRef = useRef(0);
   const collisionFrameSkipRef = useRef(0);
+
+  // Tine botii randati stabil cateva momente, ca sa nu clipeasca/dispara
+  // cand trec fix pe marginea distantei de randare sau cand se schimba top-ul celor mai apropiati.
+  const stableFullBotIdsRef = useRef([]);
 
   const [gameOver, setGameOver] = useState(false);
   const [deathExplosion, setDeathExplosion] = useState(null);
@@ -2274,10 +2286,10 @@ function BattleRoyale({ user, onExitToMenu }) {
   const mobileWorldScale = 1;
 
   const mobileViewDistance = isMobileLandscape ? 560 : VIEW_DISTANCE;
-  const mobileBotRenderDistance = isMobileLandscape ? 620 : BOT_RENDER_DISTANCE;
-  const mobileBotSimpleDistance = isMobileLandscape ? 860 : BOT_SIMPLE_RENDER_DISTANCE;
+  const mobileBotRenderDistance = isMobileLandscape ? 900 : BOT_RENDER_DISTANCE;
+  const mobileBotSimpleDistance = isMobileLandscape ? 1350 : BOT_SIMPLE_RENDER_DISTANCE;
   const mobileProjectileDistance = isMobileLandscape ? 920 : PROJECTILE_RENDER_DISTANCE;
-  const mobileFullBotLimit = isMobileLandscape ? 4 : MAX_FULL_RENDER_BOTS;
+  const mobileFullBotLimit = isMobileLandscape ? 6 : MAX_FULL_RENDER_BOTS;
   const mobileFullProjectileLimit = isMobileLandscape ? 7 : MAX_FULL_PROJECTILES;
   const mobileSimpleProjectileLimit = isMobileLandscape ? 28 : MAX_SIMPLE_PROJECTILES;
 
@@ -2354,34 +2366,53 @@ function BattleRoyale({ user, onExitToMenu }) {
   const visibleBots = useMemo(() => {
     return bots
       .filter((bot) => {
-        return (
-          bot.alive &&
-          Math.abs(bot.x - viewTarget.x) < mobileBotRenderDistance &&
-          Math.abs(bot.y - viewTarget.y) < mobileBotRenderDistance
-        );
+        if (!bot.alive) return false;
+
+        const distance = Math.hypot(bot.x - viewTarget.x, bot.y - viewTarget.y);
+
+        // Folosim distanta simpla circulara + distanta de simple render ca buffer.
+        // Inainte era filtru pe X/Y la limita mica, iar botul putea sa iasa din lista
+        // pentru 1 frame si parea ca dispare brusc.
+        return distance < mobileBotSimpleDistance;
       })
       .sort((a, b) => {
         const da = Math.hypot(a.x - viewTarget.x, a.y - viewTarget.y);
         const db = Math.hypot(b.x - viewTarget.x, b.y - viewTarget.y);
         return da - db;
       });
-  }, [bots, viewTarget.x, viewTarget.y, mobileBotRenderDistance]);
+  }, [bots, viewTarget.x, viewTarget.y, mobileBotSimpleDistance]);
 
   const fullRenderBots = useMemo(() => {
-    return visibleBots.slice(0, mobileFullBotLimit);
-  }, [visibleBots, mobileFullBotLimit]);
+    const botById = new Map(visibleBots.map((bot) => [bot.id, bot]));
+
+    // Pastreaza intai botii care erau deja randati full, daca sunt inca aproape.
+    // Asta elimina flicker-ul cand botii isi schimba ordinea in top-ul celor mai apropiati.
+    const kept = stableFullBotIdsRef.current
+      .map((id) => botById.get(id))
+      .filter((bot) => {
+        if (!bot?.alive) return false;
+        const distance = Math.hypot(bot.x - viewTarget.x, bot.y - viewTarget.y);
+        return distance < mobileBotSimpleDistance * 1.08;
+      });
+
+    const keptIds = new Set(kept.map((bot) => bot.id));
+
+    const fresh = visibleBots.filter((bot) => {
+      if (keptIds.has(bot.id)) return false;
+      const distance = Math.hypot(bot.x - viewTarget.x, bot.y - viewTarget.y);
+      return distance < mobileBotRenderDistance;
+    });
+
+    const result = [...kept, ...fresh].slice(0, mobileFullBotLimit);
+    stableFullBotIdsRef.current = result.map((bot) => bot.id);
+    return result;
+  }, [visibleBots, viewTarget.x, viewTarget.y, mobileBotRenderDistance, mobileBotSimpleDistance, mobileFullBotLimit]);
 
   const simpleRenderBots = useMemo(() => {
     const fullIds = new Set(fullRenderBots.map((bot) => bot.id));
 
-    return bots.filter((bot) => {
-      if (!bot.alive || fullIds.has(bot.id)) return false;
-
-      const distance = Math.hypot(bot.x - viewTarget.x, bot.y - viewTarget.y);
-
-      return distance < mobileBotSimpleDistance;
-    });
-  }, [bots, fullRenderBots, viewTarget.x, viewTarget.y, mobileBotSimpleDistance]);
+    return visibleBots.filter((bot) => !fullIds.has(bot.id));
+  }, [visibleBots, fullRenderBots]);
 
   const canFire = player.drones > 0 && player.alive && !gameOver;
 
