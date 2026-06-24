@@ -1,8 +1,13 @@
 /* =========================================================
-   ZONE PVP ARENA
-   Clona exacta de stiluri din NormalPvpArena.css, cu adaugiri
-   minime pentru zona vizuala (.battle-zone, deja in GameArena.css)
-   si pentru noul timer de zona + auto-exit pe ecranul de final.
+   ZONE PVP ARENA - OPTIMIZAT PENTRU FPS MOBIL
+   Replace complet pentru: ZonePvpArena.css
+
+   Ideea principala:
+   - zona verde NU mai trebuie animata prin width/height la fiecare frame;
+   - JSX-ul tine cercul la diametrul initial;
+   - ZonePvpArena.jsx modifica doar transform: scale(...);
+   - CSS-ul zonei ramane foarte ieftin: fara blur mare, fara gradient urias,
+     fara pseudo-elemente grele.
 ========================================================= */
 
 .zone-pvp-dom-arena {
@@ -19,15 +24,7 @@
   will-change: left, top, transform;
 }
 
-/* HUD de sus: PLAYERS ALIVE in loc de PLAYERS ONLINE, dar foloseste
-   exact aceleasi clase si pozitii ca Normal PvP - nu redefinim nimic
-   din .pvp-alive-counter / .alive-counter / .hp-panel / .collect-counter /
-   .real-leaderboard / .fps-counter / .pvp-mobile-* / .pvp-exit-btn,
-   toate sunt deja stilizate corect prin GameArena.css + NormalPvpArena.css
-   importate de componenta. */
-
-/* Timer de zona: card mic, sub PLAYERS ALIVE, cu acelasi limbaj vizual ca
-   restul HUD-ului (fundal translucid, chenar cyan, text alb/verde). */
+/* Timer de zona: card mic, sub PLAYERS ALIVE. */
 .zone-pvp-zone-timer {
   position: fixed;
   top: 64px;
@@ -62,7 +59,6 @@
   }
 }
 
-/* ===== PORTRET MOBIL: zone-timer sub HUD-ul principal, fara suprapunere ===== */
 @media (hover: none) and (orientation: portrait), (max-width: 760px) and (orientation: portrait) {
   .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .zone-pvp-zone-timer {
     top: max(96px, calc(env(safe-area-inset-top) + 90px));
@@ -79,42 +75,61 @@
 }
 
 /* =========================================================
-   ZONE PVP BATTLE ZONE - VERSIUNE OPTIMIZATA PENTRU MOBIL
-   IMPORTANT: clasa .battle-zone (din GameArena.css, partajata cu
-   Normal PvP si Battle Royale) are un box-shadow cu blur de 60px
-   plus un ::before cu radial-gradient extins la +1000px si un
-   ::after cu border de 45px semi-transparent. La Normal PvP asta
-   nu costa nimic pentru ca safeZoneRadius e practic infinit (zona
-   nu e niciodata vizibila integral pe ecran). La Battle Royale cu
-   boti, zona se strange lent (10+ minute, schimbari rare).
-   La Zone PvP insa, zona e mica, vizibila INTEGRAL pe ecran tot
-   timpul si se schimba constant (la fiecare actualizare de state),
-   declansand layout+paint pe acel shadow/gradient mare la fiecare
-   frame - exact cauza lag-ului mare raportat pe telefon.
-   Solutie: cerc mult mai ieftin, fara gradient extins si fara
-   blur mare, dar care pastreaza aceeasi identitate vizuala (verde
-   toxic, linie vizibila a zonei).
+   CERCUL ZONEI - VARIANTA IEFTINA PENTRU TELEFON
 ========================================================= */
 .zone-pvp-battle-zone {
   position: absolute;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) scale(1);
+  transform-origin: center center;
   border-radius: 50%;
   pointer-events: none;
   z-index: 3;
-  border: 4px solid #7dff7d;
-  /* Blur mic (12px in loc de 60px) - mult mai ieftin de randat la
-     fiecare schimbare de dimensiune pe GPU-uri mobile slabe. */
-  box-shadow: 0 0 12px rgba(125, 255, 125, 0.55);
+
+  border: 3px solid #7dff7d;
+  box-shadow: 0 0 8px rgba(125, 255, 125, 0.45);
+
+  will-change: transform;
+  contain: layout paint style;
+  backface-visibility: hidden;
 }
 
-/* Fara ::before/::after cu gradient extins sau border gros - acelea
-   erau principalul cost. O singura dunga subtire translucida in loc
-   de "ceata" toxica extinsa, suficient pentru identitatea vizuala. */
+.zone-pvp-battle-zone::before,
 .zone-pvp-battle-zone::after {
-  content: "";
-  position: absolute;
-  inset: -8px;
-  border-radius: 50%;
+  display: none !important;
+  content: none !important;
+}
+
+/* Pe mobil taiem si mai mult glow-ul. */
+@media (hover: none), (max-width: 760px) {
+  .zone-pvp-battle-zone {
+    border-width: 2px;
+    box-shadow: 0 0 5px rgba(125, 255, 125, 0.38);
+  }
+}
+
+/* =========================================================
+   PIXI LAYER - siguranta pentru canvas
+========================================================= */
+.pixi-arena-layer {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 50;
   pointer-events: none;
-  border: 8px solid rgba(80, 255, 120, 0.14);
+  overflow: hidden;
+  contain: strict;
+}
+
+.pixi-arena-layer canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: auto;
+}
+
+.pixi-arena-renderer,
+.pixi-arena-renderer canvas {
+  image-rendering: auto !important;
+  image-rendering: smooth !important;
 }

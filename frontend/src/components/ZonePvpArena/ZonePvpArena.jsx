@@ -476,7 +476,7 @@ function FlyingAttackDrone({ projectile }) {
   );
 }
 
-function ZonePvpArena({ user, onExitToMenu }) {
+function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const socketRef = useRef(null);
   const keysRef = useRef({});
   const mouseRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
@@ -1519,6 +1519,7 @@ function ZonePvpArena({ user, onExitToMenu }) {
         otherPlayerSize={112}
         otherPlayerQuality={2}
         liveDataRef={pixiLiveRef}
+        forceLowQuality={graphicsQuality === "low"}
       />
 
       {you && !isDead && (

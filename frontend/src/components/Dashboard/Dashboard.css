@@ -2572,4 +2572,67 @@
   letter-spacing: 0.4px;
 }
 
+/* =========================================================
+   GLOBAL GRAPHICS QUALITY SWITCH (Normal/Low)
+   Adauga acest bloc la finalul Dashboard.css existent.
+   Buton in header, langa Hangar/Shop, stilat ca toggle vizibil -
+   gri/cyan cand e Normal, galben/portocaliu de avertisment cand
+   e Low (sugereaza ca grafica e redusa pentru performanta).
+========================================================= */
+
+.quality-switch-btn {
+  border: 1px solid rgba(0, 234, 255, 0.32);
+  color: #9bdcff;
+  background: rgba(2, 8, 18, 0.78);
+}
+
+.quality-switch-btn.is-low {
+  border-color: rgba(255, 196, 61, 0.55) !important;
+  color: #ffd66b !important;
+  background: rgba(255, 196, 61, 0.08) !important;
+}
+
+.quality-switch-btn.is-low:hover {
+  border-color: rgba(255, 196, 61, 0.85) !important;
+  background: rgba(255, 196, 61, 0.14) !important;
+}
+
+/* =========================================================
+   GLOBAL GRAPHICS QUALITY SWITCH (Normal/Low)
+   Adauga acest bloc la finalul Dashboard.css existent.
+   Buton in header, langa Hangar/Shop, stilat ca toggle vizibil -
+   gri/cyan cand e Normal, galben/portocaliu de avertisment cand
+   e Low (sugereaza ca grafica e redusa pentru performanta).
+
+   IMPORTANT: o regula veche din acest fisier
+   (".hangar-top-actions button:nth-child(3):not(.logout-btn)")
+   ascunde automat al 3-lea buton din header (ramasita de la un
+   buton vechi de Loadout). Butonul de Quality e exact al 3-lea
+   copil (Hangar, Shop, Quality, Logout), deci se prindea in acel
+   selector si nu aparea deloc. Regula de mai jos il forteaza
+   vizibil explicit, cu specificitate egala + !important, plasata
+   DUPA regula veche - in CSS, la specificitate egala, ultima
+   regula scrisa castiga.
+========================================================= */
+
+.hangar-top-actions button.quality-switch-btn:nth-child(3) {
+  display: inline-flex !important;
+}
+
+.quality-switch-btn {
+  border: 1px solid rgba(0, 234, 255, 0.32);
+  color: #9bdcff;
+  background: rgba(2, 8, 18, 0.78);
+}
+
+.quality-switch-btn.is-low {
+  border-color: rgba(255, 196, 61, 0.55) !important;
+  color: #ffd66b !important;
+  background: rgba(255, 196, 61, 0.08) !important;
+}
+
+.quality-switch-btn.is-low:hover {
+  border-color: rgba(255, 196, 61, 0.85) !important;
+  background: rgba(255, 196, 61, 0.14) !important;
+}
 

@@ -7,8 +7,8 @@ import "./NormalPvpArena.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
-const WORLD_WIDTH_FALLBACK = 16000;
-const WORLD_HEIGHT_FALLBACK = 16000;
+const WORLD_WIDTH_FALLBACK = 20000;
+const WORLD_HEIGHT_FALLBACK = 20000;
 const ZONE_RADIUS_FALLBACK = 9400;
 
 // GameArena movement: 2.8 px / 60fps frame ~= 168 px/sec.
@@ -69,8 +69,7 @@ const LOCAL_COLLECT_HIDE_TTL = 2200;
 // pe langa filtrarea deja facuta de server (acolo se trimit doar cei mai
 // apropiati ~60 jucatori per pachet). Le ridicam de la 80 la 99 ca niciun
 // jucator vizibil sa nu "lipseasca" cand camera e plina.
-// Renderer-ul are LOD global in PixiArenaRenderer, deci putem pastra 99 jucatori vizibili.
-const MAX_VISIBLE_REMOTE_PLAYERS = 25;
+const MAX_VISIBLE_REMOTE_PLAYERS = 99;
 
 const CORE_TYPES = [
   { type: "nano", name: "Nano Core", shortName: "Nano", color: "#00eaff", effect: "+10 MAX HP" },
@@ -507,7 +506,7 @@ function FlyingAttackDrone({ projectile }) {
   );
 }
 
-function NormalPvpArena({ user, onExitToMenu }) {
+function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const socketRef = useRef(null);
   const keysRef = useRef({});
   const mouseRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
@@ -1107,7 +1106,7 @@ worldRef.current = {
         viewportHeight: viewport.height,
         coreColorMap: coreColorMapRef.current,
         otherPlayerSize: 112,
-        otherPlayerQuality: 2, // cap maxim; PixiArenaRenderer aplica LOD pe distanta automat
+        otherPlayerQuality: 2,
       };
 
       // IMPORTANT: inainte se construiau [...remoteMap.values()] si [...projectileMap.values()]
@@ -1570,6 +1569,7 @@ worldRef.current = {
         otherPlayerSize={112}
         otherPlayerQuality={2}
         liveDataRef={pixiLiveRef}
+        forceLowQuality={graphicsQuality === "low"}
       />
 
       {you && !isDead && (

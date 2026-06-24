@@ -1085,6 +1085,13 @@ function PixiArenaRenderer({
   otherPlayerSize = STANDARD_DRONE_SIZE,
   otherPlayerQuality = 1,
   liveDataRef = null,
+  // Switch global de calitate grafica (Normal/Low), setat din Dashboard si
+  // pasat catre toate modurile de joc. Citit O SINGURA DATA la montarea
+  // componentei (in setup() de mai jos), NU dintr-un ref citit in ticker -
+  // schimbarea switch-ului in timpul unui meci nu se aplica live, ci la
+  // urmatoarea intrare in arena (remount). Simplu si predictibil, fara
+  // bucle de redetectie sau resize-uri repetate la runtime.
+  forceLowQuality = false,
 }) {
   const hostRef = useRef(null);
   const appRef = useRef(null);
@@ -1139,11 +1146,21 @@ function PixiArenaRenderer({
 
       const device = getDeviceProfile();
       performanceRef.current.device = device;
+      performanceRef.current.forceLowQuality = forceLowQuality;
 
-      // Pe device foarte slab incepem direct cu calitate dinamica redusa, in loc
-      // sa asteptam ca FPS-ul sa scada o data (reactiv) inainte sa reducem - asta
-      // elimina exact primele secunde de "sacaiala" pana se auto-ajusteaza.
-      if (device.isVeryLowEndMobile) {
+      // Switch manual de calitate (Low): fortam exact comportamentul deja
+      // existent pentru device foarte slab (isVeryLowEndMobile), indiferent
+      // de ce a detectat profilul automat al device-ului. Rezolutie minima
+      // (1, fara supersampling), fara antialias, calitate dinamica 0 de la
+      // pornire.
+      const effectiveResolution = forceLowQuality ? 1 : device.resolution;
+      const effectiveAntialias = forceLowQuality ? false : !device.isVeryLowEndMobile;
+
+      // Pe device foarte slab SAU cu Low Quality activat manual, incepem direct
+      // cu calitate dinamica redusa, in loc sa asteptam ca FPS-ul sa scada o
+      // data (reactiv) inainte sa reducem - asta elimina exact primele secunde
+      // de "sacaiala" pana se auto-ajusteaza.
+      if (device.isVeryLowEndMobile || forceLowQuality) {
         performanceRef.current.dynamicQuality = 0;
       }
 
@@ -1152,11 +1169,11 @@ function PixiArenaRenderer({
         height: hostRef.current.clientHeight || window.innerHeight,
         backgroundAlpha: 0,
         // Antialias (MSAA) e relativ scump pe GPU-uri vechi cu multe draw call-uri
-        // suprapuse (fiecare drona = ~15-20 forme). Pe device foarte slab il
-        // dezactivam complet; marginile sunt usor mai aspre, dar framerate-ul
-        // devine mult mai stabil.
-        antialias: !device.isVeryLowEndMobile,
-        resolution: Math.max(1, device.resolution),
+        // suprapuse (fiecare drona = ~15-20 forme). Pe device foarte slab SAU cu
+        // Low Quality activat manual il dezactivam complet; marginile sunt usor
+        // mai aspre, dar framerate-ul devine mult mai stabil.
+        antialias: effectiveAntialias,
+        resolution: Math.max(1, effectiveResolution),
         autoDensity: true,
         powerPreference: "high-performance",
         preference: "webgl",
@@ -1186,8 +1203,10 @@ function PixiArenaRenderer({
         const nextDevice = getDeviceProfile();
         performanceRef.current.device = nextDevice;
 
-        if (app.renderer?.resolution !== nextDevice.resolution) {
-          app.renderer.resolution = Math.max(1, nextDevice.resolution);
+        const targetResolution = forceLowQuality ? 1 : nextDevice.resolution;
+
+        if (app.renderer?.resolution !== targetResolution) {
+          app.renderer.resolution = Math.max(1, targetResolution);
         }
 
         app.renderer.resize(width, height);
@@ -1271,20 +1290,28 @@ function PixiArenaRenderer({
           }
         }
 
-        const budget = getQualityBudget(device, time < perf.lowQualityUntil ? Math.min(perf.dynamicQuality, 1) : perf.dynamicQuality);
+        const isForcedLow = Boolean(perf.forceLowQuality);
+
+        const budget = isForcedLow
+          ? getQualityBudget(
+              { ...device, isVeryLowEndMobile: true, isLowEndMobile: true, isWeakDesktop: false, tier: MOBILE_PERF_PROFILES.LOW },
+              0
+            )
+          : getQualityBudget(device, time < perf.lowQualityUntil ? Math.min(perf.dynamicQuality, 1) : perf.dynamicQuality);
         const lowQuality = budget.quality <= 0;
-        const disableGlow = Boolean(budget.disableGlow);
+        const disableGlow = Boolean(budget.disableGlow) || isForcedLow;
         // IMPORTANT: pe device foarte slab (isVeryLowEndMobile), pe mobil
-        // slab generic (isLowEndMobile), SAU pe laptop/PC slab (isWeakDesktop,
-        // RAM <= 8GB SAU <= 4 nuclee), dezactivam complet animatia de rotire
-        // a celor 4 rotoare ale fiecarei drone SI orbita mini-dronelor in
-        // jurul dronei mari. Cand un bot/jucator stranga orbi, mini-drona
-        // aferenta apare direct pe pozitia ei (fixa), fara sa se mai
-        // roteasca. Asta elimina calculul de Math.cos/Math.sin per rotor/
-        // mini-drona la fiecare frame, cel mai vizibil cu pana la 69 de boti
-        // simultan pe ecran.
+        // slab generic (isLowEndMobile), pe laptop/PC slab (isWeakDesktop,
+        // RAM <= 8GB SAU <= 4 nuclee), SAU cu switch-ul manual de Low Quality
+        // activat din Dashboard, dezactivam complet animatia de rotire a
+        // celor 4 rotoare ale fiecarei drone SI orbita mini-dronelor in jurul
+        // dronei mari. Cand un bot/jucator stranga orbi, mini-drona aferenta
+        // apare direct pe pozitia ei (fixa), fara sa se mai roteasca. Asta
+        // elimina calculul de Math.cos/Math.sin per rotor/mini-drona la
+        // fiecare frame, cel mai vizibil cu pana la 69 de boti simultan pe
+        // ecran.
         const disableAnimations = Boolean(
-          device.isVeryLowEndMobile || device.isLowEndMobile || device.isWeakDesktop
+          device.isVeryLowEndMobile || device.isLowEndMobile || device.isWeakDesktop || isForcedLow
         );
         const viewBounds = getWorldViewBounds(cx, cy, worldScale, vw, vh, budget.margin);
 

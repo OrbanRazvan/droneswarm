@@ -366,6 +366,29 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
   const [selectedDrone, setSelectedDrone] = useState(() => getInitialSelectedDrone(user));
   const [openedPackId, setOpenedPackId] = useState(null);
 
+  // Switch global de calitate grafica (Normal/Low), aplicat la TOATE
+  // modurile de joc (Normal PvP, Battle Royale, Zone PvP, Battle Royale
+  // Online), nu doar la unul. Persistat in localStorage ca preferinta sa
+  // ramana intre sesiuni. Pasat ca prop simplu fiecarei arene - schimbarea
+  // switch-ului in timpul unui meci se aplica de la urmatoarea intrare in
+  // arena (PixiArenaRenderer il citeste o singura data la montare), nu live.
+  const [graphicsQuality, setGraphicsQuality] = useState(() => {
+    try {
+      const stored = localStorage.getItem("drone-swarm-graphics-quality");
+      return stored === "low" ? "low" : "normal";
+    } catch {
+      return "normal";
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("drone-swarm-graphics-quality", graphicsQuality);
+    } catch {
+      // localStorage poate fi blocat in unele browsere - nu blocam jocul.
+    }
+  }, [graphicsQuality]);
+
   useEffect(() => {
     persistSelectedDrone(user, selectedDrone);
   }, [selectedDrone, user]);
@@ -408,15 +431,15 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
     return (
       <div className="dashboard">
         {selectedMode === "normal-pvp" ? (
-          <NormalPvpArena user={arenaUser} onExitToMenu={handleExitToHangar} />
+          <NormalPvpArena user={arenaUser} onExitToMenu={handleExitToHangar} graphicsQuality={graphicsQuality} />
         ) : selectedMode === "battle-royale" ? (
-          <BattleRoyale user={arenaUser} onExitToMenu={handleExitToHangar} />
+          <BattleRoyale user={arenaUser} onExitToMenu={handleExitToHangar} graphicsQuality={graphicsQuality} />
         ) : selectedMode === "zone-pvp" ? (
-          <ZonePvpArena user={arenaUser} onExitToMenu={handleExitToHangar} />
+          <ZonePvpArena user={arenaUser} onExitToMenu={handleExitToHangar} graphicsQuality={graphicsQuality} />
         ) : selectedMode === "battle-royale-pvp" ? (
-          <BattleRoyaleOnline user={arenaUser} onExitToMenu={handleExitToHangar} />
+          <BattleRoyaleOnline user={arenaUser} onExitToMenu={handleExitToHangar} graphicsQuality={graphicsQuality} />
         ) : (
-          <PvpArena user={arenaUser} onExitToMenu={handleExitToHangar} />
+          <PvpArena user={arenaUser} onExitToMenu={handleExitToHangar} graphicsQuality={graphicsQuality} />
         )}
       </div>
     );
@@ -437,6 +460,14 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
         <nav className="hangar-top-actions">
           <button onClick={() => setActiveTab("hangar")}>Hangar</button>
           <button onClick={() => setActiveTab("shop")}>Shop</button>
+          <button
+            type="button"
+            className={`quality-switch-btn ${graphicsQuality === "low" ? "is-low" : ""}`}
+            onClick={() => setGraphicsQuality((current) => (current === "low" ? "normal" : "low"))}
+            title="Normal Quality: grafica completa. Low Quality: animatii oprite, rezolutie minima, performanta maxima pe telefoane slabe."
+          >
+            {graphicsQuality === "low" ? "Low Quality" : "Normal Quality"}
+          </button>
           <button
             className="logout-btn"
             onClick={() => {

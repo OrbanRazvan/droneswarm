@@ -8,17 +8,17 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 const COLORS = ["cyan", "green", "orange", "purple", "red", "pink"];
 
-const WORLD_WIDTH = 12000;
-const WORLD_HEIGHT = 12000;
-const VIEW_PADDING = 120;
+const WORLD_WIDTH = 20000;
+const WORLD_HEIGHT = 20000;
+const VIEW_PADDING = 160;
 
-const MAX_ORBS = 200;
-const MIN_ORBS = 130;
+const MAX_ORBS = 1000;
+const MIN_ORBS = 160;
 const ORBS_PER_ALIVE_PLAYER = 5;
 const ORB_ZONE_DENSITY = 0.0000036;
 const VIEW_DISTANCE = 1400;
 
-const BOT_RENDER_DISTANCE = 1200;
+const BOT_RENDER_DISTANCE = 900;
 const MAX_FULL_RENDER_BOTS = 10;
 const BOT_SIMPLE_RENDER_DISTANCE = 1400;
 
@@ -31,25 +31,25 @@ const PROJECTILE_RENDER_DISTANCE = 1650;
 // in toate modurile de joc.
 const PLAYER_SPEED = 2.5;
 
-const PROJECTILE_SPEED = 4.4;
+const PROJECTILE_SPEED = 4.2;
 const PROJECTILE_MAX_DISTANCE = 1500;
 const FIRE_COOLDOWN = 3000;
 
-const MAX_DRONES = 5;
+const MAX_DRONES = 4;
 const START_HP = 100;
 const MAX_HP = 150;
 const SHIELD_COST = 20;
 const SHIELD_DURATION = 3000;
-const HIT_DAMAGE = 15;
-const DRONE_HIT_DAMAGE = 10;
+const HIT_DAMAGE = 50;
+const DRONE_HIT_DAMAGE = 25;
 
 const BODY_COLLISION_DISTANCE = 145;
 const BODY_COLLISION_COOLDOWN = 650;
 
-const BODY_COLLISION_BOTH_HAVE_DRONES_DAMAGE = 5;
-const BODY_COLLISION_BOTH_NO_DRONES_DAMAGE = 15;
+const BODY_COLLISION_BOTH_HAVE_DRONES_DAMAGE = 10;
+const BODY_COLLISION_BOTH_NO_DRONES_DAMAGE = 35;
 const BODY_COLLISION_WITH_DRONES_DAMAGE = 5;
-const BODY_COLLISION_WITHOUT_DRONES_DAMAGE = 15;
+const BODY_COLLISION_WITHOUT_DRONES_DAMAGE = 45;
 
 const BODY_COLLISION_LIGHT_PUSH = 6;
 const BODY_COLLISION_MEDIUM_PUSH = 9;
@@ -77,7 +77,7 @@ const VAMPIRE_HEAL_RATIO = 0.25;
 const START_ENERGY = 100;
 const ENERGY_DRAIN_INTERVAL = 600;
 const ENERGY_DRAIN_AMOUNT = 1;
-const MAX_ENERGY_CELLS = 50;
+const MAX_ENERGY_CELLS = 100;
 const MIN_ENERGY_CELLS = 18;
 const ENERGY_PER_ALIVE_PLAYER = 1;
 const ENERGY_ZONE_DENSITY = 0.00000055;
@@ -200,7 +200,7 @@ function getSelectedUserSkin(user) {
 // ---------------------------------------------------------------------------
 // 59 boti + 1 player = 60 participanti total, exact cerinta.
 // ---------------------------------------------------------------------------
-const BOT_COUNT = 49;
+const BOT_COUNT = 69;
 const BOT_SPEED = PLAYER_SPEED;
 const BOT_VIEW_RANGE = 1900;
 const BOT_ATTACK_RANGE = 900;
@@ -222,11 +222,11 @@ const SPAWN_SAFE_ZONE_MARGIN = 1250;
 const MAP_MIN_SIZE = Math.min(WORLD_WIDTH, WORLD_HEIGHT);
 
 const ZONE_START_RADIUS = MAP_MIN_SIZE * 0.47;
-const ZONE_END_RADIUS = 1;
+const ZONE_END_RADIUS = MAP_MIN_SIZE * 0.07;
 
 // IMPORTANT: cerinta explicita - fumul verde vine catre centru timp de
 // 10 minute (600000ms), nu 5 minute ca in Play vs AI standard.
-const ZONE_SHRINK_DURATION = 300000;
+const ZONE_SHRINK_DURATION = 600000;
 
 // IMPORTANT: cerinta explicita - 10 HP pe secunda in afara zonei.
 const ZONE_DAMAGE = 10;
@@ -249,7 +249,7 @@ function getCoreMeta(type) {
 }
 
 function getNextDroneAt(currentDrones = 0) {
-  const requirements = [5, 15, 25, 35, 50];
+  const requirements = [5, 15, 25, 35];
   const index = Math.max(0, Math.min(currentDrones, requirements.length - 1));
   return requirements[index];
 }
@@ -782,37 +782,23 @@ function createEnergyCells(count = MAX_ENERGY_CELLS, zoneRadius = ZONE_START_RAD
 }
 
 function getDynamicOrbTarget(alivePlayersCount, zoneRadius) {
-  if (zoneRadius < 800) {
-    return 0;
-  }
+  const safeRadius = Math.max(ZONE_END_RADIUS, zoneRadius || ZONE_START_RADIUS);
+  const zoneAreaBasedTarget = Math.floor(Math.PI * safeRadius * safeRadius * ORB_ZONE_DENSITY);
+  const playerBasedTarget = Math.max(0, alivePlayersCount || 0) * ORBS_PER_ALIVE_PLAYER;
 
-  const zoneAreaBasedTarget = Math.floor(
-    Math.PI * zoneRadius * zoneRadius * ORB_ZONE_DENSITY
-  );
-
-  const playerBasedTarget =
-    alivePlayersCount * ORBS_PER_ALIVE_PLAYER;
-
-  return Math.min(
-    MAX_ORBS,
-    zoneAreaBasedTarget + playerBasedTarget
+  return Math.max(
+    MIN_ORBS,
+    Math.min(MAX_ORBS, zoneAreaBasedTarget + playerBasedTarget)
   );
 }
 
 function getDynamicEnergyTarget(alivePlayersCount, zoneRadius) {
-  if (zoneRadius < 500) return 0;
-  if (zoneRadius < 800) return 3;
-  if (zoneRadius < 1200) return 8;
-
-  const zoneAreaBasedTarget = Math.floor(
-    Math.PI * zoneRadius * zoneRadius * ENERGY_ZONE_DENSITY
-  );
-
-  const playerBasedTarget =
-    Math.max(0, alivePlayersCount || 0) * ENERGY_PER_ALIVE_PLAYER;
+  const safeRadius = Math.max(ZONE_END_RADIUS, zoneRadius || ZONE_START_RADIUS);
+  const zoneAreaBasedTarget = Math.floor(Math.PI * safeRadius * safeRadius * ENERGY_ZONE_DENSITY);
+  const playerBasedTarget = Math.max(0, alivePlayersCount || 0) * ENERGY_PER_ALIVE_PLAYER;
 
   return Math.max(
-    10,
+    MIN_ENERGY_CELLS,
     Math.min(MAX_ENERGY_CELLS, zoneAreaBasedTarget + playerBasedTarget)
   );
 }
@@ -1388,91 +1374,109 @@ function shouldBotFarm(bot) {
 
 // IMPORTANT: gasirea inamicului si decizia de atac sunt relaxate fata de
 // Play vs AI standard - botii ataca mult mai des, nu doar cu avantaj clar.
-function findBotEnemy(bot, player, bots) {
-  const enemies = [];
+// IMPORTANT: scanare intr-o singura trecere, fara array intermediar
+// "enemies" (varianta veche aloca un obiect nou per entitate - cu 70 boti
+// si ~23 boti activi/ciclu AI pe device slab, asta inseamna ~1600 alocari
+// de obiect per ciclu doar pentru aceasta functie). Evaluam direct player-ul
+// si fiecare bot, fara sa construim o lista intermediara.
+function evaluateBotEnemyCandidate(bot, candidateX, candidateY, candidateHp, candidateMaxHp, candidateDrones, candidateMass, candidateTotalCollected, candidateKills, candidateType, candidateId, currentBest) {
+  const distance = Math.hypot(candidateX - bot.x, candidateY - bot.y);
+  if (distance > BOT_VIEW_RANGE) return currentBest;
+  if (bot.drones <= 0) return currentBest;
 
-  if (player?.alive) {
-    enemies.push({
-      id: "player",
-      x: player.x,
-      y: player.y,
-      hp: player.hp,
-      maxHp: player.maxHp,
-      drones: player.drones,
-      mass: player.mass,
-      totalCollected: player.totalCollected || 0,
-      kills: player.kills || 0,
-      type: "player",
-    });
+  const botPower = getBotPower(bot) * (bot.aiCourage || 1);
+  const enemyPower =
+    (candidateHp || 0) +
+    (candidateDrones || 0) * 35 +
+    (candidateTotalCollected || 0) * 2 +
+    (candidateKills || 0) * 18;
+
+  const enemyWeak = candidateHp <= 55 || candidateDrones <= 1;
+  const hasDroneAdvantage = bot.drones >= candidateDrones + 1;
+  const canWin =
+    bot.drones >= 1 &&
+    (hasDroneAdvantage || enemyWeak || botPower >= enemyPower * 0.95);
+
+  if (bot.drones < BOT_FARM_UNTIL_DRONES && !enemyWeak && !hasDroneAdvantage && distance > 420) {
+    return currentBest;
   }
 
-  bots.forEach((otherBot) => {
-    if (!otherBot.alive || otherBot.id === bot.id) return;
+  let score = distance;
 
-    enemies.push({
-      id: otherBot.id,
-      x: otherBot.x,
-      y: otherBot.y,
-      hp: otherBot.hp,
-      maxHp: otherBot.maxHp,
-      drones: otherBot.drones,
-      mass: otherBot.mass,
-      totalCollected: otherBot.totalCollected || 0,
-      kills: otherBot.kills || 0,
-      type: "bot",
-    });
-  });
+  if (candidateType === "player") score -= 90;
+  if (enemyWeak) score -= 300;
+  if (hasDroneAdvantage) score -= 360;
+  if (canWin) score -= 220;
+  if (candidateHp < bot.hp) score -= 100;
 
-  let bestEnemy = null;
-  let bestScore = Infinity;
+  if (!canWin) score += 320;
+  if (bot.hp <= BOT_LOW_HP && enemyPower > botPower * 1.15) score += 560;
+  if (distance < 260 && enemyPower > botPower * 1.15) score += 300;
 
-  enemies.forEach((enemy) => {
-    const distance = Math.hypot(enemy.x - bot.x, enemy.y - bot.y);
-    if (distance > BOT_VIEW_RANGE) return;
+  if (currentBest && score >= currentBest.score) return currentBest;
 
-    const botPower = getBotPower(bot) * (bot.aiCourage || 1);
-    const enemyPower = getBotPower(enemy);
+  return {
+    id: candidateId,
+    x: candidateX,
+    y: candidateY,
+    hp: candidateHp,
+    maxHp: candidateMaxHp,
+    drones: candidateDrones,
+    mass: candidateMass,
+    totalCollected: candidateTotalCollected || 0,
+    kills: candidateKills || 0,
+    type: candidateType,
+    distance,
+    botPower,
+    enemyPower,
+    enemyWeak,
+    hasDroneAdvantage,
+    canWin,
+    score,
+  };
+}
 
-    const enemyWeak = enemy.hp <= 55 || enemy.drones <= 1;
-    const hasDroneAdvantage = bot.drones >= enemy.drones + 1;
-    const hasEnoughAmmo = bot.drones >= 1;
-    const canWin =
-      hasEnoughAmmo &&
-      (hasDroneAdvantage || enemyWeak || botPower >= enemyPower * 0.95);
+function findBotEnemy(bot, player, bots) {
+  let best = null;
 
-    if (bot.drones <= 0) return;
+  if (player?.alive) {
+    best = evaluateBotEnemyCandidate(
+      bot,
+      player.x,
+      player.y,
+      player.hp,
+      player.maxHp,
+      player.drones,
+      player.mass,
+      player.totalCollected,
+      player.kills,
+      "player",
+      "player",
+      best
+    );
+  }
 
-    if (bot.drones < BOT_FARM_UNTIL_DRONES && !enemyWeak && !hasDroneAdvantage && distance > 420) {
-      return;
-    }
+  for (let i = 0; i < bots.length; i += 1) {
+    const otherBot = bots[i];
+    if (!otherBot.alive || otherBot.id === bot.id) continue;
 
-    let score = distance;
+    best = evaluateBotEnemyCandidate(
+      bot,
+      otherBot.x,
+      otherBot.y,
+      otherBot.hp,
+      otherBot.maxHp,
+      otherBot.drones,
+      otherBot.mass,
+      otherBot.totalCollected,
+      otherBot.kills,
+      "bot",
+      otherBot.id,
+      best
+    );
+  }
 
-    if (enemy.type === "player") score -= 90;
-    if (enemyWeak) score -= 300;
-    if (hasDroneAdvantage) score -= 360;
-    if (canWin) score -= 220;
-    if (enemy.hp < bot.hp) score -= 100;
-
-    if (!canWin) score += 320;
-    if (bot.hp <= BOT_LOW_HP && enemyPower > botPower * 1.15) score += 560;
-    if (distance < 260 && enemyPower > botPower * 1.15) score += 300;
-
-    if (score < bestScore) {
-      bestScore = score;
-      bestEnemy = {
-        ...enemy,
-        distance,
-        botPower,
-        enemyPower,
-        enemyWeak,
-        hasDroneAdvantage,
-        canWin,
-      };
-    }
-  });
-
-  return bestEnemy;
+  return best;
 }
 
 // ---------------------------------------------------------------------------
@@ -1536,7 +1540,7 @@ function getBattleRoyalePerfProfile() {
   return { isLowEndDevice, aiBatches };
 }
 
-function BattleRoyale({ user, onExitToMenu }) {
+function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const keys = useRef({});
   const mouse = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
@@ -1561,9 +1565,33 @@ function BattleRoyale({ user, onExitToMenu }) {
   const lastPlayerHitRef = useRef(0);
   const botCollisionCooldownRef = useRef({});
   const lastBotLogicUpdateRef = useRef(0);
+
+  // ---------------------------------------------------------------------
+  // IMPORTANT: pixiLiveRef e sursa unica de adevar pentru randare, citita
+  // direct de PixiArenaRenderer prin ticker-ul lui Pixi (60fps), complet
+  // INDEPENDENT de ciclul de render React. Acelasi pattern validat deja in
+  // NormalPvpArena.jsx/GameArena.jsx. Game loop-ul scrie aici la fiecare
+  // frame, dar asta NU declanseaza niciun re-render React - e doar o
+  // mutatie de obiect citita de un alt sistem de randare (Pixi/WebGL).
+  // React setState (setBots/setOrbs/setEnergyCells/setCores/setProjectiles)
+  // se elimina din game loop si se inlocuiesc cu actualizari de pixiLiveRef.
+  // HUD-ul (hp/energy/kills/leaderboard) ramane React, dar throttled la
+  // hudSyncIntervalMs, nu la fiecare frame.
+  // ---------------------------------------------------------------------
+  const pixiLiveRef = useRef(null);
+  const lastHudSyncRef = useRef(0);
+  const HUD_SYNC_INTERVAL_MS = 66;
+
+  // CORE_TYPES e constanta statica la nivel de modul - construim maparea
+  // type->color o singura data, in loc sa o reconstruim la fiecare frame
+  // din game loop (60x/secunda) cu .reduce().
+  const coreColorMapForPixiRef = useRef(
+    CORE_TYPES.reduce((acc, core) => {
+      acc[core.type] = core.color;
+      return acc;
+    }, {})
+  );
   const lastFrameTimeRef = useRef(performance.now());
-  const lastRenderSyncRef = useRef(0);
-  const lastProjectilesRenderSyncRef = useRef(0);
   const shieldTimeoutRef = useRef(null);
   const matchSavedRef = useRef(false);
   const matchStartedAtRef = useRef(Date.now());
@@ -2620,7 +2648,6 @@ function BattleRoyale({ user, onExitToMenu }) {
 
     if (wasHit) {
       botsRef.current = updatedBots;
-      setBots(updatedBots);
     }
 
     if (wasHit && vampireOwnerType) {
@@ -2832,7 +2859,6 @@ function BattleRoyale({ user, onExitToMenu }) {
       });
 
       botsRef.current = updatedBots;
-      setBots(updatedBots);
 
       createExplosion((p.x + bot.x) / 2, (p.y + bot.y) / 2, "cyan");
 
@@ -2853,7 +2879,6 @@ function BattleRoyale({ user, onExitToMenu }) {
       }
 
       playerRef.current = nextPlayer;
-      setPlayer(nextPlayer);
 
       if (botDied) {
         addKillToPlayer();
@@ -2973,7 +2998,6 @@ function BattleRoyale({ user, onExitToMenu }) {
 
     if (changed) {
       botsRef.current = updatedBots;
-      setBots(updatedBots);
 
       killsToAdd.forEach((botId) => {
         addKillToBot(botId);
@@ -3336,9 +3360,6 @@ function BattleRoyale({ user, onExitToMenu }) {
     };
 
     projectilesRef.current = [...projectilesRef.current, projectile];
-    setProjectiles([...projectilesRef.current]);
-
-    const nextDrones = Math.max(0, p.drones - 1);
 
     const nextPlayer = {
       ...p,
@@ -3382,7 +3403,6 @@ function BattleRoyale({ user, onExitToMenu }) {
     };
 
     projectilesRef.current = [...projectilesRef.current, projectile];
-    setProjectiles([...projectilesRef.current]);
 
     return {
       ...bot,
@@ -3538,7 +3558,6 @@ function BattleRoyale({ user, onExitToMenu }) {
 
         if (botEnergyChanged) {
           botsRef.current = drainedBots;
-          setBots(drainedBots);
         }
       }
 
@@ -3626,7 +3645,6 @@ function BattleRoyale({ user, onExitToMenu }) {
         orbsRef.current.length !== remainingOrbs.length
       ) {
         orbsRef.current = remainingOrbs;
-        setOrbs([...remainingOrbs]);
       }
 
       const nowBotLogic = performance.now();
@@ -4222,7 +4240,6 @@ function BattleRoyale({ user, onExitToMenu }) {
           }
 
           energyCellsRef.current = energyAfterBotCollection;
-          setEnergyCells([...energyAfterBotCollection]);
         }
 
         let botsCollectedCores = false;
@@ -4262,7 +4279,6 @@ function BattleRoyale({ user, onExitToMenu }) {
 
         if (botsCollectedCores) {
           coresRef.current = coresAfterBotCollection;
-          setCores([...coresAfterBotCollection]);
 
           if (coresAfterBotCollection.length === 0) {
             scheduleNextCoreWave();
@@ -4270,10 +4286,11 @@ function BattleRoyale({ user, onExitToMenu }) {
         }
 
         botsRef.current = botsAfterCoreCollection;
-        setBots(botsAfterCoreCollection);
 
         if (botsCollectedOrbs || botsCollectedExtraOrbs) {
-          setOrbs([...orbsRef.current]);
+          // orbsRef.current deja actualizat mai sus (orbsAfterBotSweep) -
+          // nu mai e nevoie de alt setOrbs aici, pixiLiveRef citeste din
+          // orbsRef.current la finalul frame-ului curent.
         }
       }
 
@@ -4325,7 +4342,6 @@ function BattleRoyale({ user, onExitToMenu }) {
         energyCellsRef.current.length !== remainingEnergyCells.length
       ) {
         energyCellsRef.current = remainingEnergyCells;
-        setEnergyCells([...remainingEnergyCells]);
 
         if (collectedEnergy) {
           createDamageText(nextX, nextY - 100, "ENERGY FULL", "heal");
@@ -4366,7 +4382,6 @@ function BattleRoyale({ user, onExitToMenu }) {
         remainingCores.length !== coresRef.current.length
       ) {
         coresRef.current = remainingCores;
-        setCores([...remainingCores]);
 
         if (coresCollectedByPlayer && remainingCores.length === 0) {
           scheduleNextCoreWave();
@@ -4413,11 +4428,6 @@ function BattleRoyale({ user, onExitToMenu }) {
 
       playerRef.current = nextPlayer;
 
-      if (now - lastRenderSyncRef.current >= 16) {
-        lastRenderSyncRef.current = now;
-        setPlayer(nextPlayer);
-      }
-
       const updatedProjectiles = [];
 
       for (const projectile of projectilesRef.current) {
@@ -4441,11 +4451,6 @@ function BattleRoyale({ user, onExitToMenu }) {
 
       projectilesRef.current = updatedProjectiles;
 
-      if (now - lastProjectilesRenderSyncRef.current >= 16) {
-        lastProjectilesRenderSyncRef.current = now;
-        setProjectiles([...updatedProjectiles]);
-      }
-
       checkBotsTouchPlayer();
 
       // Pe device slab, coliziunile bot-cu-bot (O(n^2) = ~2300 perechi la 69
@@ -4464,6 +4469,135 @@ function BattleRoyale({ user, onExitToMenu }) {
       }
 
       checkBattleRoyaleWinner();
+
+      // ---------------------------------------------------------------
+      // IMPORTANT: construim pixiLiveRef.current AICI, la fiecare frame rAF
+      // (60fps), citind direct din refs (playerRef/botsRef/orbsRef/etc),
+      // NU din React state (player/bots/orbs). Asta e identic ca logica
+      // din useMemo-urile visibleOrbs/fullRenderBots/etc de mai sus in
+      // fisier, dar fara sa treaca prin React deloc - PixiArenaRenderer
+      // citeste asta direct prin liveDataRef, complet decuplat de ciclul
+      // de render React. Camera (viewTarget) se calculeaza tot din refs,
+      // ca sa nu inghete intre sincronizarile HUD throttled.
+      // ---------------------------------------------------------------
+      const liveAliveBots = botsRef.current.filter((bot) => bot.alive);
+
+      const liveSpectatorTarget = !p.alive
+        ? liveAliveBots.find((bot) => bot.id === spectatorTargetId) ||
+          liveAliveBots[0] ||
+          p
+        : p;
+
+      const liveViewTarget = liveSpectatorTarget || p;
+      const liveStatusUnit = p.alive ? p : liveViewTarget;
+
+      const liveCameraX = viewportSize.width / 2 - liveViewTarget.x * mobileWorldScale;
+      const liveCameraY = viewportSize.height / 2 - liveViewTarget.y * mobileWorldScale;
+
+      const liveVisibleOrbs = orbsRef.current
+        .filter((orb) => {
+          return (
+            Math.abs(orb.x - liveViewTarget.x) < mobileViewDistance &&
+            Math.abs(orb.y - liveViewTarget.y) < mobileViewDistance
+          );
+        })
+        .slice(0, isMobileLandscape ? 72 : 180);
+
+      const liveVisibleEnergyCells = energyCellsRef.current
+        .filter((cell) => {
+          return (
+            Math.abs(cell.x - liveViewTarget.x) < mobileViewDistance &&
+            Math.abs(cell.y - liveViewTarget.y) < mobileViewDistance
+          );
+        })
+        .slice(0, isMobileLandscape ? 36 : 110);
+
+      const liveVisibleCores = coresRef.current.filter((core) => {
+        return (
+          Math.abs(core.x - liveViewTarget.x) < mobileViewDistance &&
+          Math.abs(core.y - liveViewTarget.y) < mobileViewDistance
+        );
+      });
+
+      const liveVisibleProjectiles = projectilesRef.current
+        .filter((projectile) => {
+          return (
+            Math.abs(projectile.x - liveViewTarget.x) < mobileProjectileDistance &&
+            Math.abs(projectile.y - liveViewTarget.y) < mobileProjectileDistance
+          );
+        })
+        .sort((a, b) => {
+          const da = Math.hypot(a.x - liveViewTarget.x, a.y - liveViewTarget.y);
+          const db = Math.hypot(b.x - liveViewTarget.x, b.y - liveViewTarget.y);
+          return da - db;
+        });
+
+      const liveFullProjectiles = liveVisibleProjectiles.slice(0, mobileFullProjectileLimit);
+      const liveSimpleProjectiles = liveVisibleProjectiles.slice(
+        mobileFullProjectileLimit,
+        mobileFullProjectileLimit + mobileSimpleProjectileLimit
+      );
+
+      const liveVisibleBots = botsRef.current
+        .filter((bot) => {
+          return (
+            bot.alive &&
+            Math.abs(bot.x - liveViewTarget.x) < mobileBotRenderDistance &&
+            Math.abs(bot.y - liveViewTarget.y) < mobileBotRenderDistance
+          );
+        })
+        .sort((a, b) => {
+          const da = Math.hypot(a.x - liveViewTarget.x, a.y - liveViewTarget.y);
+          const db = Math.hypot(b.x - liveViewTarget.x, b.y - liveViewTarget.y);
+          return da - db;
+        });
+
+      const liveFullRenderBots = liveVisibleBots.slice(0, mobileFullBotLimit);
+      const liveFullRenderBotIds = new Set(liveFullRenderBots.map((bot) => bot.id));
+
+      const liveSimpleRenderBots = botsRef.current.filter((bot) => {
+        if (!bot.alive || liveFullRenderBotIds.has(bot.id)) return false;
+        const distance = Math.hypot(bot.x - liveViewTarget.x, bot.y - liveViewTarget.y);
+        return distance < mobileBotSimpleDistance;
+      });
+
+      pixiLiveRef.current = {
+        player: liveStatusUnit?.alive !== false ? liveStatusUnit : null,
+        bots: liveFullRenderBots,
+        simpleBots: liveSimpleRenderBots,
+        orbs: liveVisibleOrbs,
+        energyCells: liveVisibleEnergyCells,
+        cores: liveVisibleCores,
+        projectiles: liveFullProjectiles,
+        simpleProjectiles: liveSimpleProjectiles,
+        cameraX: liveCameraX,
+        cameraY: liveCameraY,
+        scale: mobileWorldScale,
+        viewportWidth: viewportSize.width,
+        viewportHeight: viewportSize.height,
+        coreColorMap: coreColorMapForPixiRef.current,
+        otherPlayerSize: 104,
+        otherPlayerQuality: 2,
+      };
+
+      // ---------------------------------------------------------------
+      // HUD throttling: React setState (player/bots/orbs/etc, folosite
+      // pentru HP bar, energy bar, leaderboard, ORB COUNT) se actualizeaza
+      // doar la HUD_SYNC_INTERVAL_MS (66ms = ~15fps pentru UI), NU la
+      // fiecare frame rAF (60fps). Identic cu pattern-ul din
+      // NormalPvpArena.jsx. Pixi (drona, boti, orbs vizuale) ramane la
+      // 60fps prin pixiLiveRef de mai sus, complet independent de asta.
+      // ---------------------------------------------------------------
+      if (now - lastHudSyncRef.current >= HUD_SYNC_INTERVAL_MS) {
+        lastHudSyncRef.current = now;
+
+        setPlayer(p);
+        setBots(botsRef.current);
+        setOrbs(orbsRef.current);
+        setEnergyCells(energyCellsRef.current);
+        setCores(coresRef.current);
+        setProjectiles(projectilesRef.current);
+      }
 
       animation = requestAnimationFrame(loop);
     };
@@ -4917,6 +5051,8 @@ function BattleRoyale({ user, onExitToMenu }) {
         coreTypes={CORE_TYPES}
         otherPlayerSize={104}
         otherPlayerQuality={2}
+        liveDataRef={pixiLiveRef}
+        forceLowQuality={graphicsQuality === "low"}
       />
 
       {showMobileControls && (
@@ -4974,7 +5110,7 @@ function BattleRoyale({ user, onExitToMenu }) {
       </div>
 
       <button className="battle-royale-exit-btn" onClick={onExitToMenu}>
-        EXIT TO MENU!
+        EXIT TO MENU
       </button>
     </div>
   );
