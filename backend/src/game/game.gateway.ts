@@ -7,15 +7,15 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 
-const WORLD_WIDTH = 10000;
-const WORLD_HEIGHT = 10000;
+const WORLD_WIDTH = 11000;
+const WORLD_HEIGHT = 11000;
 const ROOM_MAX_PLAYERS = 50;
 const ROOM_MIN_PLAYERS = 2;
 
 const NORMAL_ROOM_MAX_PLAYERS = 50;
 const NORMAL_ROOM_MIN_PLAYERS = 1;
 const NORMAL_ROOM_ZONE_RADIUS = 100000;
-const NORMAL_VISIBLE_PLAYERS_LIMIT = 60;
+const NORMAL_VISIBLE_PLAYERS_LIMIT = 50;
 
 const BR_ONLINE_ROOM_MAX_PLAYERS = 50;
 const BR_ONLINE_ROOM_MIN_PLAYERS = 2;
@@ -23,7 +23,7 @@ const BR_ONLINE_START_COUNTDOWN_MS = 5000;
 const BR_ONLINE_ZONE_SHRINK_DURATION = 600000;
 const BR_ONLINE_ZONE_DAMAGE = 10;
 const BR_ONLINE_ZONE_DAMAGE_INTERVAL = 1000;
-const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 60;
+const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 50;
 
 // ---------------------------------------------------------------------------
 // ZONE PVP - mod nou, clona exacta a Normal PvP (normal-pvp:*) la care se
@@ -51,21 +51,21 @@ const ZONE_SHRINK_DURATION = 300000;
 const PLAYER_SPEED = 2.15;
 const PLAYER_RADIUS = 80;
 const VIEW_DISTANCE = 2400;
-const MAX_ORBS = 1200;
-const MIN_ORBS = 220;
+const MAX_ORBS = 500;
+const MIN_ORBS = 80;
 const VISIBLE_ORB_LIMIT = 260;
 const ORB_COLLECT_DISTANCE = 180;
 const COLORS = ['cyan', 'green', 'orange', 'purple', 'red', 'pink'];
 const START_HP = 100;
 const MAX_HP = 150;
-const START_ENERGY = 100;
+const START_ENERGY = 50;
 const ENERGY_DRAIN_INTERVAL = 1000;
 const ENERGY_DRAIN_AMOUNT = 1;
 const ZONE_DAMAGE = 10;
 const ZONE_DAMAGE_INTERVAL = 1000;
-const MAX_ENERGY_CELLS = 90;
+const MAX_ENERGY_CELLS = 50;
 const MIN_ENERGY_CELLS = 18;
-const VISIBLE_ENERGY_LIMIT = 55;
+const VISIBLE_ENERGY_LIMIT = 45;
 const ENERGY_CELL_COLLECT_DISTANCE = 160;
 const DRONE_REQUIREMENTS = [5, 15, 25, 35];
 const MAX_DRONES = 4;

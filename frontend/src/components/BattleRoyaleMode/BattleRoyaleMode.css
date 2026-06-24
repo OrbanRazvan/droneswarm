@@ -1,13 +1,22 @@
 /* =========================================================
-   BattleRoyale.css
-   Foloseste baza vizuala din GameArena.css (deja importat in
-   BattleRoyale.jsx alaturi de acest fisier), pentru ca HUD-ul
-   (hp-panel, collect-counter, real-leaderboard, core-notice,
-   mobile-controls, minimap etc) sa fie identic ca stil cu
-   Play vs AI. Aici adaugam doar elementele noi, specifice
-   acestui mod: cronometrul zonei si butonul de exit dedicat.
+   BattleRoyaleMode.css
+   HUD fix + ZONE CLOSES IN + Mobile clean minimap
+
+   Replace complet pentru fisierul CSS al modului BattleRoyaleMode.
+   Pastreaza baza vizuala din GameArena.css, dar aseaza clar:
+   - desktop: PLAYERS ALIVE sus, ZONE CLOSES IN sub el, Core notice sub timer;
+   - mobile landscape: HUD compact fara suprapuneri;
+   - mobile portrait: HP + ORB COUNT sus, PLAYERS ALIVE sub ele, apoi timer/core;
+   - minimap fara ceata/fog peste ea.
 ========================================================= */
 
+.battle-royale-arena {
+  background: #06101d;
+}
+
+/* =========================================================
+   PIXI LAYER
+========================================================= */
 .pixi-arena-layer {
   position: fixed;
   inset: 0;
@@ -32,34 +41,166 @@
   image-rendering: smooth !important;
 }
 
-/* Cronometrul "ZONE CLOSES IN: MM:SS" - sub contorul de jucatori vii,
-   pe centru sus, in acelasi stil vizual ca restul HUD-ului. */
+/* =========================================================
+   TOP CENTER HUD - DESKTOP
+========================================================= */
+.battle-royale-arena .battle-royale-alive-counter,
+.battle-royale-arena .alive-counter.battle-royale-alive-counter {
+  position: fixed !important;
+  top: 14px !important;
+  left: 50% !important;
+  right: auto !important;
+  bottom: auto !important;
+  transform: translateX(-50%) !important;
+  z-index: 9998 !important;
+
+  min-width: 370px;
+  max-width: min(520px, calc(100vw - 760px));
+  width: fit-content;
+
+  padding: 10px 36px 11px !important;
+  border-radius: 14px !important;
+  border: 1px solid rgba(0, 234, 255, 0.42) !important;
+  background: rgba(2, 8, 18, 0.88) !important;
+  box-shadow:
+    0 0 24px rgba(0, 234, 255, 0.12),
+    inset 0 0 18px rgba(0, 234, 255, 0.04) !important;
+
+  color: #00eaff !important;
+  font-size: 26px !important;
+  line-height: 1 !important;
+  font-weight: 1000 !important;
+  letter-spacing: 1px !important;
+  text-align: center !important;
+  text-shadow: 0 0 14px rgba(0, 234, 255, 0.55) !important;
+  white-space: nowrap !important;
+  pointer-events: none;
+}
+
 .battle-royale-zone-timer {
   position: fixed;
-  top: 64px;
+  top: 72px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 9997;
 
-  padding: 7px 18px;
-  border-radius: 12px;
+  padding: 6px 18px 7px;
+  border-radius: 0 0 12px 12px;
 
-  background: rgba(2, 8, 18, 0.82);
-  border: 1px solid rgba(125, 255, 125, 0.4);
-  box-shadow: 0 0 18px rgba(125, 255, 125, 0.18);
+  background: rgba(2, 8, 18, 0.86);
+  border: 1px solid rgba(103, 255, 177, 0.4);
+  border-top: 0;
+  box-shadow: 0 0 18px rgba(103, 255, 177, 0.14);
 
-  color: #7dff7d;
+  color: #67ffb1;
   font-size: 13px;
   font-weight: 900;
   letter-spacing: 1px;
-  text-shadow: 0 0 10px rgba(125, 255, 125, 0.55);
+  text-shadow: 0 0 12px rgba(103, 255, 177, 0.5);
   text-align: center;
+  white-space: nowrap;
   pointer-events: none;
 }
 
-/* Buton EXIT TO MENU dedicat acestui mod, ca sa nu se confunde stilistic
-   cu .pvp-exit-btn (PvP) - aceeasi pozitionare/comportament ca in
-   GameArena.jsx, doar clasa e separata pentru claritate. */
+.battle-royale-arena .core-notice.battle-royale-core-notice,
+.battle-royale-arena .core-notice.core-notice-top.battle-royale-core-notice {
+  position: fixed !important;
+  top: 118px !important;
+  left: 50% !important;
+  right: auto !important;
+  bottom: auto !important;
+  transform: translateX(-50%) !important;
+  z-index: 9996 !important;
+
+  width: min(420px, calc(100vw - 720px));
+  min-width: 320px;
+  max-width: 420px;
+
+  margin: 0 !important;
+  padding: 13px 22px 15px !important;
+  border-radius: 15px !important;
+  text-align: center !important;
+  pointer-events: none;
+
+  background: rgba(2, 8, 18, 0.9) !important;
+  border: 1px solid rgba(255, 64, 64, 0.58) !important;
+  box-shadow:
+    0 0 22px rgba(255, 64, 64, 0.12),
+    inset 0 0 18px rgba(255, 64, 64, 0.04) !important;
+  animation: coreNoticePop 0.45s ease-out;
+}
+
+.battle-royale-arena .core-notice.battle-royale-core-notice strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 16px;
+  line-height: 1.1;
+}
+
+.battle-royale-arena .core-notice.battle-royale-core-notice b {
+  display: block;
+  margin: 2px 0 5px;
+  font-size: 42px;
+  line-height: 0.95;
+}
+
+.battle-royale-arena .core-notice.battle-royale-core-notice span {
+  display: block;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+/* =========================================================
+   MINIMAP - fara ceata/fog
+========================================================= */
+.battle-royale-arena .mobile-minimap-frame,
+.battle-royale-arena .minimap,
+.battle-royale-arena .mini-map,
+.battle-royale-arena .world-map,
+.battle-royale-arena [class*="minimap"],
+.battle-royale-arena [class*="mini-map"],
+.battle-royale-arena [class*="world-map"] {
+  filter: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  opacity: 1 !important;
+}
+
+.battle-royale-arena .mobile-minimap-frame::before,
+.battle-royale-arena .mobile-minimap-frame::after,
+.battle-royale-arena .minimap::before,
+.battle-royale-arena .minimap::after,
+.battle-royale-arena .mini-map::before,
+.battle-royale-arena .mini-map::after,
+.battle-royale-arena .world-map::before,
+.battle-royale-arena .world-map::after,
+.battle-royale-arena [class*="minimap"]::before,
+.battle-royale-arena [class*="minimap"]::after,
+.battle-royale-arena [class*="mini-map"]::before,
+.battle-royale-arena [class*="mini-map"]::after {
+  display: none !important;
+  content: none !important;
+  opacity: 0 !important;
+  filter: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.battle-royale-arena .mobile-minimap-frame canvas,
+.battle-royale-arena .mobile-minimap-frame svg,
+.battle-royale-arena .minimap canvas,
+.battle-royale-arena .minimap svg,
+.battle-royale-arena .mini-map canvas,
+.battle-royale-arena .mini-map svg,
+.battle-royale-arena .world-map canvas,
+.battle-royale-arena .world-map svg {
+  filter: none !important;
+  opacity: 1 !important;
+}
+
+/* =========================================================
+   EXIT BUTTON
+========================================================= */
 .battle-royale-exit-btn {
   position: fixed;
   z-index: 9990;
@@ -78,14 +219,86 @@
   background: rgba(0, 234, 255, 0.12);
 }
 
-/* Pe mobil landscape, cronometrul de zona se aliniaza compact, sub restul
-   HUD-ului deja restrans de regulile din GameArena.css. */
-@media (hover: none) and (orientation: landscape), (max-height: 520px) and (orientation: landscape) {
+/* =========================================================
+   LAPTOP / DESKTOP INGUST
+========================================================= */
+@media (max-width: 1320px) {
+  .battle-royale-arena .battle-royale-alive-counter,
+  .battle-royale-arena .alive-counter.battle-royale-alive-counter {
+    min-width: 300px;
+    max-width: 390px;
+    padding: 9px 24px 10px !important;
+    font-size: 21px !important;
+  }
+
   .battle-royale-zone-timer {
-    top: 48px;
-    padding: 5px 12px;
-    font-size: 10px;
-    border-radius: 9px;
+    top: 66px;
+    font-size: 12px;
+    padding: 5px 15px 6px;
+  }
+
+  .battle-royale-arena .core-notice.battle-royale-core-notice,
+  .battle-royale-arena .core-notice.core-notice-top.battle-royale-core-notice {
+    top: 108px !important;
+    width: 350px;
+    min-width: 300px;
+    padding: 11px 18px 13px !important;
+  }
+}
+
+/* =========================================================
+   MOBILE LANDSCAPE
+========================================================= */
+@media (hover: none) and (orientation: landscape), (max-height: 560px) and (orientation: landscape) {
+  .battle-royale-arena .battle-royale-alive-counter,
+  .battle-royale-arena .alive-counter.battle-royale-alive-counter {
+    top: 4px !important;
+    min-width: 145px;
+    max-width: 210px;
+    padding: 4px 10px 5px !important;
+    border-radius: 8px !important;
+    font-size: 10px !important;
+    line-height: 1 !important;
+    letter-spacing: 0.4px !important;
+    box-shadow: 0 0 10px rgba(0, 234, 255, 0.12) !important;
+  }
+
+  .battle-royale-zone-timer {
+    top: 28px;
+    padding: 3px 9px 4px;
+    border-radius: 0 0 8px 8px;
+    font-size: 8.5px;
+    letter-spacing: 0.35px;
+    max-width: 190px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .battle-royale-arena .core-notice.battle-royale-core-notice,
+  .battle-royale-arena .core-notice.core-notice-top.battle-royale-core-notice {
+    top: 58px !important;
+    width: 185px;
+    min-width: 0;
+    max-width: 185px;
+    padding: 5px 9px 6px !important;
+    border-radius: 8px !important;
+  }
+
+  .battle-royale-arena .core-notice.battle-royale-core-notice strong {
+    margin-bottom: 2px;
+    font-size: 8.5px;
+    line-height: 1;
+  }
+
+  .battle-royale-arena .core-notice.battle-royale-core-notice b {
+    margin: 0 0 2px;
+    font-size: 20px;
+    line-height: 0.95;
+  }
+
+  .battle-royale-arena .core-notice.battle-royale-core-notice span {
+    font-size: 7px;
+    line-height: 1.05;
   }
 
   .battle-royale-exit-btn {
@@ -95,12 +308,187 @@
   }
 }
 
-@media (max-width: 760px) {
+/* Telefoane foarte mici in landscape */
+@media (hover: none) and (orientation: landscape) and (max-height: 390px) {
+  .battle-royale-arena .battle-royale-alive-counter,
+  .battle-royale-arena .alive-counter.battle-royale-alive-counter {
+    top: 3px !important;
+    max-width: 170px;
+    padding: 3px 8px 4px !important;
+    font-size: 8.5px !important;
+  }
+
   .battle-royale-zone-timer {
-    top: 58px;
-    font-size: 11px;
-    padding: 6px 14px;
+    top: 24px;
+    font-size: 7.5px;
+    padding: 2px 7px 3px;
+    max-width: 160px;
+  }
+
+  .battle-royale-arena .core-notice.battle-royale-core-notice,
+  .battle-royale-arena .core-notice.core-notice-top.battle-royale-core-notice {
+    top: 49px !important;
+    width: 160px;
+    max-width: 160px;
+    padding: 4px 7px 5px !important;
+  }
+
+  .battle-royale-arena .core-notice.battle-royale-core-notice strong {
+    font-size: 7px;
+  }
+
+  .battle-royale-arena .core-notice.battle-royale-core-notice b {
+    font-size: 17px;
+  }
+
+  .battle-royale-arena .core-notice.battle-royale-core-notice span {
+    font-size: 6px;
   }
 }
 
+/* =========================================================
+   MOBILE PORTRAIT / TABLET
+   Aici se rezolva suprapunerea ORB COUNT cu PLAYERS ALIVE.
+========================================================= */
+@media (max-width: 760px) and (orientation: portrait) {
+  .battle-royale-arena .hp-panel {
+    top: max(10px, calc(env(safe-area-inset-top) + 8px)) !important;
+    left: 8px !important;
+    right: auto !important;
+    width: calc((100vw - 28px) / 2) !important;
+    max-width: 124px !important;
+    min-width: 0 !important;
+    padding: 7px 8px 8px !important;
+    border-radius: 9px !important;
+  }
+
+  .battle-royale-arena .hp-panel span,
+  .battle-royale-arena .collect-counter span,
+  .battle-royale-arena .active-cores-panel b {
+    font-size: 8px !important;
+    letter-spacing: 0.7px !important;
+  }
+
+  .battle-royale-arena .hp-panel strong {
+    font-size: 14px !important;
+    line-height: 1.05 !important;
+  }
+
+  .battle-royale-arena .hp-panel .energy-row {
+    margin-top: 7px !important;
+  }
+
+  .battle-royale-arena .hp-bar,
+  .battle-royale-arena .energy-bar {
+    height: 5px !important;
+  }
+
+  .battle-royale-arena .battle-royale-alive-counter,
+  .battle-royale-arena .alive-counter.battle-royale-alive-counter {
+    top: max(118px, calc(env(safe-area-inset-top) + 112px)) !important;
+    left: 50% !important;
+    min-width: 220px !important;
+    max-width: calc(100vw - 24px) !important;
+    padding: 7px 16px 8px !important;
+    font-size: 15px !important;
+    border-radius: 11px !important;
+  }
+
+  .battle-royale-zone-timer {
+    top: max(160px, calc(env(safe-area-inset-top) + 154px));
+    font-size: 10px;
+    padding: 5px 12px 6px;
+    max-width: calc(100vw - 36px);
+  }
+
+  .battle-royale-arena .core-notice.battle-royale-core-notice,
+  .battle-royale-arena .core-notice.core-notice-top.battle-royale-core-notice {
+    top: max(204px, calc(env(safe-area-inset-top) + 198px)) !important;
+    width: min(300px, calc(100vw - 40px));
+    min-width: 0;
+    padding: 8px 13px 9px !important;
+  }
+
+  .battle-royale-arena .core-notice.battle-royale-core-notice strong {
+    font-size: 12px !important;
+    margin-bottom: 3px !important;
+  }
+
+  .battle-royale-arena .core-notice.battle-royale-core-notice b {
+    font-size: 28px !important;
+    margin: 0 0 3px !important;
+  }
+
+  .battle-royale-arena .core-notice.battle-royale-core-notice span {
+    font-size: 10px !important;
+  }
+
+  .battle-royale-arena .real-leaderboard {
+    top: max(10px, calc(env(safe-area-inset-top) + 8px)) !important;
+    right: 7px !important;
+    left: auto !important;
+    width: min(124px, calc(100vw - 282px)) !important;
+    min-width: 92px !important;
+    max-height: 122px !important;
+    padding: 7px 8px !important;
+    border-radius: 9px !important;
+    overflow: hidden !important;
+  }
+
+  .battle-royale-arena .real-leaderboard h3 {
+    font-size: 8px !important;
+    margin-bottom: 4px !important;
+  }
+
+  .battle-royale-arena .real-leaderboard-row {
+    font-size: 7px !important;
+    line-height: 1.25 !important;
+    gap: 4px !important;
+  }
+
+  .battle-royale-arena .mobile-minimap-frame {
+    right: 12px !important;
+    bottom: max(86px, calc(env(safe-area-inset-bottom) + 82px)) !important;
+    opacity: 1 !important;
+    filter: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: rgba(2, 8, 18, 0.64) !important;
+    box-shadow: 0 0 16px rgba(103, 255, 177, 0.12) !important;
+  }
+}
+
+/* Telefoane foarte inguste: urcam si mai clar layout-ul pe coloane. */
+@media (max-width: 430px) and (orientation: portrait) {
+  .battle-royale-arena .hp-panel,
+  .battle-royale-arena .collect-counter {
+    max-width: 108px !important;
+  }
+
+  .battle-royale-arena .collect-counter {
+    left: 116px !important;
+  }
+
+  .battle-royale-arena .battle-royale-alive-counter,
+  .battle-royale-arena .alive-counter.battle-royale-alive-counter {
+    top: max(112px, calc(env(safe-area-inset-top) + 106px)) !important;
+    min-width: 200px !important;
+    font-size: 14px !important;
+  }
+
+  .battle-royale-zone-timer {
+    top: max(151px, calc(env(safe-area-inset-top) + 145px));
+    font-size: 9px;
+  }
+
+  .battle-royale-arena .core-notice.battle-royale-core-notice,
+  .battle-royale-arena .core-notice.core-notice-top.battle-royale-core-notice {
+    top: max(190px, calc(env(safe-area-inset-top) + 184px)) !important;
+    width: min(278px, calc(100vw - 34px));
+  }
+
+  .battle-royale-arena .real-leaderboard {
+    display: none !important;
+  }
+}
 

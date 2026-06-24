@@ -7,8 +7,8 @@ import "./ZonePvpArena.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
-const WORLD_WIDTH_FALLBACK = 10000;
-const WORLD_HEIGHT_FALLBACK = 10000;
+const WORLD_WIDTH_FALLBACK = 13000;
+const WORLD_HEIGHT_FALLBACK = 13000;
 const ZONE_RADIUS_FALLBACK = 4700;
 
 // GameArena movement: 2.8 px / 60fps frame ~= 168 px/sec.

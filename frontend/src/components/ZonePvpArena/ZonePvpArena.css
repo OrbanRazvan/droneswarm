@@ -6,7 +6,8 @@
    - cercul verde si fumul verde NU se redimensioneaza prin width/height;
    - ZonePvpArena.jsx modifica doar transform: scale(...);
    - fumul este low-poly, static, fara blur mare si fara animatii infinite;
-   - damage-ul de zona ramane pe server: 10 HP/secunda in afara cercului.
+   - damage-ul de zona ramane pe server: 10 HP/secunda in afara cercului;
+   - HUD-ul de sus este asezat fara suprapuneri pe desktop si mobile.
 ========================================================= */
 
 .zone-pvp-dom-arena {
@@ -23,25 +24,74 @@
   will-change: left, top, transform;
 }
 
-/* Timer de zona: card mic, sub PLAYERS ALIVE. */
+/* =========================================================
+   HUD TOP - fara suprapuneri
+========================================================= */
+
+.zone-pvp-dom-arena .alive-counter,
+.zone-pvp-dom-arena .pvp-alive-counter,
+.zone-pvp-dom-arena .normal-pvp-top-hud {
+  top: 14px !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  width: min(480px, calc(100vw - 760px)) !important;
+  min-width: 360px !important;
+  max-width: 480px !important;
+  padding: 10px 22px 11px !important;
+  border-radius: 16px !important;
+  z-index: 9996 !important;
+}
+
+.zone-pvp-dom-arena .alive-counter strong,
+.zone-pvp-dom-arena .pvp-alive-counter strong,
+.zone-pvp-dom-arena .normal-pvp-top-hud strong {
+  display: block !important;
+  line-height: 1.05 !important;
+  font-size: clamp(20px, 1.65vw, 34px) !important;
+  white-space: nowrap !important;
+}
+
+.zone-pvp-dom-arena .alive-counter span,
+.zone-pvp-dom-arena .pvp-alive-counter span,
+.zone-pvp-dom-arena .normal-pvp-top-hud span {
+  display: block !important;
+  margin-top: 5px !important;
+  line-height: 1.1 !important;
+  font-size: 13px !important;
+  white-space: nowrap !important;
+}
+
+/* Timer de zona: sub PLAYERS ALIVE, fara sa intre in el. */
 .zone-pvp-zone-timer {
   position: fixed;
-  top: 64px;
+  top: 92px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 69;
-  padding: 7px 18px 8px;
+  z-index: 9995;
+  padding: 6px 18px 7px;
+  min-width: 242px;
   border-radius: 0 0 12px 12px;
   border: 1px solid rgba(103, 255, 177, 0.4);
   border-top: 0;
-  background: rgba(2, 8, 18, 0.86);
+  background: rgba(2, 8, 18, 0.88);
   box-shadow: 0 0 18px rgba(103, 255, 177, 0.14);
   color: #67ffb1;
   font-size: 13px;
   font-weight: 900;
+  line-height: 1;
   letter-spacing: 1px;
+  text-align: center;
   text-shadow: 0 0 12px rgba(103, 255, 177, 0.5);
   pointer-events: none;
+}
+
+/* Core incoming: mai jos decat timerul, ca sa nu se suprapuna. */
+.zone-pvp-dom-arena .core-notice,
+.zone-pvp-dom-arena .normal-pvp-core-drop-notice {
+  top: 132px !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  z-index: 9994 !important;
 }
 
 .zone-pvp-finished-auto-exit {
@@ -50,26 +100,152 @@
   font-size: 12px !important;
 }
 
-@media (hover: none) and (orientation: landscape), (max-height: 520px) and (orientation: landscape) {
+/* Desktop ingust / laptop: pastram centrul curat si evitam panourile laterale. */
+@media (max-width: 1180px) and (hover: hover) {
+  .zone-pvp-dom-arena .alive-counter,
+  .zone-pvp-dom-arena .pvp-alive-counter,
+  .zone-pvp-dom-arena .normal-pvp-top-hud {
+    width: 360px !important;
+    min-width: 360px !important;
+    padding: 9px 18px 10px !important;
+  }
+
+  .zone-pvp-dom-arena .alive-counter strong,
+  .zone-pvp-dom-arena .pvp-alive-counter strong,
+  .zone-pvp-dom-arena .normal-pvp-top-hud strong {
+    font-size: 24px !important;
+  }
+
   .zone-pvp-zone-timer {
-    top: 42px;
-    font-size: 11px;
-    padding: 5px 12px 6px;
+    top: 84px;
+    font-size: 12px;
+    padding: 6px 14px 7px;
+    min-width: 220px;
+  }
+
+  .zone-pvp-dom-arena .core-notice,
+  .zone-pvp-dom-arena .normal-pvp-core-drop-notice {
+    top: 122px !important;
   }
 }
 
+/* Mobile landscape: toate cardurile de sus devin compacte si pe verticala. */
+@media (hover: none) and (orientation: landscape), (max-height: 520px) and (orientation: landscape) {
+  .zone-pvp-dom-arena .alive-counter,
+  .zone-pvp-dom-arena .pvp-alive-counter,
+  .zone-pvp-dom-arena .normal-pvp-top-hud {
+    top: 4px !important;
+    width: 158px !important;
+    min-width: 158px !important;
+    max-width: 158px !important;
+    padding: 5px 9px 6px !important;
+    border-radius: 8px !important;
+  }
+
+  .zone-pvp-dom-arena .alive-counter strong,
+  .zone-pvp-dom-arena .pvp-alive-counter strong,
+  .zone-pvp-dom-arena .normal-pvp-top-hud strong {
+    font-size: 10px !important;
+    line-height: 1 !important;
+    letter-spacing: 0.7px !important;
+  }
+
+  .zone-pvp-dom-arena .alive-counter span,
+  .zone-pvp-dom-arena .pvp-alive-counter span,
+  .zone-pvp-dom-arena .normal-pvp-top-hud span {
+    margin-top: 2px !important;
+    font-size: 8px !important;
+    line-height: 1 !important;
+  }
+
+  .zone-pvp-zone-timer {
+    top: 40px;
+    min-width: 150px;
+    font-size: 8px;
+    line-height: 1;
+    padding: 4px 9px 5px;
+    border-radius: 0 0 8px 8px;
+    letter-spacing: 0.6px;
+  }
+
+  .zone-pvp-dom-arena .core-notice,
+  .zone-pvp-dom-arena .normal-pvp-core-drop-notice {
+    top: 78px !important;
+    width: 210px !important;
+    max-width: calc(100vw - 170px) !important;
+    padding: 6px 10px !important;
+    font-size: 9px !important;
+    border-radius: 9px !important;
+  }
+
+  .zone-pvp-dom-arena .core-notice strong,
+  .zone-pvp-dom-arena .normal-pvp-core-drop-notice strong {
+    font-size: 9px !important;
+    line-height: 1 !important;
+  }
+
+  .zone-pvp-dom-arena .core-notice b,
+  .zone-pvp-dom-arena .normal-pvp-core-drop-notice b {
+    font-size: 12px !important;
+    line-height: 1 !important;
+  }
+
+  .zone-pvp-dom-arena .core-notice span,
+  .zone-pvp-dom-arena .normal-pvp-core-drop-notice span {
+    font-size: 7px !important;
+    line-height: 1.1 !important;
+  }
+}
+
+/* Mobile portrait. */
 @media (hover: none) and (orientation: portrait), (max-width: 760px) and (orientation: portrait) {
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .alive-counter,
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-alive-counter,
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .normal-pvp-top-hud {
+    top: max(12px, env(safe-area-inset-top)) !important;
+    width: min(330px, calc(100vw - 24px)) !important;
+    min-width: 0 !important;
+    max-width: calc(100vw - 24px) !important;
+    padding: 8px 14px 9px !important;
+  }
+
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .alive-counter strong,
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-alive-counter strong,
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .normal-pvp-top-hud strong {
+    font-size: 19px !important;
+  }
+
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .alive-counter span,
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-alive-counter span,
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .normal-pvp-top-hud span {
+    font-size: 11px !important;
+  }
+
   .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .zone-pvp-zone-timer {
-    top: max(96px, calc(env(safe-area-inset-top) + 90px));
+    top: max(76px, calc(env(safe-area-inset-top) + 70px));
+    min-width: 210px;
     font-size: 11px;
     padding: 5px 14px 6px;
+  }
+
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .core-notice,
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .normal-pvp-core-drop-notice {
+    top: max(112px, calc(env(safe-area-inset-top) + 106px)) !important;
+    width: min(300px, calc(100vw - 24px)) !important;
+    max-width: calc(100vw - 24px) !important;
   }
 }
 
 @media (max-width: 430px) and (orientation: portrait) {
   .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .zone-pvp-zone-timer {
-    top: max(86px, calc(env(safe-area-inset-top) + 80px));
+    top: max(70px, calc(env(safe-area-inset-top) + 64px));
     font-size: 10px;
+    min-width: 190px;
+  }
+
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .core-notice,
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .normal-pvp-core-drop-notice {
+    top: max(104px, calc(env(safe-area-inset-top) + 98px)) !important;
   }
 }
 
@@ -94,12 +270,6 @@
   backface-visibility: hidden;
   will-change: transform;
 
-  /*
-    IMPORTANT:
-    Fumul este facut cu box-shadow cu spread pozitiv.
-    Asta inseamna ca este desenat IN AFARA cercului, nu in interior.
-    E mult mai ieftin decat un gradient urias sau multe particule.
-  */
   box-shadow:
     0 0 0 18px rgba(103, 255, 177, 0.18),
     0 0 0 42px rgba(70, 255, 130, 0.12),
@@ -116,8 +286,7 @@
   border-radius: 50%;
   pointer-events: none;
   opacity: 0.34;
-  border:
-    34px dashed rgba(92, 255, 145, 0.16);
+  border: 34px dashed rgba(92, 255, 145, 0.16);
   transform: rotate(8deg);
 }
 
@@ -129,8 +298,7 @@
   border-radius: 50%;
   pointer-events: none;
   opacity: 0.22;
-  border:
-    52px dotted rgba(86, 255, 140, 0.13);
+  border: 52px dotted rgba(86, 255, 140, 0.13);
   transform: rotate(-11deg);
 }
 
@@ -179,6 +347,7 @@
   backface-visibility: hidden;
 }
 
+.zone-pvp-battle-zone::before,
 .zone-pvp-battle-zone::after {
   display: none !important;
   content: none !important;

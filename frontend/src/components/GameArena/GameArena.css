@@ -86,40 +86,6 @@
   box-shadow: 0 0 12px #ff4fc3, 0 0 24px rgba(255, 79, 195, 0.6);
 }
 
-.collect-counter {
-  position: absolute;
-  top: 90px;
-  right: 28px;
-  z-index: 20;
-  min-width: 180px;
-  padding: 14px 18px;
-  background: rgba(4, 10, 20, 0.88);
-  border: 1px solid rgba(0, 234, 255, 0.3);
-  border-radius: 12px;
-  box-shadow: 0 0 22px rgba(0, 234, 255, 0.14);
-  text-align: center;
-}
-
-.collect-counter span {
-  display: block;
-  font-size: 13px;
-  color: #9befff;
-  letter-spacing: 1px;
-  margin-bottom: 5px;
-}
-
-.collect-counter strong {
-  display: block;
-  font-size: 23px;
-  color: #00eaff;
-}
-
-.collect-counter small {
-  display: block;
-  margin-top: 4px;
-  color: rgba(255,255,255,0.65);
-}
-
 @keyframes orbPulse {
   from {
     transform: translate(-50%, -50%) scale(0.85);
@@ -1105,14 +1071,6 @@
   z-index: 9998;
 }
 
-.collect-counter {
-  position: fixed;
-  top: 56px;
-  right: 310px;
-  width: 210px;
-  z-index: 9998;
-}
-
 .simple-ai-bot {
   position: absolute;
   width: 42px;
@@ -1263,15 +1221,6 @@
     );
 }
 
-.real-leaderboard,
-.collect-counter {
-  background: rgba(3, 10, 18, 0.82);
-  border: 1px solid rgba(0, 234, 255, 0.35);
-  border-radius: 12px;
-  box-shadow: 0 0 24px rgba(0, 234, 255, 0.15);
-  backdrop-filter: blur(8px);
-}
-
 .real-leaderboard {
   padding: 16px 18px;
 }
@@ -1305,33 +1254,6 @@
   opacity: 0.45;
 }
 
-.collect-counter {
-  padding: 14px 18px;
-  text-align: center;
-}
-
-.collect-counter span {
-  display: block;
-  color: #8bdcff;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 1px;
-}
-
-.collect-counter strong {
-  display: block;
-  color: #00eaff;
-  font-size: 26px;
-  margin: 2px 0 4px;
-}
-
-.collect-counter small {
-  display: block;
-  color: #d5e7ef;
-  font-size: 12px;
-  margin-top: 3px;
-}
-
 .alive-counter {
   position: fixed;
   top: 18px;
@@ -1359,9 +1281,6 @@
 }
 
 
-
-
-
 /* =========================================================
    MOBILE LANDSCAPE POLISH - added without removing desktop
    ========================================================= */
@@ -1375,17 +1294,6 @@
 
 .game-arena.is-mobile-landscape .arena-vignette {
   background: radial-gradient(circle, transparent 57%, rgba(0, 0, 0, 0.38) 100%);
-}
-
-.game-arena.is-mobile-portrait .world,
-.game-arena.is-mobile-portrait .hp-panel,
-.game-arena.is-mobile-portrait .alive-counter,
-.game-arena.is-mobile-portrait .collect-counter,
-.game-arena.is-mobile-portrait .real-leaderboard,
-.game-arena.is-mobile-portrait .mobile-minimap-frame,
-.game-arena.is-mobile-portrait .fps-counter {
-  filter: blur(5px) brightness(0.45);
-  pointer-events: none;
 }
 
 .mobile-landscape-lock {
@@ -1487,13 +1395,6 @@
     backdrop-filter: blur(7px);
   }
 
-  .game-arena.is-mobile-landscape .hp-panel span,
-  .game-arena.is-mobile-landscape .collect-counter span,
-  .game-arena.is-mobile-landscape .energy-row span {
-    font-size: 8px;
-    letter-spacing: 0.8px;
-  }
-
   .game-arena.is-mobile-landscape .hp-panel strong {
     font-size: 15px;
   }
@@ -1515,30 +1416,6 @@
     font-size: clamp(13px, 2.6vw, 18px);
     letter-spacing: 0.7px;
     z-index: 116;
-  }
-
-  .game-arena.is-mobile-landscape .collect-counter {
-    top: max(48px, calc(env(safe-area-inset-top) + 46px));
-    left: 50%;
-    right: auto;
-    transform: translateX(-50%);
-    width: clamp(130px, 22vw, 180px);
-    min-width: 0;
-    padding: 7px 10px;
-    border-radius: 10px;
-    z-index: 112;
-    background: rgba(3, 10, 18, 0.66);
-    backdrop-filter: blur(6px);
-  }
-
-  .game-arena.is-mobile-landscape .collect-counter strong {
-    font-size: clamp(18px, 3.2vw, 25px);
-    margin: 1px 0 2px;
-  }
-
-  .game-arena.is-mobile-landscape .collect-counter small {
-    font-size: 8px;
-    margin-top: 1px;
   }
 
   .game-arena.is-mobile-landscape .core-notice,
@@ -1723,12 +1600,6 @@
   .game-arena.is-mobile-landscape .alive-counter {
     font-size: 13px;
     padding: 5px 14px;
-  }
-
-  .game-arena.is-mobile-landscape .collect-counter {
-    top: 42px;
-    width: 124px;
-    padding: 6px 8px;
   }
 
   .game-arena.is-mobile-landscape .real-leaderboard {
@@ -2534,16 +2405,6 @@
     font-size: 8px !important;
     min-width: 112px !important;
     padding: 3px 8px !important;
-  }
-
-  .game-arena.is-mobile-landscape .collect-counter {
-    top: max(23px, calc(env(safe-area-inset-top) + 21px)) !important;
-    width: 92px !important;
-    padding: 3px 6px !important;
-  }
-
-  .game-arena.is-mobile-landscape .collect-counter strong {
-    font-size: 12px !important;
   }
 
   .game-arena.is-mobile-landscape .core-notice,
@@ -3545,43 +3406,6 @@
   z-index: 100000 !important;
 }
 
-.game-arena:not(.is-mobile-landscape) .collect-counter {
-  position: fixed !important;
-  top: 66px !important;
-  left: 50% !important;
-  right: auto !important;
-  transform: translateX(-50%) !important;
-
-  width: 190px !important;
-  min-width: 190px !important;
-  max-width: 190px !important;
-
-  padding: 9px 12px !important;
-  border-radius: 12px !important;
-
-  text-align: center !important;
-  z-index: 99999 !important;
-}
-
-.game-arena:not(.is-mobile-landscape) .collect-counter span {
-  font-size: 10px !important;
-  line-height: 1 !important;
-  letter-spacing: 1px !important;
-  margin: 0 0 4px !important;
-}
-
-.game-arena:not(.is-mobile-landscape) .collect-counter strong {
-  font-size: 24px !important;
-  line-height: 1 !important;
-  margin: 0 0 3px !important;
-}
-
-.game-arena:not(.is-mobile-landscape) .collect-counter small {
-  font-size: 10px !important;
-  line-height: 1.12 !important;
-  margin: 1px 0 0 !important;
-}
-
 .game-arena:not(.is-mobile-landscape) .core-notice,
 .game-arena:not(.is-mobile-landscape) .core-notice-top {
   position: fixed !important;
@@ -3763,39 +3587,6 @@
   z-index: 100000 !important;
 }
 
-.game-arena.is-mobile-landscape .collect-counter {
-  top: max(32px, calc(env(safe-area-inset-top) + 30px)) !important;
-  left: 50% !important;
-  right: auto !important;
-  transform: translateX(-50%) !important;
-
-  width: 108px !important;
-  min-width: 108px !important;
-  padding: 5px 7px !important;
-  border-radius: 9px !important;
-
-  text-align: center !important;
-  z-index: 99999 !important;
-}
-
-.game-arena.is-mobile-landscape .collect-counter span {
-  font-size: 6.5px !important;
-  line-height: 1 !important;
-  margin-bottom: 2px !important;
-}
-
-.game-arena.is-mobile-landscape .collect-counter strong {
-  font-size: 15px !important;
-  line-height: 1 !important;
-  margin: 0 0 2px !important;
-}
-
-.game-arena.is-mobile-landscape .collect-counter small {
-  font-size: 6px !important;
-  line-height: 1.08 !important;
-  margin-top: 1px !important;
-}
-
 .game-arena.is-mobile-landscape .core-notice,
 .game-arena.is-mobile-landscape .core-notice-top {
   top: max(78px, calc(env(safe-area-inset-top) + 74px)) !important;
@@ -3842,7 +3633,6 @@
 }
 
 
-
 /* =========================================================
    CLEAN FINAL HUD + DESKTOP MINIMAP ONLY
    ========================================================= */
@@ -3863,41 +3653,6 @@
   letter-spacing: 1px !important;
   text-align: center !important;
   z-index: 10000 !important;
-}
-
-/* Orb Count mutat in stanga, sub Drone HP/Energy */
-.game-arena:not(.is-mobile-landscape) .collect-counter {
-  position: fixed !important;
-  top: 224px !important;
-  left: 24px !important;
-  right: auto !important;
-  transform: none !important;
-  width: 190px !important;
-  min-width: 190px !important;
-  max-width: 190px !important;
-  padding: 13px 16px !important;
-  border-radius: 14px !important;
-  text-align: center !important;
-  z-index: 9998 !important;
-}
-
-.game-arena:not(.is-mobile-landscape) .collect-counter span {
-  font-size: 11px !important;
-  line-height: 1 !important;
-  margin-bottom: 5px !important;
-  letter-spacing: 1.2px !important;
-}
-
-.game-arena:not(.is-mobile-landscape) .collect-counter strong {
-  font-size: 27px !important;
-  line-height: 1 !important;
-  margin: 0 0 4px !important;
-}
-
-.game-arena:not(.is-mobile-landscape) .collect-counter small {
-  font-size: 11px !important;
-  line-height: 1.2 !important;
-  margin-top: 2px !important;
 }
 
 /* Core drop incoming in centru, sub Players Alive */
@@ -4064,14 +3819,6 @@
   }
 }
 
-/* Mobile HUD ramane pe centru, fara minimap */
-.game-arena.is-mobile-landscape .collect-counter {
-  top: max(32px, calc(env(safe-area-inset-top) + 30px)) !important;
-  left: 50% !important;
-  right: auto !important;
-  transform: translateX(-50%) !important;
-}
-
 .game-arena.is-mobile-landscape .core-notice,
 .game-arena.is-mobile-landscape .core-notice-top {
   top: max(78px, calc(env(safe-area-inset-top) + 74px)) !important;
@@ -4092,55 +3839,6 @@
   display: none !important;
   opacity: 0 !important;
   background: transparent !important;
-}
-
-
-/* =========================================================
-   FINAL FIX 2 - LEFT HUD SPACING + REAL DESKTOP MINIMAP
-   ========================================================= */
-
-/* ORB COUNT - mutat mai jos, separat clar de HP/Energy */
-.game-arena:not(.is-mobile-landscape) .collect-counter {
-  position: fixed !important;
-  top: 238px !important;
-  left: 24px !important;
-  right: auto !important;
-  transform: none !important;
-
-  width: 172px !important;
-  min-width: 172px !important;
-  max-width: 172px !important;
-
-  padding: 10px 14px !important;
-  border-radius: 13px !important;
-  text-align: center !important;
-
-  background: rgba(2, 8, 18, 0.82) !important;
-  border: 1px solid rgba(0, 234, 255, 0.34) !important;
-  box-shadow:
-    0 0 18px rgba(0, 234, 255, 0.13),
-    inset 0 0 18px rgba(0, 234, 255, 0.035) !important;
-
-  z-index: 9998 !important;
-}
-
-.game-arena:not(.is-mobile-landscape) .collect-counter span {
-  font-size: 10px !important;
-  line-height: 1 !important;
-  margin: 0 0 4px !important;
-  letter-spacing: 1.3px !important;
-}
-
-.game-arena:not(.is-mobile-landscape) .collect-counter strong {
-  font-size: 24px !important;
-  line-height: 1 !important;
-  margin: 0 0 4px !important;
-}
-
-.game-arena:not(.is-mobile-landscape) .collect-counter small {
-  font-size: 10px !important;
-  line-height: 1.15 !important;
-  margin: 1px 0 0 !important;
 }
 
 /* HP panel putin mai compact ca sa nu intre peste Orb Count */
@@ -4388,55 +4086,6 @@
   z-index: 10000 !important;
 }
 
-.game-arena:not(.is-mobile-landscape) .collect-counter {
-  position: fixed !important;
-
-  /* langa HP/Energy, nu dedesubt */
-  top: 22px !important;
-  left: 262px !important;
-  right: auto !important;
-  bottom: auto !important;
-  transform: none !important;
-
-  width: 185px !important;
-  min-width: 185px !important;
-  max-width: 185px !important;
-
-  padding: 13px 15px !important;
-  border-radius: 15px !important;
-
-  text-align: center !important;
-  background: rgba(2, 8, 18, 0.82) !important;
-  border: 1px solid rgba(0, 234, 255, 0.34) !important;
-  box-shadow:
-    0 0 18px rgba(0, 234, 255, 0.13),
-    inset 0 0 18px rgba(0, 234, 255, 0.035) !important;
-
-  z-index: 10000 !important;
-}
-
-.game-arena:not(.is-mobile-landscape) .collect-counter span {
-  display: block !important;
-  font-size: 11px !important;
-  line-height: 1 !important;
-  margin: 0 0 6px !important;
-  letter-spacing: 1.3px !important;
-}
-
-.game-arena:not(.is-mobile-landscape) .collect-counter strong {
-  display: block !important;
-  font-size: 28px !important;
-  line-height: 1 !important;
-  margin: 0 0 5px !important;
-}
-
-.game-arena:not(.is-mobile-landscape) .collect-counter small {
-  display: block !important;
-  font-size: 11px !important;
-  line-height: 1.2 !important;
-  margin: 1px 0 0 !important;
-}
-
 /* Core notice ramane pe centru, sub Players Alive */
 .game-arena:not(.is-mobile-landscape) .core-notice,
 .game-arena:not(.is-mobile-landscape) .core-notice-top {
@@ -4511,40 +4160,6 @@
   font-size: 10px !important;
   border-radius: 9px !important;
   z-index: 100000 !important;
-}
-
-.game-arena.is-mobile-landscape .collect-counter {
-  top: max(31px, calc(env(safe-area-inset-top) + 29px)) !important;
-  left: 50% !important;
-  right: auto !important;
-  transform: translateX(-50%) !important;
-
-  width: 105px !important;
-  min-width: 105px !important;
-  max-width: 105px !important;
-
-  padding: 5px 7px !important;
-  border-radius: 9px !important;
-  text-align: center !important;
-  z-index: 99999 !important;
-}
-
-.game-arena.is-mobile-landscape .collect-counter span {
-  font-size: 6.3px !important;
-  line-height: 1 !important;
-  margin-bottom: 2px !important;
-}
-
-.game-arena.is-mobile-landscape .collect-counter strong {
-  font-size: 15px !important;
-  line-height: 1 !important;
-  margin: 0 0 2px !important;
-}
-
-.game-arena.is-mobile-landscape .collect-counter small {
-  font-size: 5.8px !important;
-  line-height: 1.08 !important;
-  margin-top: 1px !important;
 }
 
 .game-arena.is-mobile-landscape .core-notice,
@@ -4805,16 +4420,6 @@
     max-width: 165px !important;
     padding: 4px 7px !important;
   }
-}
-
-
-/* =========================================================
-   UNIQUE POWER CORES + ACTIVE EFFECT HUD
-   Added: Overclock, Berserk, Shield Breaker, Swarm, Vampire, EMP
-   ========================================================= */
-
-.collect-counter {
-  overflow: visible !important;
 }
 
 .active-effects-panel {
@@ -5414,7 +5019,6 @@
 }
 
 
-
 /* =========================================================
    FINAL MOBILE FIX - PLAY VS AI
    Lipeste la FINAL in GameArena.css.
@@ -5443,19 +5047,6 @@
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   filter: none !important;
-}
-
-.game-arena.is-mobile .hp-panel,
-.game-arena.is-mobile .collect-counter,
-.game-arena.is-mobile .alive-counter,
-.game-arena.is-mobile .leaderboard,
-.game-arena.is-mobile .real-leaderboard,
-.game-arena.is-mobile .fps-counter,
-.game-arena.is-mobile .core-notice,
-.game-arena.is-mobile .spectator-panel {
-  filter: none !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
 }
 
 .game-arena.is-mobile .mobile-controls {
@@ -5491,8 +5082,6 @@
   margin-top: -48px !important;
   will-change: transform !important;
 }
-
-
 
 
 /* =========================================================
@@ -5541,7 +5130,6 @@
   width: 27px !important;
   height: 27px !important;
 }
-
 
 
 /* =========================================================
@@ -5598,3 +5186,196 @@ canvas {
   inset: 24px !important;
   opacity: 0.55 !important;
 }
+
+/* =========================================================
+   COLLECT COUNTER - CLEAN VERSION
+   Un singur set de reguli. Fara duplicate vechi.
+   Pentru Battle Royale pe mobile foloseste in JSX:
+   className="collect-counter battle-royale-mobile-orbs"
+========================================================= */
+
+/* Stil vizual comun pentru leaderboard + collect counter */
+.real-leaderboard,
+.collect-counter {
+  background: rgba(3, 10, 18, 0.82);
+  border: 1px solid rgba(0, 234, 255, 0.35);
+  border-radius: 12px;
+  box-shadow: 0 0 24px rgba(0, 234, 255, 0.15);
+  backdrop-filter: blur(8px);
+}
+
+/* Desktop / default */
+.collect-counter {
+  position: fixed;
+  top: 56px;
+  right: 310px;
+  left: auto;
+  bottom: auto;
+  width: 210px;
+  min-width: 210px;
+  max-width: 210px;
+  z-index: 9998;
+  padding: 14px 18px;
+  text-align: center;
+  transform: none;
+}
+
+.collect-counter span {
+  display: block;
+  color: #8bdcff;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  margin-bottom: 5px;
+}
+
+.collect-counter strong {
+  display: block;
+  color: #00eaff;
+  font-size: 26px;
+  line-height: 1;
+  margin: 2px 0 4px;
+}
+
+.collect-counter small {
+  display: block;
+  color: #d5e7ef;
+  font-size: 12px;
+  line-height: 1.2;
+  margin-top: 3px;
+}
+
+.collect-counter .active-effects-panel {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(0, 234, 255, 0.2);
+}
+
+.collect-counter .active-effects-title {
+  display: block;
+  color: rgba(180, 245, 255, 0.72);
+  font-size: 11px;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+
+.collect-counter .active-effect {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 5px;
+  padding: 6px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.collect-counter .active-effect b,
+.collect-counter .active-effect em {
+  display: block;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
+  line-height: 1;
+  font-style: normal;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+/* Mobile Battle Royale ONLY.
+   Adauga clasa battle-royale-mobile-orbs langa collect-counter in JSX. */
+@media (orientation: landscape) and (max-width: 950px),
+       (hover: none) and (pointer: coarse) and (orientation: landscape) {
+
+  .game-arena.is-mobile-landscape .collect-counter.battle-royale-mobile-orbs,
+  .battle-royale-arena .collect-counter.battle-royale-mobile-orbs {
+    position: fixed !important;
+
+    /* Sub DRONE HP + DRONE ENERGY */
+    top: max(108px, calc(env(safe-area-inset-top) + 108px)) !important;
+    left: max(7px, env(safe-area-inset-left)) !important;
+    right: auto !important;
+    bottom: auto !important;
+
+    width: 112px !important;
+    min-width: 112px !important;
+    max-width: 112px !important;
+
+    padding: 6px 8px !important;
+    border-radius: 10px !important;
+
+    transform: none !important;
+    translate: 0 0 !important;
+    margin: 0 !important;
+
+    z-index: 9999 !important;
+    text-align: center !important;
+
+    background: rgba(3, 10, 18, 0.72) !important;
+    border: 1px solid rgba(0, 234, 255, 0.35) !important;
+    box-shadow: 0 0 14px rgba(0, 234, 255, 0.14) !important;
+    backdrop-filter: none !important;
+  }
+
+  .game-arena.is-mobile-landscape .collect-counter.battle-royale-mobile-orbs span,
+  .battle-royale-arena .collect-counter.battle-royale-mobile-orbs span {
+    display: block !important;
+    font-size: 7px !important;
+    line-height: 1 !important;
+    letter-spacing: 0.8px !important;
+    margin: 0 0 3px !important;
+  }
+
+  .game-arena.is-mobile-landscape .collect-counter.battle-royale-mobile-orbs strong,
+  .battle-royale-arena .collect-counter.battle-royale-mobile-orbs strong {
+    display: block !important;
+    font-size: 15px !important;
+    line-height: 1 !important;
+    margin: 2px 0 3px !important;
+  }
+
+  .game-arena.is-mobile-landscape .collect-counter.battle-royale-mobile-orbs small,
+  .battle-royale-arena .collect-counter.battle-royale-mobile-orbs small {
+    display: block !important;
+    font-size: 6.4px !important;
+    line-height: 1.15 !important;
+    margin-top: 2px !important;
+    white-space: nowrap !important;
+  }
+
+  .game-arena.is-mobile-landscape .collect-counter.battle-royale-mobile-orbs .active-effects-panel,
+  .battle-royale-arena .collect-counter.battle-royale-mobile-orbs .active-effects-panel {
+    margin-top: 5px !important;
+    padding-top: 5px !important;
+    border-top: 1px solid rgba(0, 234, 255, 0.2) !important;
+  }
+
+  .game-arena.is-mobile-landscape .collect-counter.battle-royale-mobile-orbs .active-effects-title,
+  .battle-royale-arena .collect-counter.battle-royale-mobile-orbs .active-effects-title {
+    font-size: 6.4px !important;
+    line-height: 1 !important;
+    letter-spacing: 0.7px !important;
+    margin-bottom: 4px !important;
+  }
+
+  .game-arena.is-mobile-landscape .collect-counter.battle-royale-mobile-orbs .active-effect,
+  .battle-royale-arena .collect-counter.battle-royale-mobile-orbs .active-effect {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 4px !important;
+    padding: 3px 5px !important;
+    border-radius: 6px !important;
+    margin-top: 3px !important;
+  }
+
+  .game-arena.is-mobile-landscape .collect-counter.battle-royale-mobile-orbs .active-effect b,
+  .game-arena.is-mobile-landscape .collect-counter.battle-royale-mobile-orbs .active-effect em,
+  .battle-royale-arena .collect-counter.battle-royale-mobile-orbs .active-effect b,
+  .battle-royale-arena .collect-counter.battle-royale-mobile-orbs .active-effect em {
+    font-size: 5.8px !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
+  }
+}
+
