@@ -2388,7 +2388,12 @@ export class GameGateway {
         return bestEnemy;
     }
 
-    setZonePvpBotInput(bot, targetX, targetY, options = {}) {
+    setZonePvpBotInput(
+        bot,
+        targetX,
+        targetY,
+        options: { attacking?: boolean; shield?: boolean; mouseX?: number; mouseY?: number } = {}
+    ) {
         const dx = targetX - bot.x;
         const dy = targetY - bot.y;
         const distance = Math.hypot(dx, dy) || 1;

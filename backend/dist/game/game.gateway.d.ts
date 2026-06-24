@@ -198,7 +198,12 @@ export declare class GameGateway {
     findBestZonePvpCoreForBot(bot: any, room: any, zoneRadius: any): any;
     shouldZonePvpBotFarm(bot: any): boolean;
     findZonePvpBotEnemy(bot: any, room: any): any;
-    setZonePvpBotInput(bot: any, targetX: any, targetY: any, options?: {}): void;
+    setZonePvpBotInput(bot: any, targetX: any, targetY: any, options?: {
+        attacking?: boolean;
+        shield?: boolean;
+        mouseX?: number;
+        mouseY?: number;
+    }): void;
     updateZonePvpBots(room: any, now: any, zoneRadius: any): void;
     broadcastZonePvpRoomState(room: any, now: any): void;
     findOrCreateRoom(): any;
