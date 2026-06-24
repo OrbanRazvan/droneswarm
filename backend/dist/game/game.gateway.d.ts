@@ -162,7 +162,7 @@ export declare class GameGateway {
         x: number;
         y: number;
     };
-    keepInsideSafeZone(x: any, y: any, radius: any, margin?: number, unbounded?: boolean): {
+    keepInsideSafeZone(x: any, y: any, radius: any, margin?: number, allowOutsideZone?: boolean): {
         x: any;
         y: any;
     };

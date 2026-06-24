@@ -2387,17 +2387,16 @@ export class GameGateway {
             y: WORLD_HEIGHT / 2,
         };
     }
-    keepInsideSafeZone(x, y, radius, margin = 80, unbounded = false) {
-        // IMPORTANT: cerinta explicita pentru Zone PvP - jucatorul poate trece
-        // liber prin linia zonei (nu mai e blocat fizic la margine ca la
-        // celelalte moduri cu zona), doar primeste 10 HP/secunda cat sta in
-        // afara ei (vezi applyZonePvpZoneDamage). unbounded=true returneaza
-        // pozitia neschimbata - clamp-ul de harta (WORLD_WIDTH/HEIGHT) ramane
-        // intact separat, in updatePlayers/applyKnockbackStep, dupa apelul
-        // acestei functii.
-        if (unbounded) {
-            return { x, y };
+    keepInsideSafeZone(x, y, radius, margin = 80, allowOutsideZone = false) {
+        // Zone PvP: playerul are voie sa iasa din cerc.
+        // Limitam doar la marginile hartii; damage-ul de zona se aplica separat.
+        if (allowOutsideZone) {
+            return {
+                x: this.clamp(x, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS),
+                y: this.clamp(y, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS),
+            };
         }
+
         const centerX = WORLD_WIDTH / 2;
         const centerY = WORLD_HEIGHT / 2;
         const dx = x - centerX;
@@ -2411,6 +2410,7 @@ export class GameGateway {
             y: centerY + (dy / distance) * maxDistance,
         };
     }
+
     isInsideSafeZone(x, y, radius, margin = 80) {
         const dx = x - WORLD_WIDTH / 2;
         const dy = y - WORLD_HEIGHT / 2;

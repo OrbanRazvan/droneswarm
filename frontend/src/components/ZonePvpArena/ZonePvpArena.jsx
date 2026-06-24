@@ -229,7 +229,16 @@ function dampPointCapped(currentX, currentY, targetX, targetY, lambda, dt, snapD
   };
 }
 
-function keepInsideSafeZone(x, y, radius, worldWidth, worldHeight, margin = 70) {
+function keepInsideSafeZone(x, y, radius, worldWidth, worldHeight, margin = 70, allowOutsideZone = false) {
+  // Pentru Zone PvP vrem ca playerul sa poata intra in zona periculoasa.
+  // Clientul limiteaza doar marginile hartii; serverul aplica damage-ul autoritar.
+  if (allowOutsideZone) {
+    return {
+      x: clamp(x, 160, worldWidth - 160),
+      y: clamp(y, 160, worldHeight - 160),
+    };
+  }
+
   const cx = worldWidth / 2;
   const cy = worldHeight / 2;
   const dx = x - cx;
@@ -492,6 +501,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   );
   const worldElementRef = useRef(null);
   const zoneElementRef = useRef(null);
+  const zoneSmokeElementRef = useRef(null);
   const sendInputRef = useRef(() => {});
 
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
@@ -760,18 +770,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           nextY += (dy / length) * CLIENT_SPEED * dt;
         }
 
-        // IMPORTANT: cerinta explicita pentru Zone PvP - jucatorul poate
-        // trece liber prin linia zonei (nu mai e blocat fizic la margine,
-        // ca la Normal PvP/Battle Royale Online), doar primeste 10 HP/secunda
-        // cat sta in afara ei (server-side, applyZonePvpZoneDamage). Aici
-        // pastram doar clamp-ul la harta (limitele lumii de 10000x10000),
-        // fara sa mai chemam keepInsideSafeZone (care bloca miscarea la
-        // marginea zonei). Identic cu schimbarea facuta in game.gateway.ts
-        // (keepInsideSafeZone primeste unbounded=true pentru room.zonePvpMode).
-        const safe = {
-          x: clamp(nextX, 160, worldWidth - 160),
-          y: clamp(nextY, 160, worldHeight - 160),
-        };
+        const safe = keepInsideSafeZone(nextX, nextY, zoneRadius, worldWidth, worldHeight, 70, true);
 
         let corrected;
 
@@ -1006,17 +1005,18 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldElementRef.current.style.transform = `translate3d(${liveCameraX}px, ${liveCameraY}px, 0)`;
       }
 
-      // IMPORTANT: actualizam raza zonei direct pe element (ref) via variabila
-      // CSS --zone-radius, NU prin React state si NU prin width/height.
-      // safeZoneRadius vine din data (worldRef.current, actualizat la fiecare
-      // frame din rAF), nu din renderData (care se sincronizeaza cu React doar
-      // la ~15Hz). Schimbarea unei variabile CSS pe un element cu inset:0
-      // (care nu-si schimba niciodata dimensiunea fizica) declanseaza doar
-      // repaint pe gradientul radial, NICIODATA layout reflow - identic cu
-      // pattern-ul .toxic-overlay din BattleRoyaleMode, care e deja confirmat
-      // stabil la 60fps pe mobil cu 69 de boti.
+      // Cercul zonei si fumul verde sunt tinute la diametrul initial.
+      // La fiecare frame modificam DOAR transform: scale(...), fara width/height.
+      // Asta evita reflow/layout si ramane foarte ieftin pe mobil.
+      const zoneScale = Math.max(0.01, zoneRadius / ZONE_RADIUS_FALLBACK);
+      const zoneTransform = `translate(-50%, -50%) scale(${zoneScale})`;
+
       if (zoneElementRef.current) {
-        zoneElementRef.current.style.setProperty("--zone-radius", `${zoneRadius}px`);
+        zoneElementRef.current.style.transform = zoneTransform;
+      }
+
+      if (zoneSmokeElementRef.current) {
+        zoneSmokeElementRef.current.style.transform = zoneTransform;
       }
 
       const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 820);
@@ -1503,12 +1503,24 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         }}
       >
         <div
-          ref={zoneElementRef}
-          className="zone-pvp-toxic-overlay"
+          ref={zoneSmokeElementRef}
+          className="zone-pvp-danger-smoke"
           style={{
-            "--zone-x": `${worldWidth / 2}px`,
-            "--zone-y": `${worldHeight / 2}px`,
-            "--zone-radius": `${safeZoneRadius}px`,
+            left: worldWidth / 2,
+            top: worldHeight / 2,
+            width: ZONE_RADIUS_FALLBACK * 2,
+            height: ZONE_RADIUS_FALLBACK * 2,
+          }}
+        />
+
+        <div
+          ref={zoneElementRef}
+          className="zone-pvp-battle-zone"
+          style={{
+            left: worldWidth / 2,
+            top: worldHeight / 2,
+            width: ZONE_RADIUS_FALLBACK * 2,
+            height: ZONE_RADIUS_FALLBACK * 2,
           }}
         />
       </div>

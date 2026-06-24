@@ -2,15 +2,11 @@
    ZONE PVP ARENA - OPTIMIZAT PENTRU FPS MOBIL
    Replace complet pentru: ZonePvpArena.css
 
-   Drona poate trece liber prin linia zonei (la fel ca in
-   BattleRoyaleMode), primind doar 10 HP/secunda cat timp sta in
-   afara ei (server-side, applyZonePvpZoneDamage). Zona vizuala
-   foloseste acelasi pattern ca .toxic-overlay din BattleRoyaleMode:
-   un singur div cu inset:0 (NU isi schimba niciodata dimensiunea
-   fizica) + un radial-gradient care citeste --zone-radius dintr-o
-   variabila CSS. Schimbarea variabilei declanseaza doar repaint pe
-   gradient, NICIODATA layout reflow - mult mai ieftin decat orice
-   varianta cu width/height/scale.
+   Ce face varianta asta:
+   - cercul verde si fumul verde NU se redimensioneaza prin width/height;
+   - ZonePvpArena.jsx modifica doar transform: scale(...);
+   - fumul este low-poly, static, fara blur mare si fara animatii infinite;
+   - damage-ul de zona ramane pe server: 10 HP/secunda in afara cercului.
 ========================================================= */
 
 .zone-pvp-dom-arena {
@@ -78,53 +74,119 @@
 }
 
 /* =========================================================
-   ZONA TOXICA - identic ca principiu cu .toxic-overlay din
-   BattleRoyaleMode (GameArena.css), namespace separat
-   (.zone-pvp-toxic-overlay) ca sa nu se suprapuna stilistic cu
-   celelalte moduri care folosesc acelasi parinte .world.
-   Acopera tot .world (inset:0, dimensiune fixa, NU se schimba
-   niciodata), iar gradientul radial citeste pozitia/raza zonei
-   din variabile CSS (--zone-x, --zone-y, --zone-radius),
-   actualizate direct prin ref in JS, fara React state.
+   FUM VERDE VIZIBIL DOAR IN AFARA CERCULUI
+
+   Varianta asta este mai vizibila si mai smooth:
+   - interiorul cercului ramane complet curat;
+   - fumul sta doar in exteriorul marginii verzi;
+   - nu foloseste blur/filter sau animatii grele;
+   - se strange odata cu cercul prin acelasi transform: scale(...).
 ========================================================= */
-.zone-pvp-toxic-overlay {
+
+.zone-pvp-danger-smoke {
   position: absolute;
-  inset: 0;
+  transform: translate(-50%, -50%) scale(1);
+  transform-origin: center center;
   pointer-events: none;
   z-index: 2;
+  border-radius: 50%;
+  contain: layout paint style;
+  backface-visibility: hidden;
+  will-change: transform;
 
-  background:
-    radial-gradient(
-      circle at var(--zone-x) var(--zone-y),
-
-      transparent 0,
-      transparent calc(var(--zone-radius) - 50px),
-
-      rgba(60, 255, 80, 0.25) calc(var(--zone-radius) + 50px),
-      rgba(60, 255, 80, 0.45) calc(var(--zone-radius) + 300px),
-      rgba(60, 255, 80, 0.65) calc(var(--zone-radius) + 800px),
-      rgba(60, 255, 80, 0.85) 100%
-    );
+  /*
+    IMPORTANT:
+    Fumul este facut cu box-shadow cu spread pozitiv.
+    Asta inseamna ca este desenat IN AFARA cercului, nu in interior.
+    E mult mai ieftin decat un gradient urias sau multe particule.
+  */
+  box-shadow:
+    0 0 0 18px rgba(103, 255, 177, 0.18),
+    0 0 0 42px rgba(70, 255, 130, 0.12),
+    0 0 0 82px rgba(42, 210, 96, 0.075),
+    0 0 0 135px rgba(24, 150, 72, 0.045),
+    0 0 26px 118px rgba(78, 255, 126, 0.08);
 }
 
-/* Linia vizibila a marginii zonei - cerc subtire static, fara blur mare,
-   pus pe langa fum ca jucatorul sa vada clar unde e marginea exacta. */
-.zone-pvp-toxic-overlay::before {
+/* O margine neregulata, mai organica, dar tot ieftina. */
+.zone-pvp-danger-smoke::before {
   content: "";
   position: absolute;
-  left: var(--zone-x);
-  top: var(--zone-y);
-  width: calc(var(--zone-radius) * 2);
-  height: calc(var(--zone-radius) * 2);
-  transform: translate(-50%, -50%);
+  inset: -95px;
   border-radius: 50%;
-  border: 3px solid rgba(125, 255, 125, 0.85);
-  box-shadow: 0 0 8px rgba(125, 255, 125, 0.45);
   pointer-events: none;
+  opacity: 0.34;
+  border:
+    34px dashed rgba(92, 255, 145, 0.16);
+  transform: rotate(8deg);
 }
 
+/* Al doilea strat, mai fin, ca sa nu para pixelat sau prea geometric. */
+.zone-pvp-danger-smoke::after {
+  content: "";
+  position: absolute;
+  inset: -150px;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0.22;
+  border:
+    52px dotted rgba(86, 255, 140, 0.13);
+  transform: rotate(-11deg);
+}
+
+/* Nu mai folosim particule span; ramane doar in caz ca ai ramas cu JSX vechi. */
+.zone-pvp-danger-smoke span {
+  display: none !important;
+}
+
+/* Pe mobil pastram efectul vizibil, dar cu mai putine straturi. */
 @media (hover: none), (max-width: 760px) {
-  .zone-pvp-toxic-overlay::before {
+  .zone-pvp-danger-smoke {
+    box-shadow:
+      0 0 0 14px rgba(103, 255, 177, 0.18),
+      0 0 0 34px rgba(70, 255, 130, 0.11),
+      0 0 0 68px rgba(42, 210, 96, 0.07),
+      0 0 18px 82px rgba(78, 255, 126, 0.07);
+  }
+
+  .zone-pvp-danger-smoke::before {
+    inset: -72px;
+    border-width: 26px;
+    opacity: 0.26;
+  }
+
+  .zone-pvp-danger-smoke::after {
+    display: none;
+  }
+}
+
+/* =========================================================
+   CERCUL ZONEI - VARIANTA IEFTINA PENTRU TELEFON
+========================================================= */
+.zone-pvp-battle-zone {
+  position: absolute;
+  transform: translate(-50%, -50%) scale(1);
+  transform-origin: center center;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 3;
+
+  border: 3px solid #7dff7d;
+  box-shadow: 0 0 8px rgba(125, 255, 125, 0.45);
+
+  will-change: transform;
+  contain: layout paint style;
+  backface-visibility: hidden;
+}
+
+.zone-pvp-battle-zone::after {
+  display: none !important;
+  content: none !important;
+}
+
+/* Pe mobil taiem si mai mult glow-ul. */
+@media (hover: none), (max-width: 760px) {
+  .zone-pvp-battle-zone {
     border-width: 2px;
     box-shadow: 0 0 5px rgba(125, 255, 125, 0.38);
   }

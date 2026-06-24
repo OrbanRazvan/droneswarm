@@ -2143,9 +2143,12 @@ let GameGateway = class GameGateway {
             y: WORLD_HEIGHT / 2,
         };
     }
-    keepInsideSafeZone(x, y, radius, margin = 80, unbounded = false) {
-        if (unbounded) {
-            return { x, y };
+    keepInsideSafeZone(x, y, radius, margin = 80, allowOutsideZone = false) {
+        if (allowOutsideZone) {
+            return {
+                x: this.clamp(x, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS),
+                y: this.clamp(y, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS),
+            };
         }
         const centerX = WORLD_WIDTH / 2;
         const centerY = WORLD_HEIGHT / 2;
