@@ -43,7 +43,7 @@ export declare class GameGateway {
     };
     applyBodyCollisionDamage(player: any, hpDamage: any, droneLoss?: number): void;
     addSmoothKnockback(player: any, dirX: any, dirY: any, strength: any): void;
-    applyKnockbackStep(player: any, zoneRadius: any): void;
+    applyKnockbackStep(player: any, zoneRadius: any, room?: any): void;
     buildCollisionGrid(alivePlayers: any): Map<string, any[]>;
     getNearbyCellPlayers(grid: any, player: any): any[];
     handleBodyCollisions(room: any, now: any, zoneRadius: any): void;
@@ -162,7 +162,7 @@ export declare class GameGateway {
         x: number;
         y: number;
     };
-    keepInsideSafeZone(x: any, y: any, radius: any, margin?: number): {
+    keepInsideSafeZone(x: any, y: any, radius: any, margin?: number, unbounded?: boolean): {
         x: any;
         y: any;
     };

@@ -2,12 +2,15 @@
    ZONE PVP ARENA - OPTIMIZAT PENTRU FPS MOBIL
    Replace complet pentru: ZonePvpArena.css
 
-   Ideea principala:
-   - zona verde NU mai trebuie animata prin width/height la fiecare frame;
-   - JSX-ul tine cercul la diametrul initial;
-   - ZonePvpArena.jsx modifica doar transform: scale(...);
-   - CSS-ul zonei ramane foarte ieftin: fara blur mare, fara gradient urias,
-     fara pseudo-elemente grele.
+   Drona poate trece liber prin linia zonei (la fel ca in
+   BattleRoyaleMode), primind doar 10 HP/secunda cat timp sta in
+   afara ei (server-side, applyZonePvpZoneDamage). Zona vizuala
+   foloseste acelasi pattern ca .toxic-overlay din BattleRoyaleMode:
+   un singur div cu inset:0 (NU isi schimba niciodata dimensiunea
+   fizica) + un radial-gradient care citeste --zone-radius dintr-o
+   variabila CSS. Schimbarea variabilei declanseaza doar repaint pe
+   gradient, NICIODATA layout reflow - mult mai ieftin decat orice
+   varianta cu width/height/scale.
 ========================================================= */
 
 .zone-pvp-dom-arena {
@@ -75,33 +78,53 @@
 }
 
 /* =========================================================
-   CERCUL ZONEI - VARIANTA IEFTINA PENTRU TELEFON
+   ZONA TOXICA - identic ca principiu cu .toxic-overlay din
+   BattleRoyaleMode (GameArena.css), namespace separat
+   (.zone-pvp-toxic-overlay) ca sa nu se suprapuna stilistic cu
+   celelalte moduri care folosesc acelasi parinte .world.
+   Acopera tot .world (inset:0, dimensiune fixa, NU se schimba
+   niciodata), iar gradientul radial citeste pozitia/raza zonei
+   din variabile CSS (--zone-x, --zone-y, --zone-radius),
+   actualizate direct prin ref in JS, fara React state.
 ========================================================= */
-.zone-pvp-battle-zone {
+.zone-pvp-toxic-overlay {
   position: absolute;
-  transform: translate(-50%, -50%) scale(1);
-  transform-origin: center center;
-  border-radius: 50%;
+  inset: 0;
   pointer-events: none;
-  z-index: 3;
+  z-index: 2;
 
-  border: 3px solid #7dff7d;
+  background:
+    radial-gradient(
+      circle at var(--zone-x) var(--zone-y),
+
+      transparent 0,
+      transparent calc(var(--zone-radius) - 50px),
+
+      rgba(60, 255, 80, 0.25) calc(var(--zone-radius) + 50px),
+      rgba(60, 255, 80, 0.45) calc(var(--zone-radius) + 300px),
+      rgba(60, 255, 80, 0.65) calc(var(--zone-radius) + 800px),
+      rgba(60, 255, 80, 0.85) 100%
+    );
+}
+
+/* Linia vizibila a marginii zonei - cerc subtire static, fara blur mare,
+   pus pe langa fum ca jucatorul sa vada clar unde e marginea exacta. */
+.zone-pvp-toxic-overlay::before {
+  content: "";
+  position: absolute;
+  left: var(--zone-x);
+  top: var(--zone-y);
+  width: calc(var(--zone-radius) * 2);
+  height: calc(var(--zone-radius) * 2);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 3px solid rgba(125, 255, 125, 0.85);
   box-shadow: 0 0 8px rgba(125, 255, 125, 0.45);
-
-  will-change: transform;
-  contain: layout paint style;
-  backface-visibility: hidden;
+  pointer-events: none;
 }
 
-.zone-pvp-battle-zone::before,
-.zone-pvp-battle-zone::after {
-  display: none !important;
-  content: none !important;
-}
-
-/* Pe mobil taiem si mai mult glow-ul. */
 @media (hover: none), (max-width: 760px) {
-  .zone-pvp-battle-zone {
+  .zone-pvp-toxic-overlay::before {
     border-width: 2px;
     box-shadow: 0 0 5px rgba(125, 255, 125, 0.38);
   }

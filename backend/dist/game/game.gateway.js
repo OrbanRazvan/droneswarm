@@ -629,10 +629,10 @@ let GameGateway = class GameGateway {
             const speed = PLAYER_SPEED;
             const rawX = player.x + (dx / length) * speed * deltaFrames;
             const rawY = player.y + (dy / length) * speed * deltaFrames;
-            const safe = this.keepInsideSafeZone(rawX, rawY, zoneRadius, PLAYER_RADIUS + 18);
+            const safe = this.keepInsideSafeZone(rawX, rawY, zoneRadius, PLAYER_RADIUS + 18, Boolean(room.zonePvpMode));
             player.x = this.clamp(safe.x, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
             player.y = this.clamp(safe.y, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
-            this.applyKnockbackStep(player, zoneRadius);
+            this.applyKnockbackStep(player, zoneRadius, room);
             if (dx || dy) {
                 player.moveX = dx / length;
                 player.moveY = dy / length;
@@ -735,7 +735,7 @@ let GameGateway = class GameGateway {
         player.moveAngle = Math.atan2(dirY, dirX);
         player.isMoving = true;
     }
-    applyKnockbackStep(player, zoneRadius) {
+    applyKnockbackStep(player, zoneRadius, room = null) {
         const kx = player.knockbackX || 0;
         const ky = player.knockbackY || 0;
         const power = Math.hypot(kx, ky);
@@ -744,7 +744,7 @@ let GameGateway = class GameGateway {
             player.knockbackY = 0;
             return;
         }
-        const safe = this.keepInsideSafeZone(player.x + kx, player.y + ky, zoneRadius, PLAYER_RADIUS + 18);
+        const safe = this.keepInsideSafeZone(player.x + kx, player.y + ky, zoneRadius, PLAYER_RADIUS + 18, Boolean(room?.zonePvpMode));
         player.x = this.clamp(safe.x, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
         player.y = this.clamp(safe.y, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
         player.knockbackX = kx * BODY_COLLISION_PUSH_DECAY;
@@ -821,8 +821,8 @@ let GameGateway = class GameGateway {
         const separation = Math.min(7, Math.max(BODY_COLLISION_LIGHT_PUSH, overlap * 0.08));
         this.addSmoothKnockback(a, -dirX, -dirY, separation);
         this.addSmoothKnockback(b, dirX, dirY, separation);
-        this.applyKnockbackStep(a, zoneRadius);
-        this.applyKnockbackStep(b, zoneRadius);
+        this.applyKnockbackStep(a, zoneRadius, room);
+        this.applyKnockbackStep(b, zoneRadius, room);
         if (now - lastAt < BODY_COLLISION_COOLDOWN)
             return;
         room.collisionCooldowns.set(key, now);
@@ -2143,7 +2143,10 @@ let GameGateway = class GameGateway {
             y: WORLD_HEIGHT / 2,
         };
     }
-    keepInsideSafeZone(x, y, radius, margin = 80) {
+    keepInsideSafeZone(x, y, radius, margin = 80, unbounded = false) {
+        if (unbounded) {
+            return { x, y };
+        }
         const centerX = WORLD_WIDTH / 2;
         const centerY = WORLD_HEIGHT / 2;
         const dx = x - centerX;

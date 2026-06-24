@@ -760,7 +760,18 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           nextY += (dy / length) * CLIENT_SPEED * dt;
         }
 
-        const safe = keepInsideSafeZone(nextX, nextY, zoneRadius, worldWidth, worldHeight, 70);
+        // IMPORTANT: cerinta explicita pentru Zone PvP - jucatorul poate
+        // trece liber prin linia zonei (nu mai e blocat fizic la margine,
+        // ca la Normal PvP/Battle Royale Online), doar primeste 10 HP/secunda
+        // cat sta in afara ei (server-side, applyZonePvpZoneDamage). Aici
+        // pastram doar clamp-ul la harta (limitele lumii de 10000x10000),
+        // fara sa mai chemam keepInsideSafeZone (care bloca miscarea la
+        // marginea zonei). Identic cu schimbarea facuta in game.gateway.ts
+        // (keepInsideSafeZone primeste unbounded=true pentru room.zonePvpMode).
+        const safe = {
+          x: clamp(nextX, 160, worldWidth - 160),
+          y: clamp(nextY, 160, worldHeight - 160),
+        };
 
         let corrected;
 
@@ -995,17 +1006,17 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldElementRef.current.style.transform = `translate3d(${liveCameraX}px, ${liveCameraY}px, 0)`;
       }
 
-      // IMPORTANT: actualizam dimensiunea zonei direct pe element (ref), NU prin
-      // React state. safeZoneRadius vine din data (worldRef.current, actualizat
-      // la fiecare frame din rAF), nu din renderData (care se sincronizeaza cu
-      // React doar la ~15Hz si declanseaza layout+repaint pe acest element la
-      // fiecare schimbare de dimensiune). Aici scriem direct in style, ca pentru
-      // camera - elimina complet reflow-ul de React pentru zona care se strange
-      // continuu, principala cauza a lag-ului pe mobil pentru acest mod.
+      // IMPORTANT: actualizam raza zonei direct pe element (ref) via variabila
+      // CSS --zone-radius, NU prin React state si NU prin width/height.
+      // safeZoneRadius vine din data (worldRef.current, actualizat la fiecare
+      // frame din rAF), nu din renderData (care se sincronizeaza cu React doar
+      // la ~15Hz). Schimbarea unei variabile CSS pe un element cu inset:0
+      // (care nu-si schimba niciodata dimensiunea fizica) declanseaza doar
+      // repaint pe gradientul radial, NICIODATA layout reflow - identic cu
+      // pattern-ul .toxic-overlay din BattleRoyaleMode, care e deja confirmat
+      // stabil la 60fps pe mobil cu 69 de boti.
       if (zoneElementRef.current) {
-        const diameter = zoneRadius * 2;
-        zoneElementRef.current.style.width = `${diameter}px`;
-        zoneElementRef.current.style.height = `${diameter}px`;
+        zoneElementRef.current.style.setProperty("--zone-radius", `${zoneRadius}px`);
       }
 
       const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 820);
@@ -1493,12 +1504,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       >
         <div
           ref={zoneElementRef}
-          className="zone-pvp-battle-zone"
+          className="zone-pvp-toxic-overlay"
           style={{
-            left: worldWidth / 2,
-            top: worldHeight / 2,
-            width: safeZoneRadius * 2,
-            height: safeZoneRadius * 2,
+            "--zone-x": `${worldWidth / 2}px`,
+            "--zone-y": `${worldHeight / 2}px`,
+            "--zone-radius": `${safeZoneRadius}px`,
           }}
         />
       </div>

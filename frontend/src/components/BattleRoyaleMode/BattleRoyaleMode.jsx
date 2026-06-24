@@ -8,12 +8,12 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 const COLORS = ["cyan", "green", "orange", "purple", "red", "pink"];
 
-const WORLD_WIDTH = 20000;
-const WORLD_HEIGHT = 20000;
+const WORLD_WIDTH = 15000;
+const WORLD_HEIGHT = 15000;
 const VIEW_PADDING = 160;
 
-const MAX_ORBS = 1000;
-const MIN_ORBS = 160;
+const MAX_ORBS = 300;
+const MIN_ORBS = 80;
 const ORBS_PER_ALIVE_PLAYER = 5;
 const ORB_ZONE_DENSITY = 0.0000036;
 const VIEW_DISTANCE = 1400;
@@ -74,7 +74,7 @@ const SHIELD_BREAKER_SHOTS = 1;
 const BERSERK_PROJECTILE_DAMAGE = 75;
 const VAMPIRE_HEAL_RATIO = 0.25;
 
-const START_ENERGY = 100;
+const START_ENERGY = 50;
 const ENERGY_DRAIN_INTERVAL = 600;
 const ENERGY_DRAIN_AMOUNT = 1;
 const MAX_ENERGY_CELLS = 100;
@@ -200,7 +200,7 @@ function getSelectedUserSkin(user) {
 // ---------------------------------------------------------------------------
 // 59 boti + 1 player = 60 participanti total, exact cerinta.
 // ---------------------------------------------------------------------------
-const BOT_COUNT = 69;
+const BOT_COUNT = 59;
 const BOT_SPEED = PLAYER_SPEED;
 const BOT_VIEW_RANGE = 1900;
 const BOT_ATTACK_RANGE = 900;
