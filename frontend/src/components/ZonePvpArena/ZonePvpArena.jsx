@@ -513,8 +513,12 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const worldRef = useRef({
     status: "connecting",
     playerCount: 0,
-    minPlayers: 1,
-    maxPlayers: 50,
+    minPlayers: 2,
+    maxPlayers: 2,
+    countdown: null,
+    coreDropCountdown: null,
+    winnerId: null,
+    winnerName: null,
     worldWidth: WORLD_WIDTH_FALLBACK,
     worldHeight: WORLD_HEIGHT_FALLBACK,
     safeZoneRadius: ZONE_RADIUS_FALLBACK,
@@ -1459,9 +1463,14 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const activeBadges = useMemo(() => getActiveEffectBadges(hudYou), [hudYou]);
   const leaderboard = hudData.leaderboard || renderData.leaderboard || [];
   const status = hudData.status || renderData.status || "connecting";
+  const isWaiting = status === "waiting" || status === "connecting";
+  const isCountdown = status === "countdown";
+  const isMatchmaking = isWaiting || isCountdown;
   const isFinished = status === "finished";
   const playersAlive = hudData.playerCount || renderData.playerCount || 1;
-  const maxPlayers = hudData.maxPlayers || renderData.maxPlayers || 50;
+  const minPlayers = hudData.minPlayers || renderData.minPlayers || 2;
+  const maxPlayers = hudData.maxPlayers || renderData.maxPlayers || 2;
+  const countdown = hudData.countdown || renderData.countdown || 5;
   const winnerName = hudData.winnerName || renderData.winnerName;
   const coreDropCountdown = hudData.coreDropCountdown || renderData.coreDropCountdown;
 
@@ -1493,6 +1502,17 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
   return (
     <div className={`game-arena pvp-dom-arena normal-pvp-dom-arena zone-pvp-dom-arena ${isMobileControls ? "is-mobile-device is-mobile-portrait" : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""}`}>
+      {isMatchmaking && !connectionError && (
+        <div className="zone-pvp-matchmaking-screen">
+          <div className="zone-pvp-matchmaking-card">
+            <div className="zone-pvp-loader" />
+            <h1>{isCountdown ? "MATCH STARTS IN" : "WAITING FOR PLAYERS"}</h1>
+            <strong>{isCountdown ? countdown : `${Math.min(playersAlive, minPlayers)} / ${minPlayers}`}</strong>
+            <p>{isCountdown ? "Jucatorii au fost gasiti. Pregateste-te!" : "Se cauta inca un jucator pentru Zone PvP..."}</p>
+          </div>
+        </div>
+      )}
+
       <div
         ref={worldElementRef}
         className="world"
@@ -1599,7 +1619,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         </span>
       </div>
 
-      {!isFinished && (
+      {!isFinished && !isMatchmaking && (
         <div className="zone-pvp-zone-timer">
           ZONE CLOSES IN: {zoneRemainingMinutes}:{zoneRemainingSeconds}
         </div>
@@ -1673,7 +1693,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         </div>
       )}
 
-      {isMobileControls && !isDead && (
+      {isMobileControls && !isDead && !isMatchmaking && (
       <div className="pvp-mobile-controls" aria-label="Mobile PvP controls">
         <div
           className={`pvp-mobile-joystick ${mobileJoystick.active ? "is-active" : ""}`}

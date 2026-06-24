@@ -34,8 +34,9 @@ const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 50;
 // ca zona sa acopere intreaga harta de 10000x10000 la fel ca celelalte moduri
 // care au deja zona.
 // ---------------------------------------------------------------------------
-const ZONE_PVP_ROOM_MAX_PLAYERS = 50;
-const ZONE_PVP_ROOM_MIN_PLAYERS = 1;
+const ZONE_PVP_ROOM_MAX_PLAYERS = 2;
+const ZONE_PVP_ROOM_MIN_PLAYERS = 2;
+const ZONE_PVP_START_COUNTDOWN_MS = 5000;
 const ZONE_PVP_ZONE_SHRINK_DURATION = 600000;
 const ZONE_PVP_ZONE_DAMAGE = 10;
 const ZONE_PVP_ZONE_DAMAGE_INTERVAL = 1000;
@@ -469,8 +470,19 @@ export class GameGateway {
         this.zonePvpSocketRoom.set(client.id, room.id);
         client.join(room.id);
 
+        if (room.players.size >= ZONE_PVP_ROOM_MIN_PLAYERS && room.status === 'waiting') {
+            room.status = 'countdown';
+            room.countdownStartedAt = Date.now();
+            room.locked = true;
+        }
+
+        const zonePvpCountdown = room.status === 'countdown' && room.countdownStartedAt
+            ? Math.max(1, Math.ceil((ZONE_PVP_START_COUNTDOWN_MS - (Date.now() - room.countdownStartedAt)) / 1000))
+            : null;
+
         client.emit('zone-pvp:joined', {
-            status: 'playing',
+            status: room.status,
+            countdown: zonePvpCountdown,
             playerId: client.id,
             worldWidth: WORLD_WIDTH,
             worldHeight: WORLD_HEIGHT,
@@ -502,7 +514,7 @@ export class GameGateway {
     handleZonePvpInput(@ConnectedSocket() client: Socket, @MessageBody() input: any) {
         const room = this.getZonePvpRoomBySocket(client.id);
         const player = room?.players.get(client.id);
-        if (!player || !player.alive) return;
+        if (!room || room.status !== 'playing' || !player || !player.alive) return;
 
         player.input = {
             w: Boolean(input?.w),
@@ -593,16 +605,20 @@ export class GameGateway {
             }
 
             for (const room of this.zonePvpRooms.values()) {
-                const zoneRadius = this.getZonePvpZoneRadius(room);
-                this.updatePlayers(room, now, zoneRadius, deltaFrames);
-                this.applyZonePvpZoneDamage(room, now, zoneRadius);
-                this.handleBodyCollisions(room, now, zoneRadius);
-                this.collectOrbs(room, zoneRadius);
-                this.collectEnergy(room, zoneRadius);
-                this.collectCores(room, zoneRadius);
-                this.updateProjectiles(room, deltaFrames);
-                this.maintainWorldItems(room, zoneRadius, now);
-                this.updateZonePvpWinCondition(room, now);
+                this.updateZonePvpRoomStatus(room, now);
+
+                if (room.status === 'playing') {
+                    const zoneRadius = this.getZonePvpZoneRadius(room);
+                    this.updatePlayers(room, now, zoneRadius, deltaFrames);
+                    this.applyZonePvpZoneDamage(room, now, zoneRadius);
+                    this.handleBodyCollisions(room, now, zoneRadius);
+                    this.collectOrbs(room, zoneRadius);
+                    this.collectEnergy(room, zoneRadius);
+                    this.collectCores(room, zoneRadius);
+                    this.updateProjectiles(room, deltaFrames);
+                    this.maintainWorldItems(room, zoneRadius, now);
+                    this.updateZonePvpWinCondition(room, now);
+                }
 
                 const broadcastInterval = room.players.size > 30 ? 33 : 25;
 
@@ -646,6 +662,26 @@ export class GameGateway {
             }
         }
     }
+    updateZonePvpRoomStatus(room, now) {
+        if (room.status !== 'countdown') return;
+
+        if (room.players.size < ZONE_PVP_ROOM_MIN_PLAYERS) {
+            room.status = 'waiting';
+            room.locked = false;
+            room.countdownStartedAt = null;
+            return;
+        }
+
+        if (now - room.countdownStartedAt >= ZONE_PVP_START_COUNTDOWN_MS) {
+            room.status = 'playing';
+            room.locked = true;
+            room.countdownStartedAt = null;
+            room.matchStartedAt = now;
+            room.matchHadMultiplePlayers = true;
+            room.lastCoreWaveAt = now - CORE_RESPAWN_DELAY + CORE_WARNING_DELAY;
+        }
+    }
+
     updatePlayers(room, now, zoneRadius, deltaFrames = 1) {
         for (const player of room.players.values()) {
             if (!player.alive)
@@ -1399,23 +1435,16 @@ export class GameGateway {
     }
 
     updateZonePvpWinCondition(room, now) {
-        if (room.status === 'finished') return;
+        if (room.status !== 'playing') return;
 
         const alive = this.getAlivePlayers(room);
 
-        // IMPORTANT: la fel ca la celelalte moduri cu zona, room.matchHadValidStart
-        // e setat o singura data, cand camera primeste primul jucator (vezi
-        // findOrCreateZonePvpRoom), si NU se mai schimba dupa - independent de
-        // cati jucatori mai sunt conectati acum. Asta evita exact bug-ul gasit
-        // anterior (room.players.size scade la disconnect, facand conditia
-        // "size >= min" falsa pentru ultimul jucator ramas, care ramanea blocat
-        // fara victorie). Cu minim 1 jucator acceptat (joc solo posibil), un
-        // singur jucator care ramane viu dupa ce a fost cel putin 2 la un
-        // moment dat e declarat castigator; daca a fost mereu solo, nu se
-        // declara nimeni castigator (jocul continua la nesfarsit ca un sandbox).
+        // Camera declara castigator doar dupa ce meciul a pornit valid cu minim 2 jucatori.
+        // Daca unul moare, devine spectator sau se deconecteaza, ultimul ramas viu castiga.
         if (room.matchHadMultiplePlayers && alive.length <= 1) {
             const winner = alive[0] || null;
             room.status = 'finished';
+            room.locked = true;
             room.winnerId = winner?.id || null;
             room.winnerName = winner?.username || null;
             room.finishedAt = now;
@@ -1966,14 +1995,19 @@ export class GameGateway {
 
     findOrCreateZonePvpRoom() {
         for (const room of this.zonePvpRooms.values()) {
-            if (room.players.size < ZONE_PVP_ROOM_MAX_PLAYERS) {
+            if (
+                room.status === 'waiting' &&
+                !room.locked &&
+                room.players.size < ZONE_PVP_ROOM_MAX_PLAYERS
+            ) {
                 return room;
             }
         }
 
         const room = {
             id: `zone-pvp-${crypto.randomUUID()}`,
-            status: 'playing',
+            status: 'waiting',
+            locked: false,
             players: new Map(),
             orbs: Array.from({ length: MAX_ORBS }, () => this.createOrb(ZONE_START_RADIUS)),
             energyCells: Array.from({ length: MAX_ENERGY_CELLS }, () => this.createEnergyCell(ZONE_START_RADIUS)),
@@ -1982,9 +2016,9 @@ export class GameGateway {
             projectiles: [],
             countdownStartedAt: null,
             createdAt: Date.now(),
-            matchStartedAt: Date.now(),
+            matchStartedAt: null,
             matchHadMultiplePlayers: false,
-            lastCoreWaveAt: Date.now() - CORE_RESPAWN_DELAY + CORE_WARNING_DELAY,
+            lastCoreWaveAt: 0,
             nextCoreWaveAt: null,
             lastLocalItemAt: 0,
             lastBroadcastAt: 0,
@@ -2047,13 +2081,9 @@ export class GameGateway {
         const players = [...room.players.values()];
         const alivePlayers = players.filter((player) => player.alive);
         const zoneRadius = this.getZonePvpZoneRadius(room);
-
-        // IMPORTANT: marcam o singura data, ireversibil, ca camera a avut
-        // vreodata >= 2 jucatori - folosit de updateZonePvpWinCondition ca
-        // sa decida cand sa declare un castigator (vezi comentariul de acolo).
-        if (players.length >= 2) {
-            room.matchHadMultiplePlayers = true;
-        }
+        const zonePvpCountdown = room.status === 'countdown' && room.countdownStartedAt
+            ? Math.max(1, Math.ceil((ZONE_PVP_START_COUNTDOWN_MS - (now - room.countdownStartedAt)) / 1000))
+            : null;
 
         const leaderboard = players
             .slice()
@@ -2133,7 +2163,7 @@ export class GameGateway {
 
             socket.volatile.emit('zone-pvp:state', {
                 status: room.status,
-                countdown: null,
+                countdown: zonePvpCountdown,
                 coreDropCountdown,
                 winnerId: room.winnerId,
                 winnerName: room.winnerName,

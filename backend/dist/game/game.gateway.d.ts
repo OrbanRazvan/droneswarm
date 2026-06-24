@@ -29,6 +29,7 @@ export declare class GameGateway {
     startLoop(): void;
     updateRoomStatus(room: any, now: any): void;
     updateBattleRoyaleOnlineRoomStatus(room: any, now: any): void;
+    updateZonePvpRoomStatus(room: any, now: any): void;
     updatePlayers(room: any, now: any, zoneRadius: any, deltaFrames?: number): void;
     getNextDroneAt(currentDrones?: number): number;
     resetDroneProgress(player: any): void;
