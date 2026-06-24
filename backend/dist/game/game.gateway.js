@@ -39,6 +39,18 @@ const ZONE_PVP_ZONE_SHRINK_DURATION = 600000;
 const ZONE_PVP_ZONE_DAMAGE = 10;
 const ZONE_PVP_ZONE_DAMAGE_INTERVAL = 1000;
 const ZONE_PVP_VISIBLE_PLAYERS_LIMIT = 60;
+const ZONE_PVP_BOT_VIEW_RANGE = 1900;
+const ZONE_PVP_BOT_ATTACK_RANGE = 900;
+const ZONE_PVP_BOT_FARM_UNTIL_DRONES = 2;
+const ZONE_PVP_BOT_LOW_HP = 35;
+const ZONE_PVP_BOT_SAFE_DISTANCE = 620;
+const ZONE_PVP_BOT_ZONE_EDGE_BUFFER = 560;
+const ZONE_PVP_BOT_MIN_SPAWN_DISTANCE = 1250;
+const ZONE_PVP_REAL_PLAYER_BOT_SPAWN_DISTANCE = 1450;
+const ZONE_PVP_SPAWN_SAFE_ZONE_MARGIN = 1250;
+const ZONE_PVP_BOT_AVOID_RADIUS = 340;
+const ZONE_PVP_BOT_DECISION_INTERVAL_MIN = 120;
+const ZONE_PVP_BOT_DECISION_INTERVAL_MAX = 260;
 const COLLISION_GRID_CELL_SIZE = 600;
 const ROOM_START_COUNTDOWN_MS = 5000;
 const MAP_MIN_SIZE = Math.min(WORLD_WIDTH, WORLD_HEIGHT);
@@ -1887,9 +1899,45 @@ let GameGateway = class GameGateway {
     getZonePvpRealPlayerCount(room) {
         return [...room.players.values()].filter((player) => !player.isBot).length;
     }
-    createZonePvpBot(index, room, now) {
-        const zoneRadius = this.getZonePvpZoneRadius(room);
-        const spawn = this.getSafeSpawn(room, zoneRadius);
+    getZonePvpRandomSpawnPoint(room, usedSpawns = [], minDistance = ZONE_PVP_BOT_MIN_SPAWN_DISTANCE) {
+        const centerX = WORLD_WIDTH / 2;
+        const centerY = WORLD_HEIGHT / 2;
+        const safeSpawnRadius = Math.max(800, ZONE_START_RADIUS - ZONE_PVP_SPAWN_SAFE_ZONE_MARGIN);
+        const existingPoints = [
+            ...[...room.players.values()].map((player) => ({ x: player.x, y: player.y })),
+            ...usedSpawns,
+        ].filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+        for (let attempt = 0; attempt < 2500; attempt += 1) {
+            const angle = Math.random() * Math.PI * 2;
+            const distance = Math.sqrt(Math.random()) * safeSpawnRadius;
+            const x = this.clamp(centerX + Math.cos(angle) * distance, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
+            const y = this.clamp(centerY + Math.sin(angle) * distance, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
+            const isFarEnough = existingPoints.every((other) => {
+                return Math.hypot(x - other.x, y - other.y) >= minDistance;
+            });
+            if (isFarEnough && this.isInsideSafeZone(x, y, ZONE_START_RADIUS, 700)) {
+                return { x, y };
+            }
+        }
+        for (let attempt = 0; attempt < 1400; attempt += 1) {
+            const angle = Math.random() * Math.PI * 2;
+            const distance = Math.sqrt(Math.random()) * safeSpawnRadius;
+            const x = this.clamp(centerX + Math.cos(angle) * distance, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
+            const y = this.clamp(centerY + Math.sin(angle) * distance, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
+            const isFarEnough = existingPoints.every((other) => {
+                return Math.hypot(x - other.x, y - other.y) >= minDistance * 0.62;
+            });
+            if (isFarEnough && this.isInsideSafeZone(x, y, ZONE_START_RADIUS, 500)) {
+                return { x, y };
+            }
+        }
+        return {
+            x: centerX + (Math.random() - 0.5) * safeSpawnRadius * 0.55,
+            y: centerY + (Math.random() - 0.5) * safeSpawnRadius * 0.55,
+        };
+    }
+    createZonePvpBot(index, room, now, spawnPoint = null) {
+        const spawn = spawnPoint || this.getZonePvpRandomSpawnPoint(room, [], ZONE_PVP_BOT_MIN_SPAWN_DISTANCE);
         const skins = [
             'cyan', 'red', 'purple', 'orange', 'green', 'pink',
             'ice-blue', 'solar-gold', 'shadow-black', 'toxic-lime',
@@ -1931,11 +1979,21 @@ let GameGateway = class GameGateway {
             knockbackX: 0,
             knockbackY: 0,
             gridKey: null,
+            prevX: spawn.x,
+            prevY: spawn.y,
             aiPlanUntil: 0,
             aiTargetId: null,
-            aiAggression: 0.85 + Math.random() * 0.45,
-            aiCourage: 0.9 + Math.random() * 0.5,
-            preferredRange: 520 + Math.random() * 240,
+            aiState: 'farm',
+            aiStrafeDir: Math.random() < 0.5 ? -1 : 1,
+            aiAggression: 0.92 + Math.random() * 0.5,
+            aiCourage: 1.05 + Math.random() * 0.45,
+            aiSkill: 0.92 + Math.random() * 0.35,
+            preferredRange: 520 + Math.random() * 170,
+            desiredDroneStock: 3 + Math.floor(Math.random() * 2),
+            wanderAngle: Math.random() * Math.PI * 2,
+            vx: 0,
+            vy: 0,
+            dangerMemory: [],
         };
     }
     ensureZonePvpBots(room, now) {
@@ -1943,8 +2001,11 @@ let GameGateway = class GameGateway {
             return;
         const existingBots = [...room.players.values()].filter((player) => player.isBot).length;
         const botsToAdd = Math.max(0, ZONE_PVP_BOT_COUNT - existingBots);
+        const usedSpawns = [];
         for (let i = 0; i < botsToAdd; i += 1) {
-            const bot = this.createZonePvpBot(i, room, now);
+            const spawnPoint = this.getZonePvpRandomSpawnPoint(room, usedSpawns, ZONE_PVP_BOT_MIN_SPAWN_DISTANCE);
+            usedSpawns.push(spawnPoint);
+            const bot = this.createZonePvpBot(i, room, now, spawnPoint);
             room.players.set(bot.id, bot);
         }
         room.botsInjected = true;
@@ -1955,25 +2016,76 @@ let GameGateway = class GameGateway {
             (unit.totalCollected || 0) * 2 +
             (unit.kills || 0) * 22);
     }
+    getZonePvpZoneInfo(x, y, radius) {
+        const centerX = WORLD_WIDTH / 2;
+        const centerY = WORLD_HEIGHT / 2;
+        const dx = centerX - x;
+        const dy = centerY - y;
+        const distanceFromCenter = Math.hypot(dx, dy) || 1;
+        return {
+            distanceFromCenter,
+            dangerDistance: radius - distanceFromCenter,
+            isInDanger: distanceFromCenter > radius - ZONE_PVP_BOT_ZONE_EDGE_BUFFER,
+            moveToCenterX: dx / distanceFromCenter,
+            moveToCenterY: dy / distanceFromCenter,
+        };
+    }
+    getZonePvpBotAvoidance(bot, room, avoidRadius = ZONE_PVP_BOT_AVOID_RADIUS) {
+        let avoidX = 0;
+        let avoidY = 0;
+        for (const other of room.players.values()) {
+            if (!other.alive || other.id === bot.id)
+                continue;
+            const dx = bot.x - other.x;
+            const dy = bot.y - other.y;
+            const distance = Math.hypot(dx, dy) || 1;
+            if (distance < avoidRadius) {
+                const force = (avoidRadius - distance) / avoidRadius;
+                avoidX += (dx / distance) * force;
+                avoidY += (dy / distance) * force;
+            }
+        }
+        return { avoidX, avoidY };
+    }
+    isZonePvpPointSafeForBot(x, y, zoneRadius, margin = ZONE_PVP_BOT_ZONE_EDGE_BUFFER) {
+        return this.isInsideSafeZone(x, y, zoneRadius, margin);
+    }
     findClosestZonePvpItem(bot, items, zoneRadius, maxDistance, validator = null) {
         let best = null;
-        let bestDistance = Infinity;
+        let bestScore = Infinity;
         for (const item of items || []) {
             if (!item)
                 continue;
             if (validator && !validator(item))
+                continue;
+            if (!this.isZonePvpPointSafeForBot(item.x, item.y, zoneRadius, 120))
                 continue;
             const dx = (item.x || 0) - bot.x;
             const dy = (item.y || 0) - bot.y;
             if (Math.abs(dx) > maxDistance || Math.abs(dy) > maxDistance)
                 continue;
             const distance = Math.hypot(dx, dy);
-            if (distance < bestDistance) {
+            let score = distance;
+            if ((bot.hp || 0) <= ZONE_PVP_BOT_LOW_HP && item.type === 'nano')
+                score -= 520;
+            if ((bot.drones || 0) < 2 && item.type === 'swarm')
+                score -= 420;
+            if ((bot.drones || 0) >= 1 && (item.type === 'overclock' || item.type === 'berserk'))
+                score -= 320;
+            if ((bot.energy || 0) < 40 && !item.type)
+                score -= 260;
+            if (score < bestScore) {
+                bestScore = score;
                 best = item;
-                bestDistance = distance;
             }
         }
         return best;
+    }
+    findBestZonePvpCoreForBot(bot, room, zoneRadius) {
+        return this.findClosestZonePvpItem(bot, room.cores, zoneRadius, ZONE_PVP_BOT_VIEW_RANGE, (core) => this.canUseCore(bot, core));
+    }
+    shouldZonePvpBotFarm(bot) {
+        return (bot.drones || 0) < ZONE_PVP_BOT_FARM_UNTIL_DRONES && (bot.hp || 0) > ZONE_PVP_BOT_LOW_HP;
     }
     findZonePvpBotEnemy(bot, room) {
         let bestEnemy = null;
@@ -1984,36 +2096,79 @@ let GameGateway = class GameGateway {
                 continue;
             const dx = enemy.x - bot.x;
             const dy = enemy.y - bot.y;
-            if (Math.abs(dx) > 2100 || Math.abs(dy) > 2100)
+            if (Math.abs(dx) > ZONE_PVP_BOT_VIEW_RANGE || Math.abs(dy) > ZONE_PVP_BOT_VIEW_RANGE)
                 continue;
             const distance = Math.hypot(dx, dy);
-            if (distance > 2100)
+            if (distance > ZONE_PVP_BOT_VIEW_RANGE)
                 continue;
             const enemyPower = this.getZonePvpBotPower(enemy);
             const enemyWeak = enemy.hp <= 55 || (enemy.drones || 0) <= 1;
             const hasDroneAdvantage = (bot.drones || 0) >= (enemy.drones || 0) + 1;
-            const canAttack = (bot.drones || 0) > 0;
-            if (!canAttack)
+            const hasEnoughAmmo = (bot.drones || 0) >= 1;
+            const canWin = hasEnoughAmmo && (hasDroneAdvantage || enemyWeak || botPower >= enemyPower * 0.95);
+            if (!hasEnoughAmmo)
                 continue;
+            if ((bot.drones || 0) < ZONE_PVP_BOT_FARM_UNTIL_DRONES && !enemyWeak && !hasDroneAdvantage && distance > 420) {
+                continue;
+            }
             let score = distance;
             if (!enemy.isBot)
-                score -= 140;
+                score -= 130;
             if (enemyWeak)
-                score -= 320;
+                score -= 300;
             if (hasDroneAdvantage)
-                score -= 280;
-            if (botPower >= enemyPower * 0.9)
-                score -= 180;
-            if ((bot.hp || 0) <= 30 && enemyPower > botPower * 1.2)
-                score += 520;
-            if ((bot.drones || 0) <= 1 && !enemyWeak && distance > 520)
-                score += 360;
+                score -= 360;
+            if (canWin)
+                score -= 220;
+            if (enemy.hp < bot.hp)
+                score -= 100;
+            if (!canWin)
+                score += 320;
+            if ((bot.hp || 0) <= ZONE_PVP_BOT_LOW_HP && enemyPower > botPower * 1.15)
+                score += 560;
+            if (distance < 260 && enemyPower > botPower * 1.15)
+                score += 300;
             if (score < bestScore) {
                 bestScore = score;
-                bestEnemy = { ...enemy, distance };
+                bestEnemy = {
+                    id: enemy.id,
+                    x: enemy.x,
+                    y: enemy.y,
+                    hp: enemy.hp,
+                    maxHp: enemy.maxHp,
+                    drones: enemy.drones,
+                    totalCollected: enemy.totalCollected || 0,
+                    kills: enemy.kills || 0,
+                    isBot: enemy.isBot,
+                    distance,
+                    enemyWeak,
+                    hasDroneAdvantage,
+                    canWin,
+                    enemyPower,
+                    botPower,
+                };
             }
         }
         return bestEnemy;
+    }
+    setZonePvpBotInput(bot, targetX, targetY, options = {}) {
+        const dx = targetX - bot.x;
+        const dy = targetY - bot.y;
+        const distance = Math.hypot(dx, dy) || 1;
+        bot.input = {
+            w: dy < -22,
+            s: dy > 22,
+            a: dx < -22,
+            d: dx > 22,
+            attacking: Boolean(options.attacking),
+            shield: Boolean(options.shield),
+            mouseX: options.mouseX ?? targetX,
+            mouseY: options.mouseY ?? targetY,
+        };
+        bot.moveX = dx / distance;
+        bot.moveY = dy / distance;
+        bot.moveAngle = Math.atan2(dy, dx);
+        bot.isMoving = Math.abs(dx) > 22 || Math.abs(dy) > 22;
     }
     updateZonePvpBots(room, now, zoneRadius) {
         const centerX = WORLD_WIDTH / 2;
@@ -2022,83 +2177,104 @@ let GameGateway = class GameGateway {
             if (!bot.isBot || !bot.alive)
                 continue;
             bot.lastSeenAt = now;
-            const zoneDx = centerX - bot.x;
-            const zoneDy = centerY - bot.y;
-            const distanceFromCenter = Math.hypot(zoneDx, zoneDy) || 1;
-            const distanceToEdge = zoneRadius - distanceFromCenter;
-            let targetX = bot.x;
-            let targetY = bot.y;
-            let attacking = false;
-            let shield = false;
-            const enemy = this.findZonePvpBotEnemy(bot, room);
-            const shouldFarm = (bot.drones || 0) < 2 && (bot.hp || 0) > 35;
-            if (distanceToEdge < 520) {
-                targetX = bot.x + (zoneDx / distanceFromCenter) * 900;
-                targetY = bot.y + (zoneDy / distanceFromCenter) * 900;
-                bot.aiTargetId = null;
-            }
-            else if (enemy && (!shouldFarm || enemy.distance < 520)) {
-                const dx = enemy.x - bot.x;
-                const dy = enemy.y - bot.y;
-                const dist = Math.hypot(dx, dy) || 1;
-                const desiredRange = bot.preferredRange || 620;
-                if (dist > desiredRange) {
-                    targetX = enemy.x;
-                    targetY = enemy.y;
-                }
-                else if (dist < desiredRange * 0.65) {
-                    targetX = bot.x - (dx / dist) * 600;
-                    targetY = bot.y - (dy / dist) * 600;
-                }
-                else {
-                    const strafe = bot.id.charCodeAt(bot.id.length - 1) % 2 === 0 ? 1 : -1;
-                    targetX = bot.x + (-dy / dist) * 520 * strafe;
-                    targetY = bot.y + (dx / dist) * 520 * strafe;
-                }
-                bot.input = {
-                    w: targetY < bot.y - 20,
-                    s: targetY > bot.y + 20,
-                    a: targetX < bot.x - 20,
-                    d: targetX > bot.x + 20,
-                    attacking: true,
-                    shield: false,
-                    mouseX: enemy.x,
-                    mouseY: enemy.y,
-                };
+            if (bot.aiPlanUntil && now < bot.aiPlanUntil) {
                 continue;
             }
+            bot.aiPlanUntil = now + ZONE_PVP_BOT_DECISION_INTERVAL_MIN + Math.random() * (ZONE_PVP_BOT_DECISION_INTERVAL_MAX - ZONE_PVP_BOT_DECISION_INTERVAL_MIN);
+            const zoneInfo = this.getZonePvpZoneInfo(bot.x, bot.y, zoneRadius);
+            const avoidance = this.getZonePvpBotAvoidance(bot, room, ZONE_PVP_BOT_AVOID_RADIUS);
+            let targetX = bot.x;
+            let targetY = bot.y;
+            let aimX = targetX;
+            let aimY = targetY;
+            let attacking = false;
+            let shield = false;
+            let speedPressureX = 0;
+            let speedPressureY = 0;
+            if (zoneInfo.dangerDistance < ZONE_PVP_BOT_ZONE_EDGE_BUFFER) {
+                bot.aiState = 'escape-zone';
+                speedPressureX += zoneInfo.moveToCenterX * 1200;
+                speedPressureY += zoneInfo.moveToCenterY * 1200;
+                targetX = bot.x + speedPressureX;
+                targetY = bot.y + speedPressureY;
+                aimX = targetX;
+                aimY = targetY;
+            }
             else {
-                const needsEnergy = (bot.energy || 0) < 45;
-                const energyTarget = needsEnergy
-                    ? this.findClosestZonePvpItem(bot, room.energyCells, zoneRadius, 1900)
-                    : null;
-                const coreTarget = this.findClosestZonePvpItem(bot, room.cores, zoneRadius, 1900);
-                const orbTarget = this.findClosestZonePvpItem(bot, room.orbs, zoneRadius, 1900);
-                const target = energyTarget || coreTarget || orbTarget;
-                if (target) {
-                    targetX = target.x;
-                    targetY = target.y;
-                    bot.aiTargetId = target.id;
+                const enemy = this.findZonePvpBotEnemy(bot, room);
+                const shouldFarm = this.shouldZonePvpBotFarm(bot);
+                if (enemy && (!shouldFarm || enemy.distance < 520 || enemy.enemyWeak || enemy.hasDroneAdvantage)) {
+                    const dx = enemy.x - bot.x;
+                    const dy = enemy.y - bot.y;
+                    const dist = Math.hypot(dx, dy) || 1;
+                    const desiredRange = bot.preferredRange || ZONE_PVP_BOT_SAFE_DISTANCE;
+                    const strafe = bot.aiStrafeDir || 1;
+                    bot.aiState = 'fight';
+                    aimX = enemy.x + (enemy.moveX || 0) * 120 * (bot.aiSkill || 1);
+                    aimY = enemy.y + (enemy.moveY || 0) * 120 * (bot.aiSkill || 1);
+                    attacking = dist <= ZONE_PVP_BOT_ATTACK_RANGE && (bot.drones || 0) > 0;
+                    if (dist > desiredRange) {
+                        targetX = enemy.x;
+                        targetY = enemy.y;
+                    }
+                    else if (dist < desiredRange * 0.65 || ((bot.hp || 0) <= ZONE_PVP_BOT_LOW_HP && enemy.enemyPower > enemy.botPower)) {
+                        targetX = bot.x - (dx / dist) * 680;
+                        targetY = bot.y - (dy / dist) * 680;
+                    }
+                    else {
+                        targetX = bot.x + (-dy / dist) * 560 * strafe;
+                        targetY = bot.y + (dx / dist) * 560 * strafe;
+                    }
+                    if (Math.random() < 0.035) {
+                        bot.aiStrafeDir *= -1;
+                    }
+                    shield = Boolean((bot.hp || 0) <= 45 && (bot.energy || 0) >= 20 && enemy.distance < 650 && Math.random() < 0.35);
                 }
                 else {
-                    const angle = ((now / 1800) + bot.id.length) % (Math.PI * 2);
-                    targetX = centerX + Math.cos(angle) * Math.max(500, zoneRadius * 0.48);
-                    targetY = centerY + Math.sin(angle) * Math.max(500, zoneRadius * 0.48);
+                    const needsEnergy = (bot.energy || 0) <= 48;
+                    const energyTarget = needsEnergy
+                        ? this.findClosestZonePvpItem(bot, room.energyCells, zoneRadius, ZONE_PVP_BOT_VIEW_RANGE)
+                        : null;
+                    const coreTarget = this.findBestZonePvpCoreForBot(bot, room, zoneRadius);
+                    const orbTarget = this.findClosestZonePvpItem(bot, room.orbs, zoneRadius, ZONE_PVP_BOT_VIEW_RANGE);
+                    const target = energyTarget || coreTarget || orbTarget;
+                    if (target) {
+                        bot.aiState = target.type ? 'core' : needsEnergy && energyTarget ? 'energy' : 'farm';
+                        bot.aiTargetId = target.id;
+                        targetX = target.x;
+                        targetY = target.y;
+                        aimX = target.x;
+                        aimY = target.y;
+                    }
+                    else {
+                        bot.aiState = 'wander';
+                        bot.wanderAngle = (bot.wanderAngle || 0) + (Math.random() - 0.5) * 0.9;
+                        const wanderRadius = Math.max(520, Math.min(zoneRadius * 0.52, 2100));
+                        targetX = centerX + Math.cos(bot.wanderAngle) * wanderRadius;
+                        targetY = centerY + Math.sin(bot.wanderAngle) * wanderRadius;
+                        aimX = targetX;
+                        aimY = targetY;
+                    }
                 }
             }
-            if ((bot.hp || 0) <= 35 && (bot.drones || 0) > 0 && (bot.energy || 0) >= 20) {
-                shield = Math.random() < 0.12;
+            targetX += avoidance.avoidX * 620;
+            targetY += avoidance.avoidY * 620;
+            targetX = this.clamp(targetX, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
+            targetY = this.clamp(targetY, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
+            if (!this.isInsideSafeZone(targetX, targetY, zoneRadius, 160)) {
+                const dx = targetX - centerX;
+                const dy = targetY - centerY;
+                const dist = Math.hypot(dx, dy) || 1;
+                const safeRadius = Math.max(160, zoneRadius - 180);
+                targetX = centerX + (dx / dist) * safeRadius;
+                targetY = centerY + (dy / dist) * safeRadius;
             }
-            bot.input = {
-                w: targetY < bot.y - 22,
-                s: targetY > bot.y + 22,
-                a: targetX < bot.x - 22,
-                d: targetX > bot.x + 22,
+            this.setZonePvpBotInput(bot, targetX, targetY, {
                 attacking,
                 shield,
-                mouseX: targetX,
-                mouseY: targetY,
-            };
+                mouseX: aimX,
+                mouseY: aimY,
+            });
         }
     }
     broadcastZonePvpRoomState(room, now) {
