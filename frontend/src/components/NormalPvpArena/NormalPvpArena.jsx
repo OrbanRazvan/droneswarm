@@ -1720,7 +1720,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const nextDroneAt = hudYou?.nextDroneAt ?? 5;
 
   return (
-    <div className={`game-arena pvp-dom-arena normal-pvp-dom-arena ${isMobileControls ? "is-mobile-device is-mobile-portrait" : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""}`}>
+    <div className={`game-arena pvp-dom-arena normal-pvp-dom-arena ${isMobileControls ? "is-mobile is-mobile-device is-mobile-portrait" : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""}`}>
       {isMatchmaking && !connectionError && (
         <div className="normal-pvp-matchmaking-screen">
           <div className="normal-pvp-matchmaking-card">
@@ -1908,9 +1908,9 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       )}
 
       {isMobileControls && !isDead && !isMatchmaking && (
-      <div className="pvp-mobile-controls" aria-label="Mobile PvP controls">
+      <div className="pvp-mobile-controls mobile-controls" aria-label="Mobile PvP controls">
         <div
-          className={`pvp-mobile-joystick ${mobileJoystick.active ? "is-active" : ""}`}
+          className={`pvp-mobile-joystick mobile-joystick ${mobileJoystick.active ? "is-active" : ""}`}
           onPointerDown={onJoystickPointerDown}
           onPointerMove={onJoystickPointerMove}
           onPointerUp={stopJoystick}
@@ -1918,17 +1918,17 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         >
           <div className="pvp-mobile-joystick-ring" />
           <div
-            className="pvp-mobile-joystick-knob"
+            className="pvp-mobile-joystick-knob mobile-joystick-knob"
             style={{
               transform: `translate(calc(-50% + ${mobileJoystick.knobX}px), calc(-50% + ${mobileJoystick.knobY}px))`,
             }}
           />
         </div>
 
-        <div className="pvp-mobile-buttons">
+        <div className="pvp-mobile-buttons mobile-action-row">
           <button
             type="button"
-            className={`pvp-mobile-action pvp-mobile-shield ${mobileShieldActive ? "is-active" : ""}`}
+            className={`pvp-mobile-action pvp-mobile-shield mobile-action-btn mobile-shield-btn ${mobileShieldActive ? "is-active" : ""}`}
             onPointerDown={onShieldPointerDown}
             onPointerUp={stopMobileShield}
             onPointerCancel={stopMobileShield}
@@ -1938,7 +1938,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
           <button
             type="button"
-            className={`pvp-mobile-action pvp-mobile-attack ${mobileAttackActive ? "is-active" : ""}`}
+            className={`pvp-mobile-action pvp-mobile-attack mobile-action-btn mobile-attack-btn ${mobileAttackActive ? "is-active is-aiming" : ""}`}
             onPointerDown={onAttackPointerDown}
             onPointerMove={onAttackPointerMove}
             onPointerUp={stopMobileAttack}
