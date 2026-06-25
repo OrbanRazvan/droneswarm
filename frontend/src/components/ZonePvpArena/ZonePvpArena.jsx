@@ -640,6 +640,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const lastConfirmedHpRef = useRef(null);
   const localBattlePrepareUntilRef = useRef(0);
   const localBattleBeginFlashUntilRef = useRef(0);
+  const battlePrepareWasVisibleRef = useRef(false);
   const lastArenaStatusRef = useRef("connecting");
 
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
@@ -695,6 +696,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const [mobileJoystick, setMobileJoystick] = useState({ active: false, knobX: 0, knobY: 0 });
   const [mobileAttackActive, setMobileAttackActive] = useState(false);
   const [mobileShieldActive, setMobileShieldActive] = useState(false);
+  const [battleBeginFlashUntil, setBattleBeginFlashUntil] = useState(0);
 
   useEffect(() => {
     const socket = io(API_URL, {
@@ -1692,8 +1694,25 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const battlePrepareSeconds = Math.max(0, Math.ceil(battlePrepareRemainingMs / 1000));
   const showBattleBeginFlash = !isMatchmaking && !isFinished && !isBattlePrepare && (
     getBattleBeginFlashActive(battlePrepareSource) ||
-    ((localBattleBeginFlashUntilRef.current || 0) > Date.now())
+    ((localBattleBeginFlashUntilRef.current || 0) > Date.now()) ||
+    battleBeginFlashUntil > Date.now()
   );
+
+  // Fix vizual: cand PREPARE PHASE trece la 0, afisam sigur BATTLE BEGIN
+  // in centru, chiar daca pachetul de server ajunge fara battleBeginFlashUntil.
+  useEffect(() => {
+    if (isBattlePrepare) {
+      battlePrepareWasVisibleRef.current = true;
+      return;
+    }
+
+    if (battlePrepareWasVisibleRef.current && !isMatchmaking && !isFinished) {
+      battlePrepareWasVisibleRef.current = false;
+      const until = Date.now() + 1600;
+      localBattleBeginFlashUntilRef.current = Math.max(localBattleBeginFlashUntilRef.current || 0, until);
+      setBattleBeginFlashUntil(until);
+    }
+  }, [isBattlePrepare, isMatchmaking, isFinished]);
 
   // IMPORTANT: cand meciul se termina (status === "finished"), nu mai
   // asteptam un click manual pe "EXIT TO MENU" - scoatem automat jucatorul
