@@ -90,7 +90,7 @@ const VAMPIRE_HEAL_RATIO = 0.25;
 const SWARM_CORE_DRONES = 2;
 const SHIELD_BREAKER_SHOTS = 1;
 const BODY_COLLISION_DISTANCE = 145;
-const BODY_COLLISION_COOLDOWN = 650;
+const BODY_COLLISION_COOLDOWN = 220;
 const BODY_COLLISION_BOTH_HAVE_DRONES_DAMAGE = 5;
 const BODY_COLLISION_BOTH_NO_DRONES_DAMAGE = 15;
 const BODY_COLLISION_WITH_DRONES_DAMAGE = 5;
@@ -98,7 +98,7 @@ const BODY_COLLISION_WITHOUT_DRONES_DAMAGE = 15;
 const BODY_COLLISION_LIGHT_PUSH = 6;
 const BODY_COLLISION_MEDIUM_PUSH = 9;
 const BODY_COLLISION_STRONG_PUSH = 12;
-const BODY_COLLISION_PUSH_DECAY = 0.95;
+const BODY_COLLISION_PUSH_DECAY = 0.82;
 const BODY_COLLISION_PUSH_MIN = 0.04;
 const CORE_TYPES = [
     'nano',
@@ -275,6 +275,10 @@ export class GameGateway {
             knockbackX: 0,
             knockbackY: 0,
             gridKey: null,
+            lastProcessedInputSeq: 0,
+            pendingInputSeq: 0,
+            lastInputReceivedAt: Date.now(),
+            lastDamageEventAt: 0,
         };
 
         room.players.set(client.id, player);
@@ -367,6 +371,10 @@ export class GameGateway {
             knockbackX: 0,
             knockbackY: 0,
             gridKey: null,
+            lastProcessedInputSeq: 0,
+            pendingInputSeq: 0,
+            lastInputReceivedAt: Date.now(),
+            lastDamageEventAt: 0,
         };
 
         room.players.set(client.id, player);
@@ -464,6 +472,10 @@ export class GameGateway {
             knockbackX: 0,
             knockbackY: 0,
             gridKey: null,
+            lastProcessedInputSeq: 0,
+            pendingInputSeq: 0,
+            lastInputReceivedAt: Date.now(),
+            lastDamageEventAt: 0,
         };
 
         room.players.set(client.id, player);
@@ -516,16 +528,26 @@ export class GameGateway {
         const player = room?.players.get(client.id);
         if (!room || room.status !== 'playing' || !player || !player.alive) return;
 
+        const seq = Number(input?.seq || 0);
         player.input = {
+            seq: Number.isFinite(seq) ? seq : 0,
+            dt: Math.max(1, Math.min(50, Number(input?.dt || 16))),
+            clientSentAt: Number(input?.clientSentAt || 0),
+            serverReceivedAt: Date.now(),
             w: Boolean(input?.w),
             a: Boolean(input?.a),
             s: Boolean(input?.s),
             d: Boolean(input?.d),
+            moveX: Number(input?.moveX || 0),
+            moveY: Number(input?.moveY || 0),
+            mobileMove: Boolean(input?.mobileMove),
             attacking: Boolean(input?.attacking),
             shield: Boolean(input?.shield),
             mouseX: Number(input?.mouseX || player.x),
             mouseY: Number(input?.mouseY || player.y),
         };
+        player.pendingInputSeq = player.input.seq;
+        player.lastInputReceivedAt = Date.now();
         player.lastSeenAt = Date.now();
     }
 
@@ -620,7 +642,7 @@ export class GameGateway {
                     this.updateZonePvpWinCondition(room, now);
                 }
 
-                const broadcastInterval = room.players.size > 30 ? 33 : 25;
+                const broadcastInterval = 16;
 
                 if (!room.lastBroadcastAt || now - room.lastBroadcastAt >= broadcastInterval) {
                     room.lastBroadcastAt = now;
@@ -697,6 +719,10 @@ export class GameGateway {
                 dx -= 1;
             if (input.d)
                 dx += 1;
+            if (input.mobileMove) {
+                dx += Number(input.moveX || 0);
+                dy += Number(input.moveY || 0);
+            }
             const isMovingInput = dx !== 0 || dy !== 0;
             if (isMovingInput && now - player.lastEnergyDrainAt >= ENERGY_DRAIN_INTERVAL) {
                 player.energy = Math.max(0, player.energy - ENERGY_DRAIN_AMOUNT);
@@ -748,6 +774,9 @@ export class GameGateway {
             }
             if (input.attacking) {
                 this.tryFireProjectile(room, player, now);
+            }
+            if (Number(input.seq || 0) > 0) {
+                player.lastProcessedInputSeq = Math.max(player.lastProcessedInputSeq || 0, Number(input.seq || 0));
             }
         }
     }
@@ -1560,6 +1589,9 @@ export class GameGateway {
             berserkUntil: player.berserkUntil || 0,
             vampireUntil: player.vampireUntil || 0,
             empPulseUntil: player.empPulseUntil || 0,
+            lastProcessedInputSeq: player.lastProcessedInputSeq || 0,
+            serverTime: Date.now(),
+            lastInputReceivedAt: player.lastInputReceivedAt || 0,
         };
     }
     findOrCreateNormalRoom() {

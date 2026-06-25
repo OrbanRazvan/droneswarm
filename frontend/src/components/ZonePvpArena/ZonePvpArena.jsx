@@ -20,17 +20,17 @@ const CLIENT_SPEED = GAME_FRAME_SPEED * 60;
 
 // Delta-time smoothing. Valorile sunt "pe secunda", nu pe frame.
 // Asta inseamna ca jocul se simte la fel la 45 FPS, 60 FPS sau 144 FPS.
-const SELF_CORRECTION_MOVING = 0.08;
+const SELF_CORRECTION_MOVING = 0.22;
 const SELF_CORRECTION_IDLE = 0;
 const SELF_SNAP_DISTANCE = 0.25;
-const SELF_HARD_SNAP_DISTANCE = 900;
-const SELF_MAX_CORRECTION_SPEED = 520; // px/sec - viteza maxima cu care predictia se "trage" spre server
+const SELF_HARD_SNAP_DISTANCE = 420;
+const SELF_MAX_CORRECTION_SPEED = 1400; // px/sec - viteza maxima cu care predictia se "trage" spre server
 const SELF_IDLE_FREEZE_DISTANCE = 360;
 
-const REMOTE_SMOOTHING = 10.5;
+const REMOTE_SMOOTHING = 24;
 const REMOTE_PREDICTION = 1.0;
-const REMOTE_HARD_SNAP_DISTANCE = 980;
-const REMOTE_MAX_EXTRAPOLATE_MS = 110;
+const REMOTE_HARD_SNAP_DISTANCE = 360;
+const REMOTE_MAX_EXTRAPOLATE_MS = 80;
 
 const PROJECTILE_SMOOTHING = 18;
 const PROJECTILE_FRAME_SCALE = 60;
@@ -51,6 +51,13 @@ const LOCAL_ORB_COLLECT_DISTANCE = 150;
 const LOCAL_ENERGY_COLLECT_DISTANCE = 135;
 const LOCAL_CORE_COLLECT_DISTANCE = 155;
 const LOCAL_COLLECT_HIDE_TTL = 1800;
+
+// Multiplayer modern sync
+// Client-side prediction + server reconciliation + remote snapshot buffer.
+const INPUT_SEND_INTERVAL_MS = 16;
+const SNAPSHOT_INTERPOLATION_DELAY_MS = 90;
+const SNAPSHOT_BUFFER_TTL_MS = 600;
+const MAX_PENDING_INPUTS = 90;
 
 const MAX_VISIBLE_REMOTE_PLAYERS = 24;
 
@@ -460,6 +467,102 @@ function createLocalProjectile(unit, mouseWorldX, mouseWorldY, now) {
   };
 }
 
+
+function getMoveVectorFromInput(input = {}) {
+  let dx = 0;
+  let dy = 0;
+
+  if (input.w) dy -= 1;
+  if (input.s) dy += 1;
+  if (input.a) dx -= 1;
+  if (input.d) dx += 1;
+
+  if (input.mobileMove) {
+    dx += Number(input.moveX || 0);
+    dy += Number(input.moveY || 0);
+  }
+
+  const length = Math.hypot(dx, dy) || 1;
+  return {
+    dx,
+    dy,
+    nx: dx / length,
+    ny: dy / length,
+    moving: dx !== 0 || dy !== 0,
+  };
+}
+
+function predictUnitFromInput(unit, input, dt, worldWidth, worldHeight, zoneRadius) {
+  if (!unit || unit.alive === false) return unit;
+
+  const move = getMoveVectorFromInput(input);
+  const safeDt = Math.min(0.05, Math.max(0, dt || 0));
+  let nextX = unit.x || 0;
+  let nextY = unit.y || 0;
+
+  if (move.moving && (unit.energy ?? 1) > 0) {
+    nextX += move.nx * CLIENT_SPEED * safeDt;
+    nextY += move.ny * CLIENT_SPEED * safeDt;
+  }
+
+  const safe = keepInsideSafeZone(
+    nextX,
+    nextY,
+    zoneRadius || ZONE_RADIUS_FALLBACK,
+    worldWidth || WORLD_WIDTH_FALLBACK,
+    worldHeight || WORLD_HEIGHT_FALLBACK,
+    70,
+    true
+  );
+
+  return {
+    ...unit,
+    x: safe.x,
+    y: safe.y,
+    moveX: move.moving ? move.nx : 0,
+    moveY: move.moving ? move.ny : 0,
+    isMoving: move.moving,
+    moveAngle: move.moving ? Math.atan2(move.dy, move.dx) : unit.moveAngle ?? 0,
+    attacking: Boolean(input.attacking),
+    shieldActive: Boolean(unit.shieldActive || input.shield),
+    mouseX: input.mouseX ?? unit.mouseX ?? safe.x,
+    mouseY: input.mouseY ?? unit.mouseY ?? safe.y,
+  };
+}
+
+function interpolateSnapshotBuffer(buffer = [], renderTime) {
+  if (!buffer.length) return null;
+  if (buffer.length === 1) return buffer[0];
+
+  let older = buffer[0];
+  let newer = buffer[buffer.length - 1];
+
+  for (let i = 0; i < buffer.length - 1; i += 1) {
+    const a = buffer[i];
+    const b = buffer[i + 1];
+    if ((a.__receivedAt || 0) <= renderTime && (b.__receivedAt || 0) >= renderTime) {
+      older = a;
+      newer = b;
+      break;
+    }
+  }
+
+  const aTime = older.__receivedAt || renderTime;
+  const bTime = newer.__receivedAt || aTime;
+  const span = Math.max(1, bTime - aTime);
+  const t = clamp((renderTime - aTime) / span, 0, 1);
+
+  return {
+    ...newer,
+    x: lerp(older.x ?? newer.x, newer.x ?? older.x, t),
+    y: lerp(older.y ?? newer.y, newer.y ?? older.y, t),
+    hp: newer.hp,
+    energy: newer.energy,
+    drones: newer.drones,
+    alive: newer.alive,
+  };
+}
+
 function FlyingAttackDrone({ projectile }) {
   const skin = normalizeSkin(projectile.skin || "cyan");
   const angle = projectile.angle || Math.atan2(projectile.vy || 0, projectile.vx || 1);
@@ -505,6 +608,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const zoneElementRef = useRef(null);
   const zoneSmokeElementRef = useRef(null);
   const sendInputRef = useRef(() => {});
+  const inputSeqRef = useRef(0);
+  const lastInputSentAtRef = useRef(performance.now());
+  const pendingInputsRef = useRef([]);
+  const remoteSnapshotBufferRef = useRef(new Map());
+  const lastConfirmedHpRef = useRef(null);
 
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
   const joystickPointerRef = useRef(null);
@@ -642,6 +750,77 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         leaderboard: Array.isArray(state.leaderboard) ? state.leaderboard : worldRef.current.leaderboard,
       };
 
+      if (state.you) {
+        const lastProcessedInputSeq = Number(
+          state.you.lastProcessedInputSeq ?? state.lastProcessedInputSeq ?? 0
+        );
+
+        if (Number.isFinite(lastProcessedInputSeq) && lastProcessedInputSeq > 0) {
+          pendingInputsRef.current = pendingInputsRef.current.filter(
+            (input) => input.seq > lastProcessedInputSeq
+          );
+        }
+
+        let reconciledYou = { ...state.you };
+        const worldWidth = state.worldWidth || worldRef.current.worldWidth || WORLD_WIDTH_FALLBACK;
+        const worldHeight = state.worldHeight || worldRef.current.worldHeight || WORLD_HEIGHT_FALLBACK;
+        const zoneRadius = state.safeZoneRadius || worldRef.current.safeZoneRadius || ZONE_RADIUS_FALLBACK;
+
+        for (const pending of pendingInputsRef.current) {
+          reconciledYou = predictUnitFromInput(
+            reconciledYou,
+            pending,
+            Number(pending.dt || 16) / 1000,
+            worldWidth,
+            worldHeight,
+            zoneRadius
+          );
+        }
+
+        const previousHp = lastConfirmedHpRef.current;
+        lastConfirmedHpRef.current = state.you.hp;
+
+        predictedYouRef.current = {
+          ...(predictedYouRef.current || {}),
+          ...reconciledYou,
+          // HP/energy/drones are authoritative and must update immediately.
+          hp: state.you.hp,
+          maxHp: state.you.maxHp,
+          energy: state.you.energy,
+          drones: state.you.drones,
+          progress: state.you.progress,
+          nextDroneAt: state.you.nextDroneAt,
+          alive: state.you.alive,
+          serverX: state.you.x,
+          serverY: state.you.y,
+          lastProcessedInputSeq,
+          damageFlashUntil:
+            previousHp !== null && state.you.hp < previousHp
+              ? now + 220
+              : predictedYouRef.current?.damageFlashUntil || 0,
+        };
+
+        worldRef.current.you = predictedYouRef.current;
+      }
+
+      const snapshotsById = remoteSnapshotBufferRef.current;
+      const incomingForSnapshots = Array.isArray(state.players) ? state.players : [];
+      const activeRemoteIds = new Set();
+      incomingForSnapshots.forEach((player) => {
+        if (!player?.id) return;
+        activeRemoteIds.add(player.id);
+        const oldBuffer = snapshotsById.get(player.id) || [];
+        const nextBuffer = [
+          ...oldBuffer,
+          { ...player, __receivedAt: now },
+        ].filter((snapshot) => now - (snapshot.__receivedAt || now) <= SNAPSHOT_BUFFER_TTL_MS);
+        snapshotsById.set(player.id, nextBuffer.slice(-12));
+      });
+
+      for (const id of snapshotsById.keys()) {
+        if (!activeRemoteIds.has(id)) snapshotsById.delete(id);
+      }
+
       if (state.you?.alive === false) {
         predictedYouRef.current = { ...(predictedYouRef.current || {}), ...state.you };
 
@@ -689,14 +868,19 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     const sendInputNow = () => {
       if (!socket.connected) return;
 
+      const now = performance.now();
       const you = predictedYouRef.current || worldRef.current.you;
       const mouse = mouseRef.current;
       const mouseWorldX = you ? you.x + (mouse.x - window.innerWidth / 2) : 0;
       const mouseWorldY = you ? you.y + (mouse.y - window.innerHeight / 2) : 0;
-
       const mobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
+      const dt = Math.min(50, Math.max(1, now - lastInputSentAtRef.current));
+      lastInputSentAtRef.current = now;
 
-      socket.emit("zone-pvp:input", {
+      const input = {
+        seq: inputSeqRef.current + 1,
+        dt,
+        clientSentAt: now,
         w: Boolean(keysRef.current.w || keysRef.current.arrowup || (mobileMove.active && mobileMove.y < -0.22)),
         a: Boolean(keysRef.current.a || keysRef.current.arrowleft || (mobileMove.active && mobileMove.x < -0.22)),
         s: Boolean(keysRef.current.s || keysRef.current.arrowdown || (mobileMove.active && mobileMove.y > 0.22)),
@@ -708,12 +892,23 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         shield: Boolean(keysRef.current.rightMouseDown),
         mouseX: mouseWorldX,
         mouseY: mouseWorldY,
-      });
+      };
+
+      inputSeqRef.current = input.seq;
+
+      if (worldRef.current.status === "playing" && you?.alive !== false) {
+        pendingInputsRef.current.push(input);
+        if (pendingInputsRef.current.length > MAX_PENDING_INPUTS) {
+          pendingInputsRef.current = pendingInputsRef.current.slice(-MAX_PENDING_INPUTS);
+        }
+      }
+
+      socket.emit("zone-pvp:input", input);
     };
 
     sendInputRef.current = sendInputNow;
 
-    const inputTimer = window.setInterval(sendInputNow, 33);
+    const inputTimer = window.setInterval(sendInputNow, INPUT_SEND_INTERVAL_MS);
 
     const hudTimer = window.setInterval(() => {
       const data = worldRef.current;
@@ -750,71 +945,30 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const zoneRadius = data.safeZoneRadius || ZONE_RADIUS_FALLBACK;
 
       if (data.you) {
-        const serverYou = data.you;
-        const current = predictedYouRef.current || { ...serverYou };
-
-        let dx = 0;
-        let dy = 0;
-        if (keysRef.current.w || keysRef.current.arrowup) dy -= 1;
-        if (keysRef.current.s || keysRef.current.arrowdown) dy += 1;
-        if (keysRef.current.a || keysRef.current.arrowleft) dx -= 1;
-        if (keysRef.current.d || keysRef.current.arrowright) dx += 1;
-
+        const current = predictedYouRef.current || { ...data.you };
         const mobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
-        if (mobileMove.active) {
-          dx += mobileMove.x;
-          dy += mobileMove.y;
-        }
-
-        const length = Math.hypot(dx, dy) || 1;
-        const isMoving = dx !== 0 || dy !== 0;
-        let nextX = current.x;
-        let nextY = current.y;
-
-        if (data.status === "playing" && current.alive !== false && isMoving && (current.energy ?? 1) > 0) {
-          nextX += (dx / length) * CLIENT_SPEED * dt;
-          nextY += (dy / length) * CLIENT_SPEED * dt;
-        }
-
-        const safe = keepInsideSafeZone(nextX, nextY, zoneRadius, worldWidth, worldHeight, 70, true);
-
-        let corrected;
-
-        if (isMoving) {
-          corrected = dampPointCapped(
-            safe.x,
-            safe.y,
-            serverYou.x,
-            serverYou.y,
-            SELF_CORRECTION_MOVING,
-            dt,
-            SELF_SNAP_DISTANCE,
-            SELF_HARD_SNAP_DISTANCE,
-            SELF_MAX_CORRECTION_SPEED
-          );
-        } else {
-          const currentX = current.x ?? safe.x;
-          const currentY = current.y ?? safe.y;
-          const serverDistance = Math.hypot(serverYou.x - currentX, serverYou.y - currentY);
-
-          corrected = serverDistance > SELF_IDLE_FREEZE_DISTANCE
-            ? { x: serverYou.x, y: serverYou.y }
-            : { x: currentX, y: currentY };
-        }
-
-        predictedYouRef.current = {
-          ...serverYou,
-          x: corrected.x,
-          y: corrected.y,
-          moveX: isMoving ? dx / length : 0,
-          moveY: isMoving ? dy / length : 0,
-          isMoving,
-          moveAngle: isMoving ? Math.atan2(dy, dx) : current.moveAngle ?? serverYou.moveAngle,
-          attacking: Boolean(keysRef.current.mouseDown || serverYou.attacking),
-          shieldActive: Boolean(serverYou.shieldActive),
-          mouseX: corrected.x + (mouseRef.current.x - window.innerWidth / 2),
-          mouseY: corrected.y + (mouseRef.current.y - window.innerHeight / 2),
+        const input = {
+          w: Boolean(keysRef.current.w || keysRef.current.arrowup || (mobileMove.active && mobileMove.y < -0.22)),
+          a: Boolean(keysRef.current.a || keysRef.current.arrowleft || (mobileMove.active && mobileMove.x < -0.22)),
+          s: Boolean(keysRef.current.s || keysRef.current.arrowdown || (mobileMove.active && mobileMove.y > 0.22)),
+          d: Boolean(keysRef.current.d || keysRef.current.arrowright || (mobileMove.active && mobileMove.x > 0.22)),
+          moveX: mobileMove.active ? mobileMove.x : 0,
+          moveY: mobileMove.active ? mobileMove.y : 0,
+          mobileMove: Boolean(mobileMove.active),
+          attacking: Boolean(keysRef.current.mouseDown),
+          shield: Boolean(keysRef.current.rightMouseDown),
+          mouseX: current.x + (mouseRef.current.x - window.innerWidth / 2),
+          mouseY: current.y + (mouseRef.current.y - window.innerHeight / 2),
         };
+
+        predictedYouRef.current = predictUnitFromInput(
+          current,
+          input,
+          dt,
+          worldWidth,
+          worldHeight,
+          zoneRadius
+        );
 
         const predicted = predictedYouRef.current;
 
@@ -890,47 +1044,26 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         spectatorTargetRef.current = currentSpectatorTarget;
       }
 
-      const incomingPlayers = new Map((data.players || []).filter((p) => p?.id && p.id !== me?.id).map((p) => [p.id, p]));
+      const renderTime = now - SNAPSHOT_INTERPOLATION_DELAY_MS;
+      const snapshotBuffers = remoteSnapshotBufferRef.current;
+      const activeRemoteIds = new Set();
 
-      for (const [id, target] of incomingPlayers.entries()) {
-        const current = remoteMap.get(id) || target;
-        const moveX = target.moveX ?? current.moveX ?? 0;
-        const moveY = target.moveY ?? current.moveY ?? 0;
-        const remoteIsMoving = Boolean(target.isMoving ?? current.isMoving);
-        const packetAgeSeconds = Math.min(REMOTE_MAX_EXTRAPOLATE_MS / 1000, Math.max(0, (now - (target.__seenAt || now)) / 1000));
-        const targetX = remoteIsMoving ? target.x + moveX * CLIENT_SPEED * packetAgeSeconds * REMOTE_PREDICTION : target.x;
-        const targetY = remoteIsMoving ? target.y + moveY * CLIENT_SPEED * packetAgeSeconds * REMOTE_PREDICTION : target.y;
-        const predictedRemoteX = current.x ?? targetX;
-        const predictedRemoteY = current.y ?? targetY;
-
-        const remoteCorrected = dampPoint(
-          predictedRemoteX,
-          predictedRemoteY,
-          targetX,
-          targetY,
-          remoteIsMoving ? REMOTE_SMOOTHING : 12,
-          dt,
-          0.8,
-          REMOTE_HARD_SNAP_DISTANCE
-        );
-
+      for (const [id, buffer] of snapshotBuffers.entries()) {
+        if (id === me?.id) continue;
+        const interpolated = interpolateSnapshotBuffer(buffer, renderTime);
+        if (!interpolated) continue;
+        activeRemoteIds.add(id);
         remoteMap.set(id, {
-          ...target,
-          x: remoteCorrected.x,
-          y: remoteCorrected.y,
-          moveX,
-          moveY,
-          moveAngle: target.moveAngle ?? current.moveAngle ?? 0,
-          isMoving: remoteIsMoving,
-          attacking: Boolean(target.attacking),
-          shieldActive: Boolean(target.shieldActive),
-          mouseX: target.mouseX ?? current.mouseX ?? target.x,
-          mouseY: target.mouseY ?? current.mouseY ?? target.y,
+          ...interpolated,
+          x: interpolated.x,
+          y: interpolated.y,
+          attacking: Boolean(interpolated.attacking),
+          shieldActive: Boolean(interpolated.shieldActive),
         });
       }
 
       for (const id of remoteMap.keys()) {
-        if (!incomingPlayers.has(id)) remoteMap.delete(id);
+        if (!activeRemoteIds.has(id)) remoteMap.delete(id);
       }
 
       const projectileMap = projectilesRef.current;

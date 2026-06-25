@@ -106,6 +106,9 @@ export declare class GameGateway {
         berserkUntil: any;
         vampireUntil: any;
         empPulseUntil: any;
+        lastProcessedInputSeq: any;
+        serverTime: number;
+        lastInputReceivedAt: any;
     };
     findOrCreateNormalRoom(): any;
     getNormalRoomBySocket(socketId: any): any;
