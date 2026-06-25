@@ -2000,3 +2000,217 @@
   }
 }
 
+
+/* =========================================================
+   NORMAL PVP - FINAL MOBILE LAYOUT HARD OVERRIDE
+   Scop: bate regulile globale din GameArena.css pe mobile portrait.
+   Functioneaza cu Safari iPhone / Chrome Android / Huawei.
+
+   MODIFICI MANUAL doar valorile de mai jos:
+   --npvp-joystick-bottom-final  -> joystick mai sus/jos
+   --npvp-buttons-bottom-final   -> Attack + Shield mai sus/jos
+   --npvp-minimap-bottom-final   -> mini-map mai sus/jos
+   --npvp-exit-bottom-final      -> Exit to menu mai sus/jos
+
+   Valoare mai mare = elementul urca mai sus.
+========================================================= */
+@media (max-width: 900px) and (orientation: portrait) {
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait {
+    --npvp-safe-bottom-final: max(0px, env(safe-area-inset-bottom));
+    --npvp-safe-left-final: max(0px, env(safe-area-inset-left));
+    --npvp-safe-right-final: max(0px, env(safe-area-inset-right));
+
+    /* Pozitii principale */
+    --npvp-joystick-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(132px, 15svh, 190px));
+    --npvp-buttons-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(310px, 39svh, 455px));
+    --npvp-minimap-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(96px, 12svh, 165px));
+    --npvp-exit-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(18px, 3.5svh, 58px));
+
+    /* Dimensiuni */
+    --npvp-joystick-size-final: clamp(190px, 26svh, 250px);
+    --npvp-joystick-knob-final: clamp(76px, 10.5svh, 102px);
+    --npvp-minimap-width-final: clamp(220px, 58vw, 270px);
+    --npvp-minimap-height-final: clamp(138px, 19svh, 172px);
+    --npvp-attack-size-final: clamp(108px, 15svh, 140px);
+    --npvp-shield-size-final: clamp(86px, 12.5svh, 112px);
+  }
+
+  /* iPhone Safari / viewport mic: foloseste dvh cand exista */
+  @supports (height: 100dvh) {
+    html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait {
+      --npvp-joystick-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(128px, 15dvh, 188px));
+      --npvp-buttons-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(300px, 39dvh, 448px));
+      --npvp-minimap-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(100px, 12dvh, 168px));
+      --npvp-exit-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(18px, 3.5dvh, 58px));
+    }
+  }
+
+  /* JOYSTICK */
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-controls {
+    display: block !important;
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 100000 !important;
+    pointer-events: none !important;
+    background: transparent !important;
+    filter: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick {
+    display: block !important;
+    position: fixed !important;
+    left: calc(var(--npvp-safe-left-final) + clamp(14px, 3.5vw, 26px)) !important;
+    right: auto !important;
+    top: auto !important;
+    bottom: var(--npvp-joystick-bottom-final) !important;
+    width: var(--npvp-joystick-size-final) !important;
+    height: var(--npvp-joystick-size-final) !important;
+    z-index: 100020 !important;
+    pointer-events: auto !important;
+    touch-action: none !important;
+    transform: none !important;
+  }
+
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick-knob {
+    width: var(--npvp-joystick-knob-final) !important;
+    height: var(--npvp-joystick-knob-final) !important;
+  }
+
+  /* ATTACK + SHIELD */
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-buttons {
+    display: flex !important;
+    position: fixed !important;
+    right: calc(var(--npvp-safe-right-final) + clamp(10px, 3vw, 20px)) !important;
+    left: auto !important;
+    top: auto !important;
+    bottom: var(--npvp-buttons-bottom-final) !important;
+    gap: clamp(8px, 2.5vw, 14px) !important;
+    align-items: center !important;
+    z-index: 100030 !important;
+    pointer-events: auto !important;
+    touch-action: none !important;
+    transform: none !important;
+  }
+
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-attack {
+    width: var(--npvp-attack-size-final) !important;
+    height: var(--npvp-attack-size-final) !important;
+    font-size: clamp(12px, 1.7dvh, 16px) !important;
+  }
+
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-shield {
+    width: var(--npvp-shield-size-final) !important;
+    height: var(--npvp-shield-size-final) !important;
+    font-size: clamp(10px, 1.45dvh, 13px) !important;
+    margin-bottom: 0 !important;
+  }
+
+  /* MINI-MAP - bate GameArena.css care il tine jos pe .game-arena:not(.is-mobile-landscape) */
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait:not(.is-mobile-landscape) .mobile-minimap-frame {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    position: fixed !important;
+    right: calc(var(--npvp-safe-right-final) + clamp(10px, 3vw, 16px)) !important;
+    left: auto !important;
+    top: auto !important;
+    bottom: var(--npvp-minimap-bottom-final) !important;
+    width: var(--npvp-minimap-width-final) !important;
+    height: var(--npvp-minimap-height-final) !important;
+    max-width: calc(100vw - 28px) !important;
+    max-height: 24dvh !important;
+    z-index: 99990 !important;
+    pointer-events: none !important;
+    transform: none !important;
+    transform-origin: bottom right !important;
+    overflow: hidden !important;
+    filter: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait:not(.is-mobile-landscape) .mobile-minimap-frame > .minimap,
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait:not(.is-mobile-landscape) .minimap:not(.minimap-map-area) {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    position: relative !important;
+    right: auto !important;
+    left: auto !important;
+    top: auto !important;
+    bottom: auto !important;
+    width: 100% !important;
+    height: 100% !important;
+    z-index: 1 !important;
+    transform: none !important;
+    overflow: hidden !important;
+    pointer-events: none !important;
+    filter: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait:not(.is-mobile-landscape) .minimap-title,
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait:not(.is-mobile-landscape) .minimap-map-area,
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait:not(.is-mobile-landscape) .minimap-orb,
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait:not(.is-mobile-landscape) .minimap-core,
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait:not(.is-mobile-landscape) .minimap-player-drone,
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait:not(.is-mobile-landscape) .minimap-toxic-zone {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+
+  /* EXIT TO MENU */
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-exit-btn {
+    position: fixed !important;
+    left: calc(var(--npvp-safe-left-final) + clamp(10px, 3vw, 16px)) !important;
+    right: auto !important;
+    top: auto !important;
+    bottom: var(--npvp-exit-bottom-final) !important;
+    z-index: 100040 !important;
+    padding: 8px 12px !important;
+    font-size: 10px !important;
+    line-height: 1 !important;
+    transform: none !important;
+  }
+}
+
+/* Telefoane inguste: UI mai compact. */
+@media (max-width: 430px) and (orientation: portrait) {
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait {
+    --npvp-joystick-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(118px, 14dvh, 162px));
+    --npvp-buttons-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(278px, 37dvh, 400px));
+    --npvp-minimap-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(92px, 11.5dvh, 148px));
+    --npvp-joystick-size-final: clamp(178px, 25dvh, 220px);
+    --npvp-minimap-width-final: clamp(218px, 59vw, 250px);
+    --npvp-minimap-height-final: clamp(132px, 18dvh, 158px);
+    --npvp-attack-size-final: clamp(100px, 14.5dvh, 124px);
+    --npvp-shield-size-final: clamp(80px, 11.5dvh, 100px);
+  }
+}
+
+/* Telefoane joase / Safari cu bara mare: ridicam mai conservator, ca sa nu se suprapuna. */
+@media (max-height: 760px) and (orientation: portrait) {
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait {
+    --npvp-joystick-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(98px, 13dvh, 136px));
+    --npvp-buttons-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(245px, 35dvh, 335px));
+    --npvp-minimap-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(72px, 10dvh, 112px));
+    --npvp-exit-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(12px, 2.5dvh, 34px));
+    --npvp-joystick-size-final: clamp(164px, 23.5dvh, 198px);
+    --npvp-minimap-height-final: clamp(118px, 17dvh, 142px);
+    --npvp-attack-size-final: clamp(92px, 13.5dvh, 112px);
+    --npvp-shield-size-final: clamp(74px, 10.8dvh, 92px);
+  }
+}
+
+/* Telefoane inalte / iPhone Pro Max: urcam mai sus ca sa semene cu BattleRoyaleMode. */
+@media (min-height: 850px) and (orientation: portrait) {
+  html body #root .game-arena.pvp-dom-arena.normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait {
+    --npvp-joystick-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(145px, 15.5dvh, 205px));
+    --npvp-buttons-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(345px, 40dvh, 485px));
+    --npvp-minimap-bottom-final: calc(var(--npvp-safe-bottom-final) + clamp(118px, 12.5dvh, 182px));
+  }
+}
