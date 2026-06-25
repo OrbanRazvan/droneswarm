@@ -570,7 +570,7 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
               setScreen("arena");
             }}
           >
-            Normal PvP !!!!
+            Normal PVP
           </button>
 
           <button
@@ -580,7 +580,7 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
               setScreen("arena");
             }}
           >
-            Battle Royale
+            Battle Royale - PVE
           </button>
 
           <button
@@ -590,7 +590,7 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
               setScreen("arena");
             }}
           >
-            Zone PvP
+            Battle Royale - PVP
           </button>
 
         </aside>
