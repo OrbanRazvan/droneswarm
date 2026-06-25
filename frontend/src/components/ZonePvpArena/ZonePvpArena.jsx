@@ -641,6 +641,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const localBattlePrepareUntilRef = useRef(0);
   const localBattleBeginFlashUntilRef = useRef(0);
   const battlePrepareWasVisibleRef = useRef(false);
+  const battleBeginTimerRef = useRef(null);
   const lastArenaStatusRef = useRef("connecting");
 
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
@@ -1713,6 +1714,32 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       setBattleBeginFlashUntil(until);
     }
   }, [isBattlePrepare, isMatchmaking, isFinished]);
+
+  // Backup sigur pentru mobile/low-FPS: programeaza flash-ul exact cand se termina prepare phase.
+  // Asa BATTLE BEGIN apare mereu in centru, chiar daca nu mai vine imediat un snapshot de server.
+  useEffect(() => {
+    if (battleBeginTimerRef.current) {
+      window.clearTimeout(battleBeginTimerRef.current);
+      battleBeginTimerRef.current = null;
+    }
+
+    if (!isBattlePrepare || isMatchmaking || isFinished) return undefined;
+
+    battleBeginTimerRef.current = window.setTimeout(() => {
+      battlePrepareWasVisibleRef.current = false;
+      localBattlePrepareUntilRef.current = 0;
+      const until = Date.now() + 1600;
+      localBattleBeginFlashUntilRef.current = until;
+      setBattleBeginFlashUntil(until);
+    }, Math.max(60, Math.min(BATTLE_PREPARE_DURATION + 250, battlePrepareRemainingMs + 40)));
+
+    return () => {
+      if (battleBeginTimerRef.current) {
+        window.clearTimeout(battleBeginTimerRef.current);
+        battleBeginTimerRef.current = null;
+      }
+    };
+  }, [isBattlePrepare, battlePrepareSeconds, isMatchmaking, isFinished, battlePrepareRemainingMs]);
 
   // IMPORTANT: cand meciul se termina (status === "finished"), nu mai
   // asteptam un click manual pe "EXIT TO MENU" - scoatem automat jucatorul
