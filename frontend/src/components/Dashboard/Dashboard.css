@@ -2636,3 +2636,67 @@
   background: rgba(255, 196, 61, 0.14) !important;
 }
 
+
+/* =========================================================
+   GUEST MODE - dashboard curat, fara profil fals / shop / selectie skin
+========================================================= */
+.dashboard-guest-mode .hangar-header p strong {
+  color: #67ffb1;
+}
+
+.dashboard-guest-mode .pilot-card-guest {
+  min-height: auto;
+}
+
+.dashboard-guest-mode .pilot-card-guest h2 {
+  color: #ffffff;
+  font-size: 28px;
+  margin-bottom: 14px;
+}
+
+.dashboard-guest-mode .guest-profile-note {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 18px;
+  padding: 14px 15px;
+  border-radius: 14px;
+  border: 1px solid rgba(103, 255, 177, 0.28);
+  background: rgba(103, 255, 177, 0.08);
+  color: #dffcff;
+}
+
+.dashboard-guest-mode .guest-profile-note strong {
+  color: #67ffb1;
+  font-size: 13px;
+  letter-spacing: 1.4px;
+}
+
+.dashboard-guest-mode .guest-profile-note span {
+  color: rgba(223, 252, 255, 0.72);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.dashboard-guest-mode .pilot-mini-grid-guest {
+  grid-template-columns: 1fr;
+}
+
+.dashboard-guest-mode .guest-locked-drone-note {
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(103, 255, 177, 0.28);
+  background: rgba(103, 255, 177, 0.075);
+  color: rgba(223, 252, 255, 0.78);
+  font-size: 14px;
+  line-height: 1.4;
+  font-weight: 800;
+}
+
+.dashboard-guest-mode .hero-buttons {
+  display: block;
+}
+
+.dashboard-guest-mode .premium-pill {
+  display: none;
+}

@@ -360,10 +360,15 @@ function StatBar({ label, value }) {
 }
 
 function Dashboard({ user, gameMode, onExitToMenu }) {
+  const isGuestUser = Boolean(user?.isGuest);
+  const guestDisplayName = getDisplayName(user);
+
   const [screen, setScreen] = useState(gameMode ? "arena" : "hangar");
   const [selectedMode, setSelectedMode] = useState(gameMode || "pvp");
   const [activeTab, setActiveTab] = useState("hangar");
-  const [selectedDrone, setSelectedDrone] = useState(() => getInitialSelectedDrone(user));
+  const [selectedDrone, setSelectedDrone] = useState(() =>
+    isGuestUser ? "cyan" : getInitialSelectedDrone(user)
+  );
   const [openedPackId, setOpenedPackId] = useState(null);
 
   // Switch global de calitate grafica (Normal/Low), aplicat la TOATE
@@ -390,8 +395,19 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
   }, [graphicsQuality]);
 
   useEffect(() => {
+    if (isGuestUser) {
+      if (selectedDrone !== "cyan") setSelectedDrone("cyan");
+      return;
+    }
+
     persistSelectedDrone(user, selectedDrone);
-  }, [selectedDrone, user]);
+  }, [selectedDrone, user, isGuestUser]);
+
+  useEffect(() => {
+    if (isGuestUser && activeTab === "shop") {
+      setActiveTab("hangar");
+    }
+  }, [isGuestUser, activeTab]);
 
   const openedPack = useMemo(
     () => PREMIUM_PACKS.find((pack) => pack.id === openedPackId),
@@ -402,20 +418,33 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
     return ALL_SKINS.find((skin) => skin.id === normalizeSkin(selectedDrone)) || BASIC_DRONE;
   }, [selectedDrone]);
 
-  const ownedCount = ALL_SKINS.length;
+  const ownedCount = isGuestUser ? 1 : ALL_SKINS.length;
 
   const selectDrone = (skinId) => {
+    if (isGuestUser) {
+      setSelectedDrone("cyan");
+      setOpenedPackId(null);
+      return;
+    }
+
     const normalized = normalizeSkin(skinId);
     setSelectedDrone(normalized);
     persistSelectedDrone(user, normalized);
   };
 
+  const arenaSelectedDrone = isGuestUser ? "cyan" : selectedDrone;
+
   const arenaUser = {
     ...user,
-    selectedDrone,
-    selectedSkin: selectedDrone,
-    selectedDroneSkin: selectedDrone,
-    skin: selectedDrone,
+    id: isGuestUser ? null : user?.id,
+    userId: isGuestUser ? null : user?.userId || user?.id,
+    email: isGuestUser ? null : user?.email,
+    isGuest: isGuestUser,
+    username: guestDisplayName,
+    selectedDrone: arenaSelectedDrone,
+    selectedSkin: arenaSelectedDrone,
+    selectedDroneSkin: arenaSelectedDrone,
+    skin: arenaSelectedDrone,
   };
 
   const handleExitToHangar = () => {
@@ -446,20 +475,21 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
   }
 
   return (
-    <div className="dashboard dashboard-hangar">
+    <div className={`dashboard dashboard-hangar ${isGuestUser ? "dashboard-guest-mode" : ""}`}>
       <div className="hangar-bg-grid" />
 
       <header className="hangar-header">
         <div>
           <h1>DRONE SWARM</h1>
           <p>
-            Hangar pentru <strong>{getDisplayName(user)}</strong>
+            {isGuestUser ? "Guest mode pentru " : "Hangar pentru "}
+            <strong>{getDisplayName(user)}</strong>
           </p>
         </div>
 
         <nav className="hangar-top-actions">
           <button onClick={() => setActiveTab("hangar")}>Hangar</button>
-          <button onClick={() => setActiveTab("shop")}>Shop</button>
+          {!isGuestUser && <button onClick={() => setActiveTab("shop")}>Shop</button>}
           <button
             type="button"
             className={`quality-switch-btn ${graphicsQuality === "low" ? "is-low" : ""}`}
@@ -473,44 +503,63 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
             onClick={() => {
               localStorage.removeItem("token");
               localStorage.removeItem("user");
+              sessionStorage.removeItem("token");
+              sessionStorage.removeItem("user");
+              sessionStorage.removeItem("droneSwarmGuestUser");
               window.location.reload();
             }}
           >
-            Logout
+            {isGuestUser ? "Exit Guest" : "Logout"}
           </button>
         </nav>
       </header>
 
       <main className="hangar-layout">
-        <aside className="pilot-card">
-          <div className="pilot-avatar">
-            {getDisplayName(user).slice(0, 1).toUpperCase()}
-          </div>
+        <aside className={`pilot-card ${isGuestUser ? "pilot-card-guest" : ""}`}>
+          {!isGuestUser && (
+            <div className="pilot-avatar">
+              {getDisplayName(user).slice(0, 1).toUpperCase()}
+            </div>
+          )}
 
           <h2>{getDisplayName(user)}</h2>
-          <p>{user?.email || "player@drone-swarm.com"}</p>
 
-          <div className="rank-box">
-            <span>RANK</span>
-            <strong>Rookie Pilot</strong>
-          </div>
+          {isGuestUser ? (
+            <div className="guest-profile-note">
+              <strong>GUEST MODE</strong>
+              <span>Progresul, istoricul, skinurile si monedele nu se salveaza.</span>
+            </div>
+          ) : (
+            <p>{user?.email || "player@drone-swarm.com"}</p>
+          )}
 
-          <div className="pilot-mini-grid">
+          {!isGuestUser && (
+            <div className="rank-box">
+              <span>RANK</span>
+              <strong>Rookie Pilot</strong>
+            </div>
+          )}
+
+          <div className={`pilot-mini-grid ${isGuestUser ? "pilot-mini-grid-guest" : ""}`}>
             <div>
               <span>DRONE</span>
-              <strong>{selectedSkin.name}</strong>
+              <strong>{isGuestUser ? "Basic Drone" : selectedSkin.name}</strong>
             </div>
+            {!isGuestUser && (
+              <div>
+                <span>COINS</span>
+                <strong>0</strong>
+              </div>
+            )}
+            {!isGuestUser && (
+              <div>
+                <span>OWNED</span>
+                <strong>{ownedCount} / {ALL_SKINS.length}</strong>
+              </div>
+            )}
             <div>
-              <span>COINS</span>
-              <strong>0</strong>
-            </div>
-            <div>
-              <span>OWNED</span>
-              <strong>{ownedCount} / {ALL_SKINS.length}</strong>
-            </div>
-            <div>
-              <span>SERVER</span>
-              <strong>EU</strong>
+              <span>{isGuestUser ? "PROGRESS" : "SERVER"}</span>
+              <strong>{isGuestUser ? "Not saved" : "EU"}</strong>
             </div>
           </div>
 
@@ -554,12 +603,14 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
             >
               Hangar
             </button>
-            <button
-              className={activeTab === "shop" ? "active" : ""}
-              onClick={() => setActiveTab("shop")}
-            >
-              Shop
-            </button>
+            {!isGuestUser && (
+              <button
+                className={activeTab === "shop" ? "active" : ""}
+                onClick={() => setActiveTab("shop")}
+              >
+                Shop
+              </button>
+            )}
           </div>
 
           {activeTab === "hangar" && (
@@ -573,15 +624,23 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
                   <p>{selectedSkin.description}</p>
 
                   <div className="hero-buttons">
-                    <button
-                      className="primary-action"
-                      onClick={() => selectDrone(selectedSkin.id)}
-                    >
-                      SELECT DRONE
-                    </button>
-                    <button className="dark-action" onClick={() => setActiveTab("shop")}>
-                      Shop
-                    </button>
+                    {isGuestUser ? (
+                      <div className="guest-locked-drone-note">
+                        Guest poate folosi doar Basic Drone. Skinurile premium si selectia de drone sunt disponibile doar cu Google.
+                      </div>
+                    ) : (
+                      <>
+                        <button
+                          className="primary-action"
+                          onClick={() => selectDrone(selectedSkin.id)}
+                        >
+                          SELECT DRONE
+                        </button>
+                        <button className="dark-action" onClick={() => setActiveTab("shop")}>
+                          Shop
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -614,7 +673,7 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
             </>
           )}
 
-          {activeTab === "shop" && (
+          {!isGuestUser && activeTab === "shop" && (
             <section className="shop-section">
               <div className="section-title-row">
                 <h3>Premium Packs</h3>
@@ -646,7 +705,7 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
         </section>
       </main>
 
-      {openedPack && (
+      {!isGuestUser && openedPack && (
         <div className="pack-modal-backdrop" onClick={() => setOpenedPackId(null)}>
           <div className="pack-modal" onClick={(event) => event.stopPropagation()}>
             <button className="modal-close" onClick={() => setOpenedPackId(null)}>

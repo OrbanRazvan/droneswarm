@@ -198,6 +198,8 @@ function normalizeArenaSkin(skin) {
 }
 
 function getSelectedUserSkin(user) {
+  if (user?.isGuest) return "cyan";
+
   return normalizeArenaSkin(
     user?.selectedSkin ||
       user?.selectedDroneSkin ||

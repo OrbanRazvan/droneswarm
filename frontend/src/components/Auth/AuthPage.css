@@ -26,7 +26,7 @@
   position: relative;
   z-index: 5;
   width: 560px;
-  padding: 48px 46px;
+  padding: 44px 46px;
   border-radius: 28px;
   text-align: center;
   background: rgba(4, 10, 20, 0.94);
@@ -43,20 +43,19 @@
 }
 
 .subtitle {
-  margin: 16px auto 34px;
+  margin: 16px auto 28px;
   max-width: 420px;
   color: rgba(255,255,255,0.72);
   font-size: 17px;
   line-height: 1.5;
 }
 
-.google-btn {
+.google-btn,
+.guest-btn {
   width: 100%;
   padding: 17px 22px;
   border-radius: 14px;
   border: none;
-  background: white;
-  color: #111;
   font-size: 18px;
   font-weight: 900;
   cursor: pointer;
@@ -64,6 +63,17 @@
   align-items: center;
   justify-content: center;
   gap: 14px;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+}
+
+.google-btn {
+  background: white;
+  color: #111;
+}
+
+.google-btn:hover,
+.guest-btn:hover {
+  transform: translateY(-1px);
 }
 
 .google-icon {
@@ -78,10 +88,75 @@
   font-weight: 900;
 }
 
+.guest-divider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 20px 0 18px;
+  color: rgba(155, 239, 255, 0.62);
+  font-size: 12px;
+  font-weight: 1000;
+  letter-spacing: 1.5px;
+}
+
+.guest-divider span {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0, 234, 255, 0.34), transparent);
+}
+
+.guest-login-box {
+  display: grid;
+  gap: 10px;
+  text-align: left;
+}
+
+.guest-login-box label {
+  color: #67ffb1;
+  font-size: 12px;
+  font-weight: 1000;
+  letter-spacing: 1.3px;
+  text-transform: uppercase;
+}
+
+.guest-login-box input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 15px 16px;
+  border-radius: 13px;
+  border: 1px solid rgba(0, 234, 255, 0.35);
+  outline: none;
+  background: rgba(2, 8, 18, 0.84);
+  color: #dffcff;
+  font-size: 16px;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+  box-shadow: inset 0 0 16px rgba(0, 234, 255, 0.04);
+}
+
+.guest-login-box input:focus {
+  border-color: rgba(103, 255, 177, 0.58);
+  box-shadow: 0 0 18px rgba(103, 255, 177, 0.10), inset 0 0 16px rgba(0, 234, 255, 0.04);
+}
+
+.guest-btn {
+  margin-top: 2px;
+  background: linear-gradient(135deg, rgba(0, 234, 255, 0.98), rgba(103, 255, 177, 0.95));
+  color: #031018;
+  box-shadow: 0 0 22px rgba(0, 234, 255, 0.18);
+}
+
+.guest-error {
+  color: #ff6b6b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .login-note {
-  margin-top: 20px;
+  margin-top: 18px;
   color: rgba(155,239,255,0.78);
   font-size: 14px;
+  line-height: 1.35;
 }
 
 /* DRONE MODEL */
@@ -105,13 +180,8 @@
   transform-origin: center 2px;
 }
 
-.menu-arm-x {
-  transform: rotate(55deg);
-}
-
-.menu-arm-y {
-  transform: rotate(-55deg);
-}
+.menu-arm-x { transform: rotate(55deg); }
+.menu-arm-y { transform: rotate(-55deg); }
 
 .menu-shell {
   position: absolute;
@@ -231,4 +301,103 @@
 @keyframes menuRotorSpin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+@media (max-width: 760px) and (orientation: portrait) {
+  .auth-card {
+    width: min(360px, calc(100vw - 28px));
+    padding: 30px 20px 24px;
+    border-radius: 22px;
+  }
+
+  .auth-card h1 {
+    font-size: 34px;
+    letter-spacing: 2px;
+  }
+
+  .subtitle {
+    margin: 12px auto 22px;
+    font-size: 13px;
+  }
+
+  .google-btn,
+  .guest-btn {
+    padding: 14px 16px;
+    font-size: 15px;
+    border-radius: 12px;
+  }
+
+  .google-icon {
+    width: 28px;
+    height: 28px;
+  }
+
+  .guest-login-box input {
+    padding: 13px 14px;
+    font-size: 15px;
+  }
+
+  .login-note {
+    font-size: 12px;
+  }
+
+  .menu-drone-model {
+    width: 118px;
+    height: 118px;
+    transform: scale(0.82);
+  }
+
+  .floating-drone {
+    display: none;
+  }
+}
+
+@media (hover: none) and (orientation: landscape), (max-height: 560px) and (orientation: landscape) {
+  .auth-card {
+    width: min(520px, calc(100vw - 36px));
+    padding: 20px 28px 18px;
+    border-radius: 18px;
+  }
+
+  .auth-card > .menu-drone-model {
+    display: none;
+  }
+
+  .auth-card h1 {
+    margin-top: 0;
+    font-size: 30px;
+  }
+
+  .subtitle {
+    margin: 8px auto 14px;
+    font-size: 12px;
+  }
+
+  .google-btn,
+  .guest-btn {
+    padding: 11px 14px;
+    font-size: 14px;
+  }
+
+  .guest-divider {
+    margin: 12px 0 10px;
+  }
+
+  .guest-login-box {
+    gap: 7px;
+  }
+
+  .guest-login-box input {
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+
+  .login-note {
+    margin-top: 10px;
+    font-size: 11px;
+  }
+
+  .floating-drone {
+    display: none;
+  }
 }

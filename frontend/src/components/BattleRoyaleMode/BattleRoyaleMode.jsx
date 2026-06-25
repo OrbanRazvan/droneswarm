@@ -195,6 +195,8 @@ function normalizeArenaSkin(skin) {
 }
 
 function getSelectedUserSkin(user) {
+  if (user?.isGuest) return "cyan";
+
   return normalizeArenaSkin(
     user?.selectedSkin ||
       user?.selectedDroneSkin ||
@@ -1890,6 +1892,12 @@ function BattleRoyale({ user, onExitToMenu }) {
   // matchSavedRef previne salvarea de mai multe ori.
   // ---------------------------------------------------------------------
   const saveMatchResultToServer = async (summary) => {
+    // Guest mode: nu salvam absolut nimic in baza de date.
+    if (user?.isGuest) {
+      matchSavedRef.current = true;
+      return;
+    }
+
     if (matchSavedRef.current) return;
     matchSavedRef.current = true;
 
@@ -1904,7 +1912,7 @@ function BattleRoyale({ user, onExitToMenu }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId: user?.id ?? null,
+          userId: user?.isGuest ? null : user?.id ?? null,
           username: displayName,
           kills: summary?.kills ?? p?.kills ?? 0,
           totalCollected: p?.totalCollected ?? 0,

@@ -113,6 +113,7 @@ function normalizeSkin(skin) {
 }
 
 function getSelectedSkin(user) {
+  if (user?.isGuest) return "cyan";
   return normalizeSkin(user?.selectedSkin || user?.selectedDroneSkin || user?.selectedDrone || user?.skin || "cyan");
 }
 
@@ -869,7 +870,8 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     socket.on("connect", () => {
       setConnectionError("");
       socket.emit("normal-pvp:join", {
-        userId: user?.id,
+        userId: user?.isGuest ? null : user?.id,
+        isGuest: Boolean(user?.isGuest),
         username: getDisplayName(user),
         skin: getSelectedSkin(user),
       });

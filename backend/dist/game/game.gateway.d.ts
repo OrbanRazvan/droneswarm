@@ -74,6 +74,8 @@ export declare class GameGateway {
     broadcastRoomState(room: any, now: any): void;
     serializePlayer(player: any): {
         id: any;
+        userId: any;
+        isGuest: boolean;
         username: any;
         x: number;
         y: number;

@@ -165,9 +165,10 @@ export class GameGateway {
         const spawn = this.getSafeSpawn(room, zoneRadius);
         const player = {
             id: client.id,
-            userId: data?.userId,
-            username: String(data?.username || 'Player').slice(0, 18),
-            skin: normalizeSkin(data?.skin),
+            userId: data?.isGuest ? null : data?.userId,
+            isGuest: Boolean(data?.isGuest),
+            username: String(data?.username || (data?.isGuest ? 'Guest' : 'Player')).slice(0, 18),
+            skin: normalizeSkin(data?.isGuest ? 'cyan' : data?.skin),
             x: spawn.x,
             y: spawn.y,
             hp: START_HP,
@@ -251,9 +252,10 @@ export class GameGateway {
 
         const player = {
             id: client.id,
-            userId: data?.userId,
-            username: String(data?.username || 'Player').slice(0, 18),
-            skin: normalizeSkin(data?.skin),
+            userId: data?.isGuest ? null : data?.userId,
+            isGuest: Boolean(data?.isGuest),
+            username: String(data?.username || (data?.isGuest ? 'Guest' : 'Player')).slice(0, 18),
+            skin: normalizeSkin(data?.isGuest ? 'cyan' : data?.skin),
             x: spawn.x,
             y: spawn.y,
             hp: START_HP,
@@ -357,9 +359,10 @@ export class GameGateway {
 
         const player = {
             id: client.id,
-            userId: data?.userId,
-            username: String(data?.username || 'Player').slice(0, 18),
-            skin: normalizeSkin(data?.skin),
+            userId: data?.isGuest ? null : data?.userId,
+            isGuest: Boolean(data?.isGuest),
+            username: String(data?.username || (data?.isGuest ? 'Guest' : 'Player')).slice(0, 18),
+            skin: normalizeSkin(data?.isGuest ? 'cyan' : data?.skin),
             x: spawn.x,
             y: spawn.y,
             hp: START_HP,
@@ -458,9 +461,10 @@ export class GameGateway {
 
         const player = {
             id: client.id,
-            userId: data?.userId,
-            username: String(data?.username || 'Player').slice(0, 18),
-            skin: normalizeSkin(data?.skin),
+            userId: data?.isGuest ? null : data?.userId,
+            isGuest: Boolean(data?.isGuest),
+            username: String(data?.username || (data?.isGuest ? 'Guest' : 'Player')).slice(0, 18),
+            skin: normalizeSkin(data?.isGuest ? 'cyan' : data?.skin),
             x: spawn.x,
             y: spawn.y,
             hp: START_HP,
@@ -1601,6 +1605,8 @@ export class GameGateway {
             .slice(0, 10)
             .map((player) => ({
             id: player.id,
+            userId: player.userId || null,
+            isGuest: Boolean(player.isGuest),
             username: player.username,
             totalCollected: player.totalCollected,
             kills: player.kills,
@@ -1661,6 +1667,8 @@ export class GameGateway {
     serializePlayer(player) {
         return {
             id: player.id,
+            userId: player.userId || null,
+            isGuest: Boolean(player.isGuest),
             username: player.username,
             x: Math.round(player.x),
             y: Math.round(player.y),
