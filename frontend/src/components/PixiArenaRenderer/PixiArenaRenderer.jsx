@@ -111,24 +111,24 @@ function getQualityBudget(device, dynamicQuality = 0) {
     energy: 12,
     cores: 3,
 
-    // Jucatori/drone complexe aproape dezactivate.
-    // Playerul tau ramane vizibil, dar ceilalti sunt desenati cat mai simplu.
-    players: 1,
-    bots: 0,
-    simpleBots: 90,
+    // Battle Royale singleplayer: vrem sa vedem botii complet, nu doar puncte.
+    // Pastram itemele low-quality, dar dronele/playerii se vad intregi, cu mini-dronele lor.
+    players: 50,
+    bots: 50,
+    simpleBots: 0,
 
-    // Proiectile limitate agresiv.
-    projectiles: 10,
-    simpleProjectiles: 12,
+    // Proiectile limitate, ca sa ramana fluent.
+    projectiles: 18,
+    simpleProjectiles: 24,
 
-    // Calitate minima pentru drone.
-    botQuality: 0,
-    playerQuality: 0,
+    // Calitate suficienta pentru corp + rotoare + mini-drone vizibile.
+    botQuality: 2,
+    playerQuality: 2,
 
     // Desen simplificat pentru orbs/energy/core-uri.
     drawLiteItems: true,
 
-    // Fara glow/umbre scumpe.
+    // Fara glow-uri mari, dar dronele raman complete.
     disableGlow: true,
   };
 }
@@ -1204,8 +1204,10 @@ function PixiArenaRenderer({
         // elimina calculul de Math.cos/Math.sin per rotor/mini-drona la
         // fiecare frame, cel mai vizibil cu pana la 69 de boti simultan pe
         // ecran.
+        // Pentru Battle Royale vrem sa vezi mini-dronele care orbiteaza si la boti.
+        // Nu mai oprim animatia mini-dronelor cand forceLowQuality este activ.
         const disableAnimations = Boolean(
-          device.isVeryLowEndMobile || device.isLowEndMobile || device.isWeakDesktop || isForcedLow
+          device.isVeryLowEndMobile && false
         );
         const viewBounds = getWorldViewBounds(cx, cy, worldScale, vw, vh, budget.margin);
 

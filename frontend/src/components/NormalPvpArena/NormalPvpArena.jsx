@@ -9,38 +9,28 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 const WORLD_WIDTH_FALLBACK = 20000;
 const WORLD_HEIGHT_FALLBACK = 20000;
-const ZONE_RADIUS_FALLBACK = 9400;
+const ZONE_RADIUS_FALLBACK = 100000;
 
 // GameArena movement: 2.8 px / 60fps frame ~= 168 px/sec.
 // Daca backend-ul tau ruleaza la 30 ticks/sec, PLAYER_SPEED pe server trebuie sa fie 5.6.
 // VITEZA DRONEI PRINCIPALE IN PVP.
-// Schimba valoarea asta daca vrei mai incet/mai rapid.
-// Tine aceeasi valoare ca PLAYER_SPEED din GameArena.jsx.
-const GAME_FRAME_SPEED = 2.5;
+// Identic cu Normal PvP, ca senzatia de miscare sa fie aceeasi.
+const GAME_FRAME_SPEED = 2.6;
 const CLIENT_SPEED = GAME_FRAME_SPEED * 60;
 
 // Delta-time smoothing. Valorile sunt "pe secunda", nu pe frame.
 // Asta inseamna ca jocul se simte la fel la 45 FPS, 60 FPS sau 144 FPS.
-// IMPORTANT: SELF_HARD_SNAP_DISTANCE era 360px. Cu input trimis doar la 30Hz
-// (vezi inputTimer mai jos), diferenta dintre predictia locala si pozitia
-// raportata de server putea creste rapid peste acest prag din jitter normal
-// de retea/tab in fundal/GC, declansand un TELEPORT vizibil instant catre
-// pozitia serverului - exact senzatia de "m-a dat in spate brusc".
-// Acum: prag de snap mai mare (560px), ca jitter-ul normal sa nu-l atinga,
-// SI o viteza maxima de corectie (SELF_MAX_CORRECTION_SPEED) care garanteaza
-// ca, sub acel prag, corectia se simte mereu ca o alinieere lina, niciodata
-// ca un salt brusc, indiferent cat de mare e diferenta momentana.
-const SELF_CORRECTION_MOVING = 0.18;
+const SELF_CORRECTION_MOVING = 0.22;
 const SELF_CORRECTION_IDLE = 0;
 const SELF_SNAP_DISTANCE = 0.25;
-const SELF_HARD_SNAP_DISTANCE = 560;
-const SELF_MAX_CORRECTION_SPEED = 900; // px/sec - viteza maxima cu care predictia se "trage" spre server
-const SELF_IDLE_FREEZE_DISTANCE = 180;
+const SELF_HARD_SNAP_DISTANCE = 420;
+const SELF_MAX_CORRECTION_SPEED = 1400; // px/sec - viteza maxima cu care predictia se "trage" spre server
+const SELF_IDLE_FREEZE_DISTANCE = 360;
 
-const REMOTE_SMOOTHING = 16.5;
+const REMOTE_SMOOTHING = 24;
 const REMOTE_PREDICTION = 1.0;
-const REMOTE_HARD_SNAP_DISTANCE = 520;
-const REMOTE_MAX_EXTRAPOLATE_MS = 140;
+const REMOTE_HARD_SNAP_DISTANCE = 360;
+const REMOTE_MAX_EXTRAPOLATE_MS = 80;
 
 const PROJECTILE_SMOOTHING = 18;
 const PROJECTILE_FRAME_SCALE = 60;
@@ -51,8 +41,8 @@ const LOCAL_PROJECTILE_MAX_DISTANCE = 4200;
 const PROJECTILE_HIT_VISUAL_RADIUS = 118;
 const LOCAL_PROJECTILE_SPEED = 3.55;
 const FIRE_COOLDOWN = 3000;
-const ORB_STABLE_TTL = 220;
-const MINIMAP_STABLE_TTL = 5200;
+const ORB_STABLE_TTL = 2400;
+const MINIMAP_STABLE_TTL = 8000;
 
 // Colectare vizuala locala: clientul ascunde instant orbul/energia/core-ul
 // cand intra in el, fara sa astepte urmatorul pachet de la server.
@@ -60,16 +50,16 @@ const MINIMAP_STABLE_TTL = 5200;
 const LOCAL_ORB_COLLECT_DISTANCE = 150;
 const LOCAL_ENERGY_COLLECT_DISTANCE = 135;
 const LOCAL_CORE_COLLECT_DISTANCE = 155;
-const LOCAL_COLLECT_HIDE_TTL = 2200;
+const LOCAL_COLLECT_HIDE_TTL = 1800;
 
-// ---------------------------------------------------------------------------
-// Normal PvP a fost 1v1 (max 2 jucatori/camera). Acum suporta pana la 99
-// jucatori in ACEEASI sesiune (vezi NORMAL_ROOM_MAX_PLAYERS din gateway).
-// Aceste capete de vizibilitate sunt a doua plasa de siguranta pe client,
-// pe langa filtrarea deja facuta de server (acolo se trimit doar cei mai
-// apropiati ~60 jucatori per pachet). Le ridicam de la 80 la 99 ca niciun
-// jucator vizibil sa nu "lipseasca" cand camera e plina.
-const MAX_VISIBLE_REMOTE_PLAYERS = 99;
+// Multiplayer modern sync
+// Client-side prediction + server reconciliation + remote snapshot buffer.
+const INPUT_SEND_INTERVAL_MS = 16;
+const SNAPSHOT_INTERPOLATION_DELAY_MS = 90;
+const SNAPSHOT_BUFFER_TTL_MS = 600;
+const MAX_PENDING_INPUTS = 90;
+
+const MAX_VISIBLE_REMOTE_PLAYERS = 24;
 
 const CORE_TYPES = [
   { type: "nano", name: "Nano Core", shortName: "Nano", color: "#00eaff", effect: "+10 MAX HP" },
@@ -155,7 +145,7 @@ function getCoreMeta(type) {
 }
 
 function getNextDroneAt(currentDrones = 0) {
-  const requirements = [5, 15, 25, 35];
+  const requirements = [5, 15, 25, 35, 50];
   const index = Math.max(0, Math.min(currentDrones, requirements.length - 1));
   return requirements[index];
 }
@@ -167,7 +157,7 @@ function applyOptimisticOrbCollection(unit, count) {
   let drones = Number(unit.drones || 0);
   let nextDroneAt = Number(unit.nextDroneAt || getNextDroneAt(drones));
 
-  while (drones < 4 && progress >= nextDroneAt) {
+  while (drones < 5 && progress >= nextDroneAt) {
     progress -= nextDroneAt;
     drones += 1;
     nextDroneAt = getNextDroneAt(drones);
@@ -239,8 +229,6 @@ function dampPointCapped(currentX, currentY, targetX, targetY, lambda, dt, snapD
     return damped;
   }
 
-  // Pasul cerut de damp e mai mare decat viteza maxima permisa -> il taiem la maxStepDistance,
-  // pe aceeasi directie. Rezultatul e o miscare constanta, predictibila, fara salt vizibil.
   const ratio = maxStepDistance / dampedStepDistance;
   return {
     x: currentX + (damped.x - currentX) * ratio,
@@ -248,7 +236,16 @@ function dampPointCapped(currentX, currentY, targetX, targetY, lambda, dt, snapD
   };
 }
 
-function keepInsideSafeZone(x, y, radius, worldWidth, worldHeight, margin = 70) {
+function keepInsideSafeZone(x, y, radius, worldWidth, worldHeight, margin = 70, allowOutsideZone = false) {
+  // Pentru Normal PvP vrem ca playerul sa poata intra in zona periculoasa.
+  // Clientul limiteaza doar marginile hartii; serverul aplica damage-ul autoritar.
+  if (allowOutsideZone) {
+    return {
+      x: clamp(x, 160, worldWidth - 160),
+      y: clamp(y, 160, worldHeight - 160),
+    };
+  }
+
   const cx = worldWidth / 2;
   const cy = worldHeight / 2;
   const dx = x - cx;
@@ -269,12 +266,6 @@ function keepInsideSafeZone(x, y, radius, worldWidth, worldHeight, margin = 70) 
   };
 }
 
-// IMPORTANT: inainte se facea `new Map(previousMap)` la FIECARE pachet primit de la server
-// (~30-40 ori/secunda), copiind intreaga colectie stabila (poate fi sute de orbs/energy/cores).
-// Aceste copii repetate de Map sunt o sursa majora de presiune pe garbage collector si
-// contribuie direct la spike-urile de FPS care scad si revin periodic. Acum mutam Map-ul
-// existent in loc (acelasi obiect, fara copiere) - rezultatul (continutul final al hartii)
-// este identic, doar alocarea este eliminata.
 function mergeStableItems(previousMap, incoming = [], now, ttlMs) {
   incoming.forEach((item) => {
     if (!item?.id) return;
@@ -368,12 +359,14 @@ function getActiveEffectBadges(unit, now = Date.now()) {
   return badges.slice(0, 2);
 }
 
-function getViewportBounds(cameraX, cameraY, viewport, padding = 650) {
+function getViewportBounds(cameraX, cameraY, viewport, padding = 650, scale = 1) {
+  const safeScale = Math.max(0.2, Number(scale || 1));
+
   return {
-    left: -cameraX - padding,
-    right: -cameraX + viewport.width + padding,
-    top: -cameraY - padding,
-    bottom: -cameraY + viewport.height + padding,
+    left: (-cameraX - padding) / safeScale,
+    right: (viewport.width - cameraX + padding) / safeScale,
+    top: (-cameraY - padding) / safeScale,
+    bottom: (viewport.height - cameraY + padding) / safeScale,
   };
 }
 
@@ -381,11 +374,6 @@ function isVisible(item, bounds, radius = 0) {
   return item && item.x + radius >= bounds.left && item.x - radius <= bounds.right && item.y + radius >= bounds.top && item.y - radius <= bounds.bottom;
 }
 
-// Colectare intr-o singura trecere, in loc de .filter().filter().slice().map() inlantuite.
-// Fiecare .filter()/.slice() din lant aloca un array intermediar nou; la 60-144 frame-uri/secunda,
-// cu liste de sute de elemente (orbs/energy/cores/players), aceste alocari repetate creeaza
-// presiune mare pe garbage collector si cauzeaza micro-ingheturi (spike-uri de FPS care scad
-// si revin). O singura trecere cu push() direct in rezultat aloca un singur array.
 function collectVisible(source, predicate, limit, mapFn) {
   const result = [];
   for (const item of source) {
@@ -479,6 +467,102 @@ function createLocalProjectile(unit, mouseWorldX, mouseWorldY, now) {
   };
 }
 
+
+function getMoveVectorFromInput(input = {}) {
+  let dx = 0;
+  let dy = 0;
+
+  if (input.w) dy -= 1;
+  if (input.s) dy += 1;
+  if (input.a) dx -= 1;
+  if (input.d) dx += 1;
+
+  if (input.mobileMove) {
+    dx += Number(input.moveX || 0);
+    dy += Number(input.moveY || 0);
+  }
+
+  const length = Math.hypot(dx, dy) || 1;
+  return {
+    dx,
+    dy,
+    nx: dx / length,
+    ny: dy / length,
+    moving: dx !== 0 || dy !== 0,
+  };
+}
+
+function predictUnitFromInput(unit, input, dt, worldWidth, worldHeight, zoneRadius) {
+  if (!unit || unit.alive === false) return unit;
+
+  const move = getMoveVectorFromInput(input);
+  const safeDt = Math.min(0.05, Math.max(0, dt || 0));
+  let nextX = unit.x || 0;
+  let nextY = unit.y || 0;
+
+  if (move.moving && (unit.energy ?? 1) > 0) {
+    nextX += move.nx * CLIENT_SPEED * safeDt;
+    nextY += move.ny * CLIENT_SPEED * safeDt;
+  }
+
+  const safe = keepInsideSafeZone(
+    nextX,
+    nextY,
+    zoneRadius || ZONE_RADIUS_FALLBACK,
+    worldWidth || WORLD_WIDTH_FALLBACK,
+    worldHeight || WORLD_HEIGHT_FALLBACK,
+    70,
+    true
+  );
+
+  return {
+    ...unit,
+    x: safe.x,
+    y: safe.y,
+    moveX: move.moving ? move.nx : 0,
+    moveY: move.moving ? move.ny : 0,
+    isMoving: move.moving,
+    moveAngle: move.moving ? Math.atan2(move.dy, move.dx) : unit.moveAngle ?? 0,
+    attacking: Boolean(input.attacking),
+    shieldActive: Boolean(unit.shieldActive || input.shield),
+    mouseX: input.mouseX ?? unit.mouseX ?? safe.x,
+    mouseY: input.mouseY ?? unit.mouseY ?? safe.y,
+  };
+}
+
+function interpolateSnapshotBuffer(buffer = [], renderTime) {
+  if (!buffer.length) return null;
+  if (buffer.length === 1) return buffer[0];
+
+  let older = buffer[0];
+  let newer = buffer[buffer.length - 1];
+
+  for (let i = 0; i < buffer.length - 1; i += 1) {
+    const a = buffer[i];
+    const b = buffer[i + 1];
+    if ((a.__receivedAt || 0) <= renderTime && (b.__receivedAt || 0) >= renderTime) {
+      older = a;
+      newer = b;
+      break;
+    }
+  }
+
+  const aTime = older.__receivedAt || renderTime;
+  const bTime = newer.__receivedAt || aTime;
+  const span = Math.max(1, bTime - aTime);
+  const t = clamp((renderTime - aTime) / span, 0, 1);
+
+  return {
+    ...newer,
+    x: lerp(older.x ?? newer.x, newer.x ?? older.x, t),
+    y: lerp(older.y ?? newer.y, newer.y ?? older.y, t),
+    hp: newer.hp,
+    energy: newer.energy,
+    drones: newer.drones,
+    alive: newer.alive,
+  };
+}
+
 function FlyingAttackDrone({ projectile }) {
   const skin = normalizeSkin(projectile.skin || "cyan");
   const angle = projectile.angle || Math.atan2(projectile.vy || 0, projectile.vx || 1);
@@ -506,7 +590,7 @@ function FlyingAttackDrone({ projectile }) {
   );
 }
 
-function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "low" }) {
+function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const socketRef = useRef(null);
   const keysRef = useRef({});
   const mouseRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
@@ -514,10 +598,6 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "low" }) {
   const fpsRef = useRef({ frames: 0, lastAt: performance.now(), value: 60 });
   const lastRenderSyncRef = useRef(0);
   const pixiLiveRef = useRef(null);
-  // CORE_TYPES e static - harta de culori nu se schimba niciodata in timpul jocului.
-  // Inainte se reconstruia cu .reduce() la FIECARE frame din rAF (60-144 ori/secunda),
-  // o alocare complet inutila care adauga presiune pe garbage collector. O calculam o
-  // singura data si o refolosim.
   const coreColorMapRef = useRef(
     CORE_TYPES.reduce((acc, core) => {
       acc[core.type] = core.color;
@@ -525,7 +605,15 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "low" }) {
     }, {})
   );
   const worldElementRef = useRef(null);
+  const zoneElementRef = useRef(null);
+  const zoneSmokeElementRef = useRef(null);
   const sendInputRef = useRef(() => {});
+  const inputSeqRef = useRef(0);
+  const lastInputSentAtRef = useRef(performance.now());
+  const pendingInputsRef = useRef([]);
+  const remoteSnapshotBufferRef = useRef(new Map());
+  const lastConfirmedHpRef = useRef(null);
+  const lastCollectionSeqRef = useRef(0);
 
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
   const joystickPointerRef = useRef(null);
@@ -537,7 +625,11 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "low" }) {
     status: "connecting",
     playerCount: 0,
     minPlayers: 1,
-    maxPlayers: 2,
+    maxPlayers: 50,
+    countdown: null,
+    coreDropCountdown: null,
+    winnerId: null,
+    winnerName: null,
     worldWidth: WORLD_WIDTH_FALLBACK,
     worldHeight: WORLD_HEIGHT_FALLBACK,
     safeZoneRadius: ZONE_RADIUS_FALLBACK,
@@ -619,50 +711,133 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "low" }) {
         MINIMAP_STABLE_TTL
       );
 
-worldRef.current = {
-  ...worldRef.current,
-  ...state,
-  safeZoneRadius: state.safeZoneRadius || ZONE_RADIUS_FALLBACK,
-  you: state.you || worldRef.current.you,
-  players: Array.isArray(state.players) ? state.players.map((p) => ({ ...p, __seenAt: now })) : worldRef.current.players,
-  spectatingPlayer: state.spectatingPlayer
-    ? { ...state.spectatingPlayer, __seenAt: now }
-    : state.spectatingPlayer === null
-      ? null
-      : worldRef.current.spectatingPlayer,
+      worldRef.current = {
+        ...worldRef.current,
+        ...state,
+        safeZoneRadius: state.safeZoneRadius || ZONE_RADIUS_FALLBACK,
+        you: state.you || worldRef.current.you,
+        players: Array.isArray(state.players) ? state.players.map((p) => ({ ...p, __seenAt: now })) : worldRef.current.players,
+        spectatingPlayer: state.spectatingPlayer
+          ? { ...state.spectatingPlayer, __seenAt: now }
+          : state.spectatingPlayer === null
+            ? null
+            : worldRef.current.spectatingPlayer,
 
-  orbs: state.orbs !== undefined
-    ? [...stableOrbMapRef.current.values()].filter((orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id))
-    : worldRef.current.orbs,
+        orbs: state.orbs !== undefined
+          ? [...stableOrbMapRef.current.values()].filter((orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id))
+          : worldRef.current.orbs,
 
-  minimapOrbs: (state.minimapOrbs !== undefined || state.orbs !== undefined)
-    ? [...stableMinimapOrbMapRef.current.values()]
-    : worldRef.current.minimapOrbs,
+        minimapOrbs: (state.minimapOrbs !== undefined || state.orbs !== undefined)
+          ? [...stableMinimapOrbMapRef.current.values()]
+          : worldRef.current.minimapOrbs,
 
-  minimapEnergyCells: (state.minimapEnergyCells !== undefined || state.energyCells !== undefined)
-    ? [...stableMinimapEnergyMapRef.current.values()]
-    : worldRef.current.minimapEnergyCells,
+        minimapEnergyCells: (state.minimapEnergyCells !== undefined || state.energyCells !== undefined)
+          ? [...stableMinimapEnergyMapRef.current.values()]
+          : worldRef.current.minimapEnergyCells,
 
-  energyCells: state.energyCells !== undefined
-    ? [...stableEnergyMapRef.current.values()].filter((cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id))
-    : worldRef.current.energyCells,
+        energyCells: state.energyCells !== undefined
+          ? [...stableEnergyMapRef.current.values()].filter((cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id))
+          : worldRef.current.energyCells,
 
-  cores: state.cores !== undefined
-    ? state.cores.filter((core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id))
-    : worldRef.current.cores,
+        cores: state.cores !== undefined
+          ? state.cores.filter((core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id))
+          : worldRef.current.cores,
 
-  minimapCores: (state.minimapCores !== undefined || state.cores !== undefined)
-    ? [...stableCoreMapRef.current.values()]
-    : worldRef.current.minimapCores,
+        minimapCores: (state.minimapCores !== undefined || state.cores !== undefined)
+          ? [...stableCoreMapRef.current.values()]
+          : worldRef.current.minimapCores,
 
-  projectiles: Array.isArray(state.projectiles)
-    ? state.projectiles
-    : worldRef.current.projectiles,
+        projectiles: Array.isArray(state.projectiles) ? state.projectiles : worldRef.current.projectiles,
+        leaderboard: Array.isArray(state.leaderboard) ? state.leaderboard : worldRef.current.leaderboard,
+      };
 
-  leaderboard: Array.isArray(state.leaderboard)
-    ? state.leaderboard
-    : worldRef.current.leaderboard,
-};
+      if (state.you) {
+        const lastProcessedInputSeq = Number(
+          state.you.lastProcessedInputSeq ?? state.lastProcessedInputSeq ?? 0
+        );
+
+        if (Number.isFinite(lastProcessedInputSeq) && lastProcessedInputSeq > 0) {
+          pendingInputsRef.current = pendingInputsRef.current.filter(
+            (input) => input.seq > lastProcessedInputSeq
+          );
+        }
+
+        let reconciledYou = { ...state.you };
+        const worldWidth = state.worldWidth || worldRef.current.worldWidth || WORLD_WIDTH_FALLBACK;
+        const worldHeight = state.worldHeight || worldRef.current.worldHeight || WORLD_HEIGHT_FALLBACK;
+        const zoneRadius = state.safeZoneRadius || worldRef.current.safeZoneRadius || ZONE_RADIUS_FALLBACK;
+
+        for (const pending of pendingInputsRef.current) {
+          reconciledYou = predictUnitFromInput(
+            reconciledYou,
+            pending,
+            Number(pending.dt || 16) / 1000,
+            worldWidth,
+            worldHeight,
+            zoneRadius
+          );
+        }
+
+        const previousHp = lastConfirmedHpRef.current;
+        lastConfirmedHpRef.current = state.you.hp;
+
+        const incomingCollectionSeq = Number(state.you.collectionSeq || 0);
+        const localCollectionSeq = Number(lastCollectionSeqRef.current || 0);
+        const keepLocalCollectStats = localCollectionSeq > incomingCollectionSeq;
+        const collectStatsSource = keepLocalCollectStats
+          ? (predictedYouRef.current || state.you)
+          : state.you;
+
+        if (!keepLocalCollectStats && incomingCollectionSeq > 0) {
+          lastCollectionSeqRef.current = Math.max(lastCollectionSeqRef.current || 0, incomingCollectionSeq);
+        }
+
+        predictedYouRef.current = {
+          ...(predictedYouRef.current || {}),
+          ...reconciledYou,
+          // HP este autoritar de la server si se aplica imediat.
+          hp: state.you.hp,
+          maxHp: state.you.maxHp,
+          alive: state.you.alive,
+
+          // Orb/energy/drone stats se iau din ultimul collect confirmat.
+          // Asta opreste flicker-ul de tip 4/5 -> 5/5 -> 4/5 si pastreaza logica 5/15/25/35/50.
+          energy: collectStatsSource.energy,
+          drones: collectStatsSource.drones,
+          progress: collectStatsSource.progress,
+          nextDroneAt: collectStatsSource.nextDroneAt,
+          totalCollected: collectStatsSource.totalCollected,
+          collectionSeq: Math.max(incomingCollectionSeq, localCollectionSeq),
+
+          serverX: state.you.x,
+          serverY: state.you.y,
+          lastProcessedInputSeq,
+          damageFlashUntil:
+            previousHp !== null && state.you.hp < previousHp
+              ? now + 220
+              : predictedYouRef.current?.damageFlashUntil || 0,
+        };
+
+        worldRef.current.you = predictedYouRef.current;
+      }
+
+      const snapshotsById = remoteSnapshotBufferRef.current;
+      const incomingForSnapshots = Array.isArray(state.players) ? state.players : [];
+      const activeRemoteIds = new Set();
+      incomingForSnapshots.forEach((player) => {
+        if (!player?.id) return;
+        activeRemoteIds.add(player.id);
+        const oldBuffer = snapshotsById.get(player.id) || [];
+        const nextBuffer = [
+          ...oldBuffer,
+          { ...player, __receivedAt: now },
+        ].filter((snapshot) => now - (snapshot.__receivedAt || now) <= SNAPSHOT_BUFFER_TTL_MS);
+        snapshotsById.set(player.id, nextBuffer.slice(-12));
+      });
+
+      for (const id of snapshotsById.keys()) {
+        if (!activeRemoteIds.has(id)) snapshotsById.delete(id);
+      }
 
       if (state.you?.alive === false) {
         predictedYouRef.current = { ...(predictedYouRef.current || {}), ...state.you };
@@ -671,9 +846,7 @@ worldRef.current = {
           ? worldRef.current.players.filter((player) => player?.alive !== false)
           : [];
 
-        const directSpectator = state.spectatingPlayer?.alive !== false
-          ? state.spectatingPlayer
-          : null;
+        const directSpectator = state.spectatingPlayer?.alive !== false ? state.spectatingPlayer : null;
 
         const preferredTarget = state.spectatorTargetId
           ? aliveSpectators.find((player) => player.id === state.spectatorTargetId)
@@ -706,21 +879,92 @@ worldRef.current = {
       setConnectionError("Nu ma pot conecta la serverul PvP. Verifica Render/WebSocket.");
     });
 
+    const applyCollectSync = (event = {}) => {
+      const now = performance.now();
+      const collectionSeq = Number(event.collectionSeq || event.you?.collectionSeq || 0);
+
+      if (collectionSeq > 0) {
+        lastCollectionSeqRef.current = Math.max(lastCollectionSeqRef.current || 0, collectionSeq);
+      }
+
+      for (const id of event.collectedOrbIds || []) {
+        hiddenOrbIdsRef.current.set(id, now);
+        stableOrbMapRef.current.delete(id);
+        stableMinimapOrbMapRef.current.delete(id);
+      }
+
+      for (const id of event.collectedEnergyIds || []) {
+        hiddenEnergyIdsRef.current.set(id, now);
+        stableEnergyMapRef.current.delete(id);
+        stableMinimapEnergyMapRef.current.delete(id);
+      }
+
+      for (const id of event.collectedCoreIds || []) {
+        hiddenCoreIdsRef.current.set(id, now);
+        stableCoreMapRef.current.delete(id);
+      }
+
+      if (event.you) {
+        const previous = predictedYouRef.current || worldRef.current.you || event.you;
+
+        // Evenimentul de collect este trimis non-volatile de backend imediat dupa colectare.
+        // Nu mutam pozitia locala inapoi; luam doar stats autoritare.
+        predictedYouRef.current = {
+          ...previous,
+          hp: event.you.hp,
+          maxHp: event.you.maxHp,
+          energy: event.you.energy,
+          drones: event.you.drones,
+          progress: event.you.progress,
+          nextDroneAt: event.you.nextDroneAt,
+          totalCollected: event.you.totalCollected,
+          kills: event.you.kills,
+          alive: event.you.alive,
+          collectionSeq: event.you.collectionSeq || collectionSeq,
+          lastProcessedInputSeq: event.you.lastProcessedInputSeq ?? previous.lastProcessedInputSeq,
+          serverX: event.you.x,
+          serverY: event.you.y,
+        };
+
+        worldRef.current = {
+          ...worldRef.current,
+          you: predictedYouRef.current,
+          orbs: [...stableOrbMapRef.current.values()].filter((orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id)),
+          minimapOrbs: [...stableMinimapOrbMapRef.current.values()],
+          energyCells: [...stableEnergyMapRef.current.values()].filter((cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id)),
+          minimapEnergyCells: [...stableMinimapEnergyMapRef.current.values()],
+          cores: (worldRef.current.cores || []).filter((core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id)),
+        };
+
+        setHudData({
+          ...worldRef.current,
+          you: predictedYouRef.current,
+          fps: fpsRef.current.value,
+        });
+      }
+    };
+
     socket.on("normal-pvp:joined", applyState);
     socket.on("normal-pvp:state", applyState);
+    socket.on("normal-pvp:collect", applyCollectSync);
     socket.on("normal-pvp:error", (message) => setConnectionError(typeof message === "string" ? message : "Eroare Normal PvP."));
 
     const sendInputNow = () => {
       if (!socket.connected) return;
 
+      const now = performance.now();
       const you = predictedYouRef.current || worldRef.current.you;
       const mouse = mouseRef.current;
       const mouseWorldX = you ? you.x + (mouse.x - window.innerWidth / 2) : 0;
       const mouseWorldY = you ? you.y + (mouse.y - window.innerHeight / 2) : 0;
-
       const mobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
+      const dt = Math.min(50, Math.max(1, now - lastInputSentAtRef.current));
+      lastInputSentAtRef.current = now;
 
-      socket.emit("normal-pvp:input", {
+      const input = {
+        seq: inputSeqRef.current + 1,
+        dt,
+        clientSentAt: now,
         w: Boolean(keysRef.current.w || keysRef.current.arrowup || (mobileMove.active && mobileMove.y < -0.22)),
         a: Boolean(keysRef.current.a || keysRef.current.arrowleft || (mobileMove.active && mobileMove.x < -0.22)),
         s: Boolean(keysRef.current.s || keysRef.current.arrowdown || (mobileMove.active && mobileMove.y > 0.22)),
@@ -732,23 +976,28 @@ worldRef.current = {
         shield: Boolean(keysRef.current.rightMouseDown),
         mouseX: mouseWorldX,
         mouseY: mouseWorldY,
-      });
+      };
+
+      inputSeqRef.current = input.seq;
+
+      if (worldRef.current.status === "playing" && you?.alive !== false) {
+        pendingInputsRef.current.push(input);
+        if (pendingInputsRef.current.length > MAX_PENDING_INPUTS) {
+          pendingInputsRef.current = pendingInputsRef.current.slice(-MAX_PENDING_INPUTS);
+        }
+      }
+
+      socket.emit("normal-pvp:input", input);
     };
 
     sendInputRef.current = sendInputNow;
 
-    // IMPORTANT: inputul trimis catre server era la 33ms (30Hz). Asta facea ca
-    // serverul sa "vada" miscarea in trepte de 33ms, nu continuu, ceea ce crestea
-    // diferenta dintre predictia locala si pozitia raportata de server si declansa
-    // teleport-uri vizibile (snap) la reconciliere, chiar si singur pe server.
-    // Acum trimitem la 20ms (~50Hz), mult mai aproape de tick-ul serverului (60Hz),
-    // asa ca pozitia raportata de server avanseaza aproape continuu.
-    const inputTimer = window.setInterval(sendInputNow, 20);
+    const inputTimer = window.setInterval(sendInputNow, INPUT_SEND_INTERVAL_MS);
 
     const hudTimer = window.setInterval(() => {
       const data = worldRef.current;
       setHudData({ ...data, you: predictedYouRef.current || data.you, fps: fpsRef.current.value });
-    }, 33);
+    }, 66);
 
     return () => {
       window.clearInterval(inputTimer);
@@ -780,71 +1029,30 @@ worldRef.current = {
       const zoneRadius = data.safeZoneRadius || ZONE_RADIUS_FALLBACK;
 
       if (data.you) {
-        const serverYou = data.you;
-        const current = predictedYouRef.current || { ...serverYou };
-
-        let dx = 0;
-        let dy = 0;
-        if (keysRef.current.w || keysRef.current.arrowup) dy -= 1;
-        if (keysRef.current.s || keysRef.current.arrowdown) dy += 1;
-        if (keysRef.current.a || keysRef.current.arrowleft) dx -= 1;
-        if (keysRef.current.d || keysRef.current.arrowright) dx += 1;
-
+        const current = predictedYouRef.current || { ...data.you };
         const mobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
-        if (mobileMove.active) {
-          dx += mobileMove.x;
-          dy += mobileMove.y;
-        }
-
-        const length = Math.hypot(dx, dy) || 1;
-        const isMoving = dx !== 0 || dy !== 0;
-        let nextX = current.x;
-        let nextY = current.y;
-
-        if (data.status === "playing" && current.alive !== false && isMoving && (current.energy ?? 1) > 0) {
-          nextX += (dx / length) * CLIENT_SPEED * dt;
-          nextY += (dy / length) * CLIENT_SPEED * dt;
-        }
-
-        const safe = keepInsideSafeZone(nextX, nextY, zoneRadius, worldWidth, worldHeight, 70);
-
-        let corrected;
-
-        if (isMoving) {
-          corrected = dampPointCapped(
-            safe.x,
-            safe.y,
-            serverYou.x,
-            serverYou.y,
-            SELF_CORRECTION_MOVING,
-            dt,
-            SELF_SNAP_DISTANCE,
-            SELF_HARD_SNAP_DISTANCE,
-            SELF_MAX_CORRECTION_SPEED
-          );
-        } else {
-          const currentX = current.x ?? safe.x;
-          const currentY = current.y ?? safe.y;
-          const serverDistance = Math.hypot(serverYou.x - currentX, serverYou.y - currentY);
-
-          corrected = serverDistance > SELF_IDLE_FREEZE_DISTANCE
-            ? { x: serverYou.x, y: serverYou.y }
-            : { x: currentX, y: currentY };
-        }
-
-        predictedYouRef.current = {
-          ...serverYou,
-          x: corrected.x,
-          y: corrected.y,
-          moveX: isMoving ? dx / length : 0,
-          moveY: isMoving ? dy / length : 0,
-          isMoving,
-          moveAngle: isMoving ? Math.atan2(dy, dx) : current.moveAngle ?? serverYou.moveAngle,
-          attacking: Boolean(keysRef.current.mouseDown || serverYou.attacking),
-          shieldActive: Boolean(serverYou.shieldActive),
-          mouseX: corrected.x + (mouseRef.current.x - window.innerWidth / 2),
-          mouseY: corrected.y + (mouseRef.current.y - window.innerHeight / 2),
+        const input = {
+          w: Boolean(keysRef.current.w || keysRef.current.arrowup || (mobileMove.active && mobileMove.y < -0.22)),
+          a: Boolean(keysRef.current.a || keysRef.current.arrowleft || (mobileMove.active && mobileMove.x < -0.22)),
+          s: Boolean(keysRef.current.s || keysRef.current.arrowdown || (mobileMove.active && mobileMove.y > 0.22)),
+          d: Boolean(keysRef.current.d || keysRef.current.arrowright || (mobileMove.active && mobileMove.x > 0.22)),
+          moveX: mobileMove.active ? mobileMove.x : 0,
+          moveY: mobileMove.active ? mobileMove.y : 0,
+          mobileMove: Boolean(mobileMove.active),
+          attacking: Boolean(keysRef.current.mouseDown),
+          shield: Boolean(keysRef.current.rightMouseDown),
+          mouseX: current.x + (mouseRef.current.x - window.innerWidth / 2),
+          mouseY: current.y + (mouseRef.current.y - window.innerHeight / 2),
         };
+
+        predictedYouRef.current = predictUnitFromInput(
+          current,
+          input,
+          dt,
+          worldWidth,
+          worldHeight,
+          zoneRadius
+        );
 
         const predicted = predictedYouRef.current;
 
@@ -853,13 +1061,9 @@ worldRef.current = {
           const collectedEnergy = locallyCollectItems(stableEnergyMapRef, hiddenEnergyIdsRef, predicted, LOCAL_ENERGY_COLLECT_DISTANCE, now);
           locallyCollectItems(stableCoreMapRef, hiddenCoreIdsRef, predicted, LOCAL_CORE_COLLECT_DISTANCE, now);
 
-          if (collectedOrbs > 0 || collectedEnergy > 0) {
-            predictedYouRef.current = applyOptimisticEnergyCollection(
-              applyOptimisticOrbCollection(predictedYouRef.current, collectedOrbs),
-              collectedEnergy
-            );
-          }
-
+          // Ascundem instant orb/energy/core vizual, dar NU mai incrementam HUD-ul local aici.
+          // Backend-ul trimite imediat normal-pvp:collect cu progress/drones/totalCollected autoritare.
+          // Asa nu mai apare intarzierea/flicker-ul si nu se strica logica 5/15/25/35/50.
           worldRef.current = {
             ...worldRef.current,
             you: predictedYouRef.current || worldRef.current.you,
@@ -867,14 +1071,6 @@ worldRef.current = {
             energyCells: [...stableEnergyMapRef.current.values()].filter((cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id)),
             cores: (worldRef.current.cores || []).filter((core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id)),
           };
-
-          if (collectedOrbs > 0 || collectedEnergy > 0) {
-            setHudData({
-              ...worldRef.current,
-              you: predictedYouRef.current || worldRef.current.you,
-              fps: fpsRef.current.value,
-            });
-          }
         }
 
         const wantsToAttack = Boolean(keysRef.current.mouseDown);
@@ -902,78 +1098,44 @@ worldRef.current = {
       const remoteMap = remotePlayersRef.current;
 
       const isSpectating = Boolean(me && me.alive === false);
-      const serverSpectatorTarget =
-        data.spectatingPlayer?.alive !== false
-          ? data.spectatingPlayer
-          : null;
+      const serverSpectatorTarget = data.spectatingPlayer?.alive !== false ? data.spectatingPlayer : null;
 
-      const currentSpectatorTarget =
-        isSpectating
-          ? (
-              serverSpectatorTarget ||
-              (data.spectatorTargetId
-                ? (data.players || []).find((p) => p?.id === data.spectatorTargetId && p?.alive !== false)
-                : null) ||
-              (spectatorTargetRef.current?.alive !== false
-                ? spectatorTargetRef.current
-                : null) ||
-              (data.players || []).find((p) => p?.alive !== false) ||
-              null
-            )
-          : null;
+      const currentSpectatorTarget = isSpectating
+        ? (
+            serverSpectatorTarget ||
+            (data.spectatorTargetId
+              ? (data.players || []).find((p) => p?.id === data.spectatorTargetId && p?.alive !== false)
+              : null) ||
+            (spectatorTargetRef.current?.alive !== false ? spectatorTargetRef.current : null) ||
+            (data.players || []).find((p) => p?.alive !== false) ||
+            null
+          )
+        : null;
 
       if (currentSpectatorTarget) {
         spectatorTargetRef.current = currentSpectatorTarget;
       }
 
-      const incomingPlayers = new Map((data.players || []).filter((p) => p?.id && p.id !== me?.id).map((p) => [p.id, p]));
+      const renderTime = now - SNAPSHOT_INTERPOLATION_DELAY_MS;
+      const snapshotBuffers = remoteSnapshotBufferRef.current;
+      const activeRemoteIds = new Set();
 
-      for (const [id, target] of incomingPlayers.entries()) {
-        const current = remoteMap.get(id) || target;
-        const moveX = target.moveX ?? current.moveX ?? 0;
-        const moveY = target.moveY ?? current.moveY ?? 0;
-        const remoteIsMoving = Boolean(target.isMoving ?? current.isMoving);
-        const packetAgeSeconds = Math.min(
-          REMOTE_MAX_EXTRAPOLATE_MS / 1000,
-          Math.max(0, (now - (target.__seenAt || now)) / 1000)
-        );
-        const targetX = remoteIsMoving
-          ? target.x + moveX * CLIENT_SPEED * packetAgeSeconds * REMOTE_PREDICTION
-          : target.x;
-        const targetY = remoteIsMoving
-          ? target.y + moveY * CLIENT_SPEED * packetAgeSeconds * REMOTE_PREDICTION
-          : target.y;
-        const predictedRemoteX = current.x ?? targetX;
-        const predictedRemoteY = current.y ?? targetY;
-
-        const remoteCorrected = dampPoint(
-          predictedRemoteX,
-          predictedRemoteY,
-          targetX,
-          targetY,
-          remoteIsMoving ? REMOTE_SMOOTHING : 12,
-          dt,
-          0.8,
-          REMOTE_HARD_SNAP_DISTANCE
-        );
-
+      for (const [id, buffer] of snapshotBuffers.entries()) {
+        if (id === me?.id) continue;
+        const interpolated = interpolateSnapshotBuffer(buffer, renderTime);
+        if (!interpolated) continue;
+        activeRemoteIds.add(id);
         remoteMap.set(id, {
-          ...target,
-          x: remoteCorrected.x,
-          y: remoteCorrected.y,
-          moveX,
-          moveY,
-          moveAngle: target.moveAngle ?? current.moveAngle ?? 0,
-          isMoving: remoteIsMoving,
-          attacking: Boolean(target.attacking),
-          shieldActive: Boolean(target.shieldActive),
-          mouseX: target.mouseX ?? current.mouseX ?? target.x,
-          mouseY: target.mouseY ?? current.mouseY ?? target.y,
+          ...interpolated,
+          x: interpolated.x,
+          y: interpolated.y,
+          attacking: Boolean(interpolated.attacking),
+          shieldActive: Boolean(interpolated.shieldActive),
         });
       }
 
       for (const id of remoteMap.keys()) {
-        if (!incomingPlayers.has(id)) remoteMap.delete(id);
+        if (!activeRemoteIds.has(id)) remoteMap.delete(id);
       }
 
       const projectileMap = projectilesRef.current;
@@ -982,8 +1144,6 @@ worldRef.current = {
       for (const [id, current] of projectileMap.entries()) {
         projectileMap.set(id, advanceProjectile(current, dt));
       }
-
-      const localProjectilesToRemove = new Set();
 
       for (const [id, target] of incomingProjectiles.entries()) {
         const current = projectileMap.get(id) || target;
@@ -1000,8 +1160,6 @@ worldRef.current = {
           y: damp(current.y ?? target.y, target.y, PROJECTILE_SMOOTHING, dt),
         });
       }
-
-      localProjectilesToRemove.forEach((id) => projectileMap.delete(id));
 
       const projectileTargets = [me, ...remoteMap.values()].filter(Boolean);
 
@@ -1035,14 +1193,11 @@ worldRef.current = {
         }
       }
 
-      const spectatedFromRemote =
-        currentSpectatorTarget?.id
-          ? remoteMap.get(currentSpectatorTarget.id) || currentSpectatorTarget
-          : null;
+      const spectatedFromRemote = currentSpectatorTarget?.id
+        ? remoteMap.get(currentSpectatorTarget.id) || currentSpectatorTarget
+        : null;
 
-      const liveCameraSubject = isSpectating
-        ? (spectatedFromRemote || currentSpectatorTarget || me)
-        : me;
+      const liveCameraSubject = isSpectating ? (spectatedFromRemote || currentSpectatorTarget || me) : me;
 
       const liveYou = isSpectating
         ? (
@@ -1054,14 +1209,31 @@ worldRef.current = {
           ? { ...me, skin: normalizeSkin(me?.skin || getSelectedSkin(user)) }
           : null;
 
-      const liveCameraX = liveCameraSubject ? viewport.width / 2 - liveCameraSubject.x : 0;
-      const liveCameraY = liveCameraSubject ? viewport.height / 2 - liveCameraSubject.y : 0;
+      const liveIsMobileLike = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(hover: none)").matches;
+      const liveCameraScale = liveIsMobileLike ? 1 : 0.72;
+      const liveCameraX = liveCameraSubject ? viewport.width / 2 - liveCameraSubject.x * liveCameraScale : 0;
+      const liveCameraY = liveCameraSubject ? viewport.height / 2 - liveCameraSubject.y * liveCameraScale : 0;
 
       if (worldElementRef.current) {
-        worldElementRef.current.style.transform = `translate3d(${liveCameraX}px, ${liveCameraY}px, 0)`;
+        worldElementRef.current.style.transformOrigin = "0 0";
+        worldElementRef.current.style.transform = `translate3d(${liveCameraX}px, ${liveCameraY}px, 0) scale(${liveCameraScale})`;
       }
 
-      const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 820);
+      // Cercul zonei si fumul verde sunt tinute la diametrul initial.
+      // La fiecare frame modificam DOAR transform: scale(...), fara width/height.
+      // Asta evita reflow/layout si ramane foarte ieftin pe mobil.
+      const zoneScale = Math.max(0.01, zoneRadius / ZONE_RADIUS_FALLBACK);
+      const zoneTransform = `translate(-50%, -50%) scale(${zoneScale})`;
+
+      if (zoneElementRef.current) {
+        zoneElementRef.current.style.transform = zoneTransform;
+      }
+
+      if (zoneSmokeElementRef.current) {
+        zoneSmokeElementRef.current.style.transform = zoneTransform;
+      }
+
+      const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 980, liveCameraScale);
       const livePlayers = collectVisible(
         remoteMap.values(),
         (player) => player?.id !== liveYou?.id && isVisible(player, liveBounds, 380),
@@ -1071,22 +1243,22 @@ worldRef.current = {
       const liveOrbs = collectVisible(
         stableOrbMapRef.current.values(),
         (orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id) && isVisible(orb, liveBounds, 45),
-        560
+        140
       );
       const liveEnergyCells = collectVisible(
         stableEnergyMapRef.current.values(),
         (cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id) && isVisible(cell, liveBounds, 70),
-        130
+        50
       );
       const liveCores = collectVisible(
         data.cores || [],
         (core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id) && isVisible(core, liveBounds, 130),
-        18
+        9
       );
       const liveProjectiles = collectVisible(
         projectileMap.values(),
         (projectile) => isVisible(projectile, liveBounds, 180),
-        120
+        45
       );
 
       pixiLiveRef.current = {
@@ -1101,22 +1273,14 @@ worldRef.current = {
         simpleProjectiles: [],
         cameraX: liveCameraX,
         cameraY: liveCameraY,
-        scale: 1,
+        scale: liveCameraScale,
         viewportWidth: viewport.width,
         viewportHeight: viewport.height,
         coreColorMap: coreColorMapRef.current,
         otherPlayerSize: 112,
-        otherPlayerQuality: 2,
+        otherPlayerQuality: 0,
       };
 
-      // IMPORTANT: inainte se construiau [...remoteMap.values()] si [...projectileMap.values()]
-      // DIN NOU aici, desi liste foarte similare (livePlayers/liveProjectiles) fusesera deja
-      // construite mai sus pentru pixiLiveRef. La 60-144 frame-uri/secunda, aceste alocari
-      // duble de array-uri (plus toate filter/map/slice intermediare) creeaza presiune mare pe
-      // garbage collector, iar cand GC-ul ruleaza o colectare majora browserul "ingheata" un
-      // frame - exact spike-urile de FPS care scad la 30 si revin. Acum refolosim direct
-      // remoteMap/projectileMap (Map-urile live, deja actualizate mai sus) fara sa construim
-      // liste suplimentare; setRenderData ruleaza oricum doar la ~15Hz (66ms), nu la fiecare frame.
       if (now - lastRenderSyncRef.current >= 66) {
         lastRenderSyncRef.current = now;
         setRenderData({
@@ -1453,25 +1617,21 @@ worldRef.current = {
   const isDead = Boolean(you && you.alive === false);
   const liveSpectatorCandidates = (renderData.players || []).filter((player) => player?.alive !== false);
 
-  const serverSpectatingPlayer =
-    renderData.spectatingPlayer?.alive !== false
-      ? renderData.spectatingPlayer
-      : null;
+  const serverSpectatingPlayer = renderData.spectatingPlayer?.alive !== false ? renderData.spectatingPlayer : null;
 
-  const spectatorTarget =
-    isDead
-      ? (
-          serverSpectatingPlayer ||
-          (renderData.spectatorTargetId
-            ? liveSpectatorCandidates.find((player) => player.id === renderData.spectatorTargetId)
-            : null) ||
-          (spectatorTargetRef.current?.alive !== false
-            ? liveSpectatorCandidates.find((player) => player.id === spectatorTargetRef.current.id) || spectatorTargetRef.current
-            : null) ||
-          liveSpectatorCandidates[0] ||
-          null
-        )
-      : null;
+  const spectatorTarget = isDead
+    ? (
+        serverSpectatingPlayer ||
+        (renderData.spectatorTargetId
+          ? liveSpectatorCandidates.find((player) => player.id === renderData.spectatorTargetId)
+          : null) ||
+        (spectatorTargetRef.current?.alive !== false
+          ? liveSpectatorCandidates.find((player) => player.id === spectatorTargetRef.current.id) || spectatorTargetRef.current
+          : null) ||
+        liveSpectatorCandidates[0] ||
+        null
+      )
+    : null;
 
   if (spectatorTarget) {
     spectatorTargetRef.current = spectatorTarget;
@@ -1479,15 +1639,22 @@ worldRef.current = {
 
   const cameraSubject = isDead ? (spectatorTarget || you) : you;
 
-  const cameraX = cameraSubject ? viewport.width / 2 - cameraSubject.x : 0;
-  const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y : 0;
-  const bounds = getViewportBounds(cameraX, cameraY, viewport, 750);
+  // CAMERA / ZOOM - identic cu BattleRoyaleMode:
+  // Desktop/laptop: 0.72 = vezi harta mai de sus.
+  // Telefon/tableta touch: 1 = ramane aproape pentru controale si lizibilitate.
+  const DESKTOP_CAMERA_SCALE = 0.72;
+  const MOBILE_CAMERA_SCALE = 1;
+  const cameraScale = isMobileControls ? MOBILE_CAMERA_SCALE : DESKTOP_CAMERA_SCALE;
 
-  const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), 520);
-  const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), 120);
-  const visibleCores = collectVisible(renderData.cores || [], (core) => isVisible(core, bounds, 120), 18);
+  const cameraX = cameraSubject ? viewport.width / 2 - cameraSubject.x * cameraScale : 0;
+  const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y * cameraScale : 0;
+  const bounds = getViewportBounds(cameraX, cameraY, viewport, 720, cameraScale);
+
+  const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), 140);
+  const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), 50);
+  const visibleCores = collectVisible(renderData.cores || [], (core) => isVisible(core, bounds, 120), 9);
   const visiblePlayers = collectVisible(renderData.players || [], (player) => isVisible(player, bounds, 360), MAX_VISIBLE_REMOTE_PLAYERS);
-  const visibleProjectiles = collectVisible(renderData.projectiles || [], (projectile) => isVisible(projectile, bounds, 160), 100);
+  const visibleProjectiles = collectVisible(renderData.projectiles || [], (projectile) => isVisible(projectile, bounds, 160), 45);
 
   const rendererPlayer = isDead && spectatorTarget
     ? {
@@ -1513,14 +1680,36 @@ worldRef.current = {
   const activeBadges = useMemo(() => getActiveEffectBadges(hudYou), [hudYou]);
   const leaderboard = hudData.leaderboard || renderData.leaderboard || [];
   const status = hudData.status || renderData.status || "connecting";
-  const isWaiting = status !== "playing" && status !== "finished";
+  const isWaiting = status === "waiting" || status === "connecting";
+  const isCountdown = status === "countdown";
+  const isMatchmaking = isWaiting || isCountdown;
   const isFinished = status === "finished";
   const playersAlive = hudData.playerCount || renderData.playerCount || 1;
-  const minPlayers = hudData.minPlayers || renderData.minPlayers || 1;
+  const minPlayers = hudData.minPlayers || renderData.minPlayers || 2;
   const maxPlayers = hudData.maxPlayers || renderData.maxPlayers || 2;
-  const countdown = hudData.countdown || renderData.countdown;
+  const countdown = hudData.countdown || renderData.countdown || 5;
   const winnerName = hudData.winnerName || renderData.winnerName;
   const coreDropCountdown = hudData.coreDropCountdown || renderData.coreDropCountdown;
+
+  // IMPORTANT: cand meciul se termina (status === "finished"), nu mai
+  // asteptam un click manual pe "EXIT TO MENU" - scoatem automat jucatorul
+  // din sesiune, dupa un mic delay ca sa poata citi cine a castigat.
+  useEffect(() => {
+    if (!isFinished) return;
+
+    const timeout = window.setTimeout(() => {
+      if (onExitToMenu) onExitToMenu();
+    }, 6000);
+
+    return () => window.clearTimeout(timeout);
+  }, [isFinished, onExitToMenu]);
+
+  const matchStartedAt = hudData.matchStartedAt || renderData.matchStartedAt;
+  const zoneShrinkDuration = hudData.zoneShrinkDuration || renderData.zoneShrinkDuration || 600000;
+
+  const zoneRemainingMs = matchStartedAt ? Math.max(0, zoneShrinkDuration - (Date.now() - matchStartedAt)) : zoneShrinkDuration;
+  const zoneRemainingMinutes = Math.floor(zoneRemainingMs / 60000);
+  const zoneRemainingSeconds = Math.floor((zoneRemainingMs % 60000) / 1000).toString().padStart(2, "0");
 
   const hp = hudYou?.hp ?? 100;
   const maxHp = hudYou?.maxHp ?? 100;
@@ -1530,27 +1719,48 @@ worldRef.current = {
 
   return (
     <div className={`game-arena pvp-dom-arena normal-pvp-dom-arena ${isMobileControls ? "is-mobile-device is-mobile-portrait" : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""}`}>
+      {isMatchmaking && !connectionError && (
+        <div className="normal-pvp-matchmaking-screen">
+          <div className="normal-pvp-matchmaking-card">
+            <div className="normal-pvp-loader" />
+            <h1>{isCountdown ? "MATCH STARTS IN" : "WAITING FOR PLAYERS"}</h1>
+            <strong>{isCountdown ? countdown : `${Math.min(playersAlive, minPlayers)} / ${minPlayers}`}</strong>
+            <p>{isCountdown ? "Jucatorii au fost gasiti. Pregateste-te!" : "Se pregateste sesiunea Normal PvP..."}</p>
+          </div>
+        </div>
+      )}
+
       <div
         ref={worldElementRef}
         className="world"
         style={{
           width: worldWidth,
           height: worldHeight,
-          transform: `translate3d(${cameraX}px, ${cameraY}px, 0)`,
+          transformOrigin: "0 0",
+          transform: `translate3d(${cameraX}px, ${cameraY}px, 0) scale(${cameraScale})`,
         }}
       >
         <div
-          className="battle-zone"
+          ref={zoneSmokeElementRef}
+          className="normal-pvp-danger-smoke"
           style={{
             left: worldWidth / 2,
             top: worldHeight / 2,
-            width: safeZoneRadius * 2,
-            height: safeZoneRadius * 2,
+            width: ZONE_RADIUS_FALLBACK * 2,
+            height: ZONE_RADIUS_FALLBACK * 2,
           }}
         />
 
-        {/* Entitatile PvP NU mai sunt randate ca sute de div-uri DOM.
-            PixiArenaRenderer le deseneaza pe canvas si elimina lag-ul mare. */}
+        <div
+          ref={zoneElementRef}
+          className="normal-pvp-battle-zone"
+          style={{
+            left: worldWidth / 2,
+            top: worldHeight / 2,
+            width: ZONE_RADIUS_FALLBACK * 2,
+            height: ZONE_RADIUS_FALLBACK * 2,
+          }}
+        />
       </div>
 
       <PixiArenaRenderer
@@ -1562,7 +1772,7 @@ worldRef.current = {
         projectiles={visibleProjectiles}
         cameraX={cameraX}
         cameraY={cameraY}
-        scale={1}
+        scale={cameraScale}
         viewportWidth={viewport.width}
         viewportHeight={viewport.height}
         coreTypes={CORE_TYPES}
@@ -1619,11 +1829,11 @@ worldRef.current = {
       </div>
 
       <div className="alive-counter pvp-alive-counter normal-pvp-top-hud">
-        <strong>PLAYERS ONLINE: {playersAlive}</strong>
+        <strong>PLAYERS ALIVE: {playersAlive}</strong>
         <span>
-          {status === "finished"
+          {isFinished
             ? `Winner: ${winnerName || "Player"}`
-            : `Max ${maxPlayers} players / no zone`}
+            : `Max ${maxPlayers} players`}
         </span>
       </div>
 
@@ -1644,7 +1854,7 @@ worldRef.current = {
           worldHeight={worldHeight}
           orbs={renderData.minimapOrbs || []}
           cores={renderData.minimapCores || renderData.cores || []}
-          safeZoneRadius={null}
+          safeZoneRadius={safeZoneRadius}
           players={renderData.players || []}
         />
       )}
@@ -1667,11 +1877,11 @@ worldRef.current = {
       {isDead && !isFinished && (
         <div className="normal-pvp-death-panel">
           <div className="normal-pvp-death-card">
-            <h1>YOU LOST</h1>
+            <h1>AI FOST ELIMINAT</h1>
             <p>
               {spectatorTarget
-                ? `Following ${spectatorTarget.username || "player"} live`
-                : "Waiting for an alive player to spectate"}
+                ? `Urmaresti: ${spectatorTarget.username || "player"}`
+                : "Se asteapta un jucator viu de urmarit"}
             </p>
 
             <div className="normal-pvp-death-stats">
@@ -1690,11 +1900,12 @@ worldRef.current = {
         <div className="game-over-screen pvp-finished-screen">
           <h1>{winnerName ? `${winnerName} WINS` : "MATCH FINISHED"}</h1>
           <p>{hudYou?.id === (hudData.winnerId || renderData.winnerId) ? "Ai castigat meciul." : "Meciul s-a terminat."}</p>
+          <p className="normal-pvp-finished-auto-exit">Revenire automata la meniu in cateva secunde...</p>
           <button onClick={onExitToMenu}>EXIT TO MENU</button>
         </div>
       )}
 
-      {isMobileControls && !isDead && (
+      {isMobileControls && !isDead && !isMatchmaking && (
       <div className="pvp-mobile-controls" aria-label="Mobile PvP controls">
         <div
           className={`pvp-mobile-joystick ${mobileJoystick.active ? "is-active" : ""}`}

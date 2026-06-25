@@ -318,16 +318,26 @@ export class GameGateway {
         const player = room?.players.get(client.id);
         if (!player || !player.alive) return;
 
+        const seq = Number(input?.seq || 0);
         player.input = {
+            seq: Number.isFinite(seq) ? seq : 0,
+            dt: Math.max(1, Math.min(50, Number(input?.dt || 16))),
+            clientSentAt: Number(input?.clientSentAt || 0),
+            serverReceivedAt: Date.now(),
             w: Boolean(input?.w),
             a: Boolean(input?.a),
             s: Boolean(input?.s),
             d: Boolean(input?.d),
+            moveX: Number(input?.moveX || 0),
+            moveY: Number(input?.moveY || 0),
+            mobileMove: Boolean(input?.mobileMove),
             attacking: Boolean(input?.attacking),
             shield: Boolean(input?.shield),
             mouseX: Number(input?.mouseX || player.x),
             mouseY: Number(input?.mouseY || player.y),
         };
+        player.pendingInputSeq = player.input.seq;
+        player.lastInputReceivedAt = Date.now();
         player.lastSeenAt = Date.now();
     }
 
@@ -590,7 +600,7 @@ export class GameGateway {
                 this.updateProjectiles(room, deltaFrames);
                 this.maintainWorldItems(room, zoneRadius, now);
 
-                const broadcastInterval = room.players.size > 40 ? 33 : 25;
+                const broadcastInterval = 16;
 
                 if (!room.lastBroadcastAt || now - room.lastBroadcastAt >= broadcastInterval) {
                     room.lastBroadcastAt = now;
@@ -1170,15 +1180,46 @@ export class GameGateway {
         return Math.hypot(px - closestX, py - closestY);
     }
 
+    getRoomEventPrefix(room) {
+        if (room?.normalMode) return 'normal-pvp';
+        if (room?.zonePvpMode) return 'zone-pvp';
+        if (room?.battleRoyaleOnlineMode) return 'battle-royale-online';
+        return 'pvp';
+    }
+
+    emitCollectSync(room, player, payload) {
+        if (!player?.id) return;
+
+        const socket = this.server.sockets.sockets.get(player.id);
+        if (!socket) return;
+
+        player.collectionSeq = (player.collectionSeq || 0) + 1;
+        player.lastCollectEventAt = Date.now();
+
+        const prefix = this.getRoomEventPrefix(room);
+
+        socket.emit(`${prefix}:collect`, {
+            ...payload,
+            collectionSeq: player.collectionSeq,
+            serverTime: Date.now(),
+            you: this.serializePlayer(player),
+        });
+    }
+
     collectOrbs(room, zoneRadius) {
         const collectedIndexes = new Set();
+
         for (const player of room.players.values()) {
             if (!player.alive)
                 continue;
+
             let collected = 0;
+            const collectedOrbIds: string[] = [];
+
             for (let i = 0; i < room.orbs.length; i += 1) {
                 if (collectedIndexes.has(i))
                     continue;
+
                 const orb = room.orbs[i];
                 const endDx = orb.x - player.x;
                 const endDy = orb.y - player.y;
@@ -1190,36 +1231,57 @@ export class GameGateway {
                     player.x,
                     player.y
                 );
+
                 if (endDx * endDx + endDy * endDy > ORB_COLLECT_DISTANCE * ORB_COLLECT_DISTANCE &&
                     pathDistance > ORB_COLLECT_DISTANCE) {
                     continue;
                 }
+
                 collectedIndexes.add(i);
                 collected += 1;
+
+                if (orb?.id) {
+                    collectedOrbIds.push(orb.id);
+                }
             }
+
             if (collected > 0) {
                 player.totalCollected += collected;
                 player.progress += collected;
+
                 while (player.drones < MAX_DRONES &&
                     player.progress >= player.nextDroneAt) {
                     player.progress -= player.nextDroneAt;
                     player.drones += 1;
                     player.nextDroneAt = this.getNextDroneAt(player.drones);
                 }
+
+                this.emitCollectSync(room, player, {
+                    type: 'orb',
+                    collectedCount: collected,
+                    collectedOrbIds,
+                });
             }
         }
+
         if (collectedIndexes.size > 0) {
             room.orbs = room.orbs.filter((_, index) => !collectedIndexes.has(index));
         }
     }
     collectEnergy(room, zoneRadius) {
         const collectedIndexes = new Set();
+
         for (const player of room.players.values()) {
             if (!player.alive)
                 continue;
+
+            let collected = 0;
+            const collectedEnergyIds: string[] = [];
+
             for (let i = 0; i < room.energyCells.length; i += 1) {
                 if (collectedIndexes.has(i))
                     continue;
+
                 const cell = room.energyCells[i];
                 const endDx = cell.x - player.x;
                 const endDy = cell.y - player.y;
@@ -1231,19 +1293,37 @@ export class GameGateway {
                     player.x,
                     player.y
                 );
+
                 if (endDx * endDx + endDy * endDy >
                     ENERGY_CELL_COLLECT_DISTANCE * ENERGY_CELL_COLLECT_DISTANCE &&
                     pathDistance > ENERGY_CELL_COLLECT_DISTANCE) {
                     continue;
                 }
+
                 collectedIndexes.add(i);
+                collected += 1;
+
+                if (cell?.id) {
+                    collectedEnergyIds.push(cell.id);
+                }
+
                 player.energy = Math.min(100, player.energy + 25);
             }
+
+            if (collected > 0) {
+                this.emitCollectSync(room, player, {
+                    type: 'energy',
+                    collectedCount: collected,
+                    collectedEnergyIds,
+                });
+            }
         }
+
         if (collectedIndexes.size > 0) {
             room.energyCells = room.energyCells.filter((_, index) => !collectedIndexes.has(index));
         }
     }
+
     collectCores(room, zoneRadius) {
         const collectedIndexes = new Set();
         for (const player of room.players.values()) {
@@ -1590,6 +1670,8 @@ export class GameGateway {
             vampireUntil: player.vampireUntil || 0,
             empPulseUntil: player.empPulseUntil || 0,
             lastProcessedInputSeq: player.lastProcessedInputSeq || 0,
+            collectionSeq: player.collectionSeq || 0,
+            lastCollectEventAt: player.lastCollectEventAt || 0,
             serverTime: Date.now(),
             lastInputReceivedAt: player.lastInputReceivedAt || 0,
         };

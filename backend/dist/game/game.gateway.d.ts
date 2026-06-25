@@ -57,6 +57,8 @@ export declare class GameGateway {
     applyBattleRoyaleOnlineZoneDamage(room: any, now: any, zoneRadius: any): void;
     applyZonePvpZoneDamage(room: any, now: any, zoneRadius: any): void;
     distancePointToSegment(px: any, py: any, ax: any, ay: any, bx: any, by: any): number;
+    getRoomEventPrefix(room: any): "normal-pvp" | "zone-pvp" | "battle-royale-online" | "pvp";
+    emitCollectSync(room: any, player: any, payload: any): void;
     collectOrbs(room: any, zoneRadius: any): void;
     collectEnergy(room: any, zoneRadius: any): void;
     collectCores(room: any, zoneRadius: any): void;
@@ -107,6 +109,8 @@ export declare class GameGateway {
         vampireUntil: any;
         empPulseUntil: any;
         lastProcessedInputSeq: any;
+        collectionSeq: any;
+        lastCollectEventAt: any;
         serverTime: number;
         lastInputReceivedAt: any;
     };

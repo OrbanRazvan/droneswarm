@@ -1714,3 +1714,36 @@
 .pixi-arena-canvas {
   image-rendering: auto !important;
 }
+
+
+/* =========================================================
+   NORMAL PVP - PREDICTION / RECONCILIATION CLEANUP
+   Lipit la final: fara blur/backdrop scump, mai putin jank pe mobil.
+========================================================= */
+.pvp-dom-arena,
+.normal-pvp-dom-arena,
+.pvp-dom-arena .world {
+  contain: layout paint style;
+  backface-visibility: hidden;
+  transform-origin: 0 0;
+}
+
+.pvp-dom-arena .hp-panel,
+.pvp-dom-arena .collect-counter,
+.pvp-dom-arena .alive-counter,
+.pvp-dom-arena .pvp-alive-counter,
+.pvp-dom-arena .real-leaderboard,
+.pvp-dom-arena .fps-counter,
+.pvp-dom-arena .core-notice,
+.pvp-dom-arena .pvp-core-drop-notice,
+.pvp-dom-arena .pvp-mobile-controls,
+.pvp-dom-arena .pvp-mobile-joystick,
+.pvp-dom-arena .pvp-mobile-action,
+.pvp-dom-arena .pvp-mobile-buttons,
+.pvp-dom-arena .mobile-minimap-frame,
+.pvp-dom-arena .minimap,
+.pvp-dom-arena .minimap * {
+  filter: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}

@@ -8,8 +8,8 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 const COLORS = ["cyan", "green", "orange", "purple", "red", "pink"];
 
-const WORLD_WIDTH = 14000;
-const WORLD_HEIGHT = 14000;
+const WORLD_WIDTH = 12000;
+const WORLD_HEIGHT = 12000;
 const VIEW_PADDING = 120;
 
 const MAX_ORBS = 140;
@@ -20,9 +20,9 @@ const VIEW_DISTANCE = 1400;
 
 // Distante de randare cu buffer mare, ca botii sa nu mai apara/dispara brusc
 // cand sunt aproape de marginea camerei. Full = drona completa, Simple = punct/varianta lite.
-const BOT_RENDER_DISTANCE = 1550;
-const MAX_FULL_RENDER_BOTS = 16;
-const BOT_SIMPLE_RENDER_DISTANCE = 2200;
+const BOT_RENDER_DISTANCE = 3600;
+const MAX_FULL_RENDER_BOTS = 49;
+const BOT_SIMPLE_RENDER_DISTANCE = 4200;
 
 const MAX_FULL_PROJECTILES = 18;
 const MAX_SIMPLE_PROJECTILES = 80;
@@ -40,6 +40,11 @@ const FIRE_COOLDOWN = 3000;
 const MAX_DRONES = 5;
 const START_HP = 100;
 const MAX_HP = 150;
+const BATTLE_PREPARE_DURATION = 30000;
+const KILL_HP_REWARD = 10;
+const KILL_ATTACK_SPEED_MULTIPLIER = 0.85;
+const MIN_KILL_ATTACK_SPEED_MULTIPLIER = 0.45;
+const ENERGY_CELL_RESTORE_AMOUNT = 25;
 const SHIELD_COST = 20;
 const SHIELD_DURATION = 3000;
 const HIT_DAMAGE = 15;
@@ -77,7 +82,7 @@ const BERSERK_PROJECTILE_DAMAGE = 75;
 const VAMPIRE_HEAL_RATIO = 0.25;
 
 const START_ENERGY = 100;
-const ENERGY_DRAIN_INTERVAL = 600;
+const ENERGY_DRAIN_INTERVAL = 1000;
 const ENERGY_DRAIN_AMOUNT = 1;
 const MAX_ENERGY_CELLS = 50;
 const MIN_ENERGY_CELLS = 18;
@@ -200,9 +205,9 @@ function getSelectedUserSkin(user) {
 }
 
 // ---------------------------------------------------------------------------
-// 59 boti + 1 player = 60 participanti total, exact cerinta.
+// 49 boti + 1 player = 50 participanti total.
 // ---------------------------------------------------------------------------
-const BOT_COUNT = 59;
+const BOT_COUNT = 49;
 
 // Boti mai inteligenti, nu kamikaze:
 // - farmeaza mai mult inainte sa intre in duel;
@@ -229,9 +234,8 @@ const MAP_MIN_SIZE = Math.min(WORLD_WIDTH, WORLD_HEIGHT);
 const ZONE_START_RADIUS = MAP_MIN_SIZE * 0.47;
 const ZONE_END_RADIUS = 1;
 
-// IMPORTANT: cerinta explicita - fumul verde vine catre centru timp de
-// 10 minute (600000ms), nu 5 minute ca in Play vs AI standard.
-const ZONE_SHRINK_DURATION = 300000;
+// Zona se strange complet in 7 minute.
+const ZONE_SHRINK_DURATION = 420000;
 
 // IMPORTANT: cerinta explicita - 10 HP pe secunda in afara zonei.
 const ZONE_DAMAGE = 10;
@@ -270,6 +274,8 @@ function getEffectiveFireCooldown(unit, baseCooldown) {
   if (unit?.overclockUntil && unit.overclockUntil > now) {
     cooldown = Math.floor(cooldown * 0.5);
   }
+
+  cooldown = Math.floor(cooldown * Math.max(MIN_KILL_ATTACK_SPEED_MULTIPLIER, unit?.killAttackSpeedMultiplier || 1));
 
   return Math.max(420, cooldown);
 }
@@ -389,8 +395,14 @@ function applyKillRewardToUnit(unit) {
   const nextKillStreak = (unit.killStreak || 0) + 1;
 
   const nextDrones = Math.min(MAX_DRONES, (unit.drones || 0) + 1);
-
   const hasRapidFireReward = nextKillStreak >= 3;
+  const currentMaxHp = unit.maxHp || START_HP;
+  const nextMaxHp = Math.min(MAX_HP, currentMaxHp + KILL_HP_REWARD);
+  const nextHp = Math.min(nextMaxHp, (unit.hp || START_HP) + KILL_HP_REWARD);
+  const nextKillAttackSpeedMultiplier = Math.max(
+    MIN_KILL_ATTACK_SPEED_MULTIPLIER,
+    (unit.killAttackSpeedMultiplier || 1) * KILL_ATTACK_SPEED_MULTIPLIER
+  );
 
   return {
     ...unit,
@@ -399,6 +411,9 @@ function applyKillRewardToUnit(unit) {
     drones: nextDrones,
     progress: 0,
     nextDroneAt: getNextDroneAt(nextDrones),
+    hp: nextHp,
+    maxHp: nextMaxHp,
+    killAttackSpeedMultiplier: nextKillAttackSpeedMultiplier,
     rapidFireUntil: hasRapidFireReward
       ? Date.now() + 10000
       : unit.rapidFireUntil || 0,
@@ -1204,6 +1219,7 @@ function createBot(index, spawnPoint = null) {
     killStreak: 0,
     rapidFireUntil: 0,
     attackCooldownMultiplier: 1,
+    killAttackSpeedMultiplier: 1,
     placement: null,
 
     hp: START_HP,
@@ -1575,6 +1591,7 @@ function BattleRoyale({ user, onExitToMenu }) {
   const shieldTimeoutRef = useRef(null);
   const matchSavedRef = useRef(false);
   const matchStartedAtRef = useRef(Date.now());
+  const battleStartTimeRef = useRef(Date.now());
 
   const zoneStartTimeRef = useRef(Date.now());
   const lastZoneDamageRef = useRef(0);
@@ -1639,6 +1656,8 @@ function BattleRoyale({ user, onExitToMenu }) {
   const [coreNotice, setCoreNotice] = useState(null);
   const [effectTick, setEffectTick] = useState(Date.now());
   const [fps, setFps] = useState(0);
+  const [battleCountdown, setBattleCountdown] = useState(Math.ceil(BATTLE_PREPARE_DURATION / 1000));
+  const [battleBeginFlash, setBattleBeginFlash] = useState(false);
 
   const [player, setPlayer] = useState(() => {
     const initialPlayer = {
@@ -1648,7 +1667,8 @@ function BattleRoyale({ user, onExitToMenu }) {
       killStreak: 0,
       rapidFireUntil: 0,
       attackCooldownMultiplier: 1,
-      placement: null,
+      killAttackSpeedMultiplier: 1,
+    placement: null,
 
       hp: START_HP,
       maxHp: START_HP,
@@ -1688,6 +1708,19 @@ function BattleRoyale({ user, onExitToMenu }) {
     playerRef.current = initialPlayer;
     return initialPlayer;
   });
+
+  const isBattleWarmupActive = () => {
+    return Date.now() - battleStartTimeRef.current < BATTLE_PREPARE_DURATION;
+  };
+
+  const getBattleWarmupSecondsLeft = () => {
+    return Math.max(0, Math.ceil((BATTLE_PREPARE_DURATION - (Date.now() - battleStartTimeRef.current)) / 1000));
+  };
+
+  const showBattleBlockedText = (x, y) => {
+    const seconds = getBattleWarmupSecondsLeft();
+    createDamageText(x, y - 120, `NO COMBAT ${seconds}s`, "block");
+  };
 
   const leaderboardPlayers = useMemo(() => {
     const list = [
@@ -1795,7 +1828,7 @@ function BattleRoyale({ user, onExitToMenu }) {
     createDamageText(
       nextPlayer.x,
       nextPlayer.y - 125,
-      nextPlayer.killStreak >= 3 ? "KILL STREAK + RAPID FIRE" : "+1 DRONE",
+      nextPlayer.killStreak >= 3 ? "+10 HP +15% ATK + RAPID" : "+10 HP +15% ATK",
       "heal"
     );
   };
@@ -1899,6 +1932,7 @@ function BattleRoyale({ user, onExitToMenu }) {
       killStreak: 0,
       rapidFireUntil: 0,
       attackCooldownMultiplier: 1,
+      killAttackSpeedMultiplier: 1,
       shieldBreakerShots: 0,
       overclockUntil: 0,
       berserkUntil: 0,
@@ -2046,6 +2080,9 @@ function BattleRoyale({ user, onExitToMenu }) {
   useEffect(() => {
     zoneStartTimeRef.current = Date.now();
     matchStartedAtRef.current = Date.now();
+    battleStartTimeRef.current = Date.now();
+    setBattleCountdown(Math.ceil(BATTLE_PREPARE_DURATION / 1000));
+    setBattleBeginFlash(false);
     matchSavedRef.current = false;
     lastZoneDamageRef.current = 0;
     lastBotEnergyDrainRef.current = Date.now();
@@ -2082,6 +2119,7 @@ function BattleRoyale({ user, onExitToMenu }) {
       killStreak: 0,
       rapidFireUntil: 0,
       attackCooldownMultiplier: 1,
+      killAttackSpeedMultiplier: 1,
       shieldBreakerShots: 0,
       overclockUntil: 0,
       berserkUntil: 0,
@@ -2107,17 +2145,29 @@ function BattleRoyale({ user, onExitToMenu }) {
   }, []);
 
   useEffect(() => {
+    let beginFlashTimeout = null;
+
+    const interval = setInterval(() => {
+      const secondsLeft = getBattleWarmupSecondsLeft();
+      setBattleCountdown(secondsLeft);
+
+      if (secondsLeft <= 0) {
+        setBattleBeginFlash(true);
+        beginFlashTimeout = setTimeout(() => setBattleBeginFlash(false), 1800);
+        clearInterval(interval);
+      }
+    }, 250);
+
+    return () => {
+      clearInterval(interval);
+      if (beginFlashTimeout) clearTimeout(beginFlashTimeout);
+    };
+  }, []);
+
+  useEffect(() => {
     const interval = setInterval(() => {
       const p = playerRef.current;
       if (!p || !p.alive || gameOver) return;
-
-      const isMoving =
-        keys.current["w"] ||
-        keys.current["a"] ||
-        keys.current["s"] ||
-        keys.current["d"];
-
-      if (!isMoving) return;
 
       const nextEnergy = Math.max(
         0,
@@ -2301,21 +2351,23 @@ function BattleRoyale({ user, onExitToMenu }) {
     ? 560
     : Math.ceil(VIEW_DISTANCE * desktopCameraDistanceMultiplier);
 
+  // Vrem sa vedem botii complet si in primele 30 secunde, nu doar puncte/simpleBots.
+  // Marim distanta pentru toate device-urile; Pixi face culling final pe viewport.
   const mobileBotRenderDistance = isMobileLandscape
-    ? 900
+    ? 2600
     : Math.ceil(BOT_RENDER_DISTANCE * desktopCameraDistanceMultiplier);
 
   const mobileBotSimpleDistance = isMobileLandscape
-    ? 1350
+    ? 3000
     : Math.ceil(BOT_SIMPLE_RENDER_DISTANCE * desktopCameraDistanceMultiplier);
 
   const mobileProjectileDistance = isMobileLandscape
     ? 920
     : Math.ceil(PROJECTILE_RENDER_DISTANCE * desktopCameraDistanceMultiplier);
 
-  const mobileFullBotLimit = isMobileLandscape
-    ? 6
-    : Math.max(MAX_FULL_RENDER_BOTS, 22);
+  // In Battle Royale singleplayer afisam botii ca drone complete.
+  // Nu ii mai mutam in simpleBots, fiindca acolo apar doar ca puncte.
+  const mobileFullBotLimit = 49;
 
   const mobileFullProjectileLimit = isMobileLandscape ? 7 : MAX_FULL_PROJECTILES;
   const mobileSimpleProjectileLimit = isMobileLandscape ? 28 : MAX_SIMPLE_PROJECTILES;
@@ -2410,38 +2462,33 @@ function BattleRoyale({ user, onExitToMenu }) {
   }, [bots, viewTarget.x, viewTarget.y, mobileBotSimpleDistance]);
 
   const fullRenderBots = useMemo(() => {
-    const botById = new Map(visibleBots.map((bot) => [bot.id, bot]));
-
-    // Pastreaza intai botii care erau deja randati full, daca sunt inca aproape.
-    // Asta elimina flicker-ul cand botii isi schimba ordinea in top-ul celor mai apropiati.
-    const kept = stableFullBotIdsRef.current
-      .map((id) => botById.get(id))
+    // IMPORTANT: in Battle Royale singleplayer botii trebuie sa fie vizibili complet
+    // si in prepare phase, si dupa cele 30 secunde.
+    // Nu ii mai transformam in simpleBots, pentru ca simpleBots se vad doar ca puncte.
+    const result = visibleBots
       .filter((bot) => {
-        if (!bot?.alive) return false;
         const distance = Math.hypot(bot.x - viewTarget.x, bot.y - viewTarget.y);
-        return distance < mobileBotSimpleDistance * 1.08;
-      });
+        return distance < mobileBotRenderDistance;
+      })
+      .slice(0, mobileFullBotLimit)
+      .map((bot) => ({
+        ...bot,
+        isBot: true,
+        // Fortam campurile vizuale ca Pixi sa deseneze corpul + mini-dronele orbitale.
+        drones: Number(bot.drones || 0),
+        skin: normalizeArenaSkin(bot.skin),
+      }));
 
-    const keptIds = new Set(kept.map((bot) => bot.id));
-
-    const fresh = visibleBots.filter((bot) => {
-      if (keptIds.has(bot.id)) return false;
-      const distance = Math.hypot(bot.x - viewTarget.x, bot.y - viewTarget.y);
-      return distance < mobileBotRenderDistance;
-    });
-
-    const result = [...kept, ...fresh].slice(0, mobileFullBotLimit);
     stableFullBotIdsRef.current = result.map((bot) => bot.id);
     return result;
-  }, [visibleBots, viewTarget.x, viewTarget.y, mobileBotRenderDistance, mobileBotSimpleDistance, mobileFullBotLimit]);
+  }, [visibleBots, viewTarget.x, viewTarget.y, mobileBotRenderDistance, mobileFullBotLimit]);
 
   const simpleRenderBots = useMemo(() => {
-    const fullIds = new Set(fullRenderBots.map((bot) => bot.id));
+    // Dezactivat intentionat: vrem botii completi, nu puncte/simple render.
+    return [];
+  }, []);
 
-    return visibleBots.filter((bot) => !fullIds.has(bot.id));
-  }, [visibleBots, fullRenderBots]);
-
-  const canFire = player.drones > 0 && player.alive && !gameOver;
+  const canFire = player.drones > 0 && player.alive && !gameOver && battleCountdown <= 0;
 
   const aimCenterX = viewportSize.width / 2;
   const aimCenterY = viewportSize.height / 2;
@@ -2701,6 +2748,10 @@ function BattleRoyale({ user, onExitToMenu }) {
   const activateShield = () => {
     const p = playerRef.current;
     if (!p || !p.alive || p.shieldActive || gameOver) return;
+    if (isBattleWarmupActive()) {
+      showBattleBlockedText(p.x, p.y);
+      return;
+    }
 
     let nextProgress = p.progress;
     let nextDrones = p.drones;
@@ -2825,6 +2876,7 @@ function BattleRoyale({ user, onExitToMenu }) {
   const checkBotsTouchPlayer = () => {
     const p = playerRef.current;
     if (!p || !p.alive || gameOver) return;
+    if (isBattleWarmupActive()) return;
 
     const now = Date.now();
 
@@ -2976,7 +3028,7 @@ function BattleRoyale({ user, onExitToMenu }) {
   };
 
   const checkBotsTouchBots = () => {
-    if (gameOver) return;
+    if (gameOver || isBattleWarmupActive()) return;
 
     const now = Date.now();
     let changed = false;
@@ -3349,6 +3401,10 @@ function BattleRoyale({ user, onExitToMenu }) {
     const now = Date.now();
 
     if (!p || !p.alive || p.drones <= 0 || gameOver) return;
+    if (isBattleWarmupActive()) {
+      showBattleBlockedText(p.x, p.y);
+      return;
+    }
 
     const effectiveCooldown = getEffectiveFireCooldown(p, FIRE_COOLDOWN);
 
@@ -3415,6 +3471,7 @@ function BattleRoyale({ user, onExitToMenu }) {
     const now = Date.now();
 
     if (!bot.alive || bot.drones <= 0) return bot;
+    if (isBattleWarmupActive()) return { ...bot, attacking: false };
     if (now - bot.lastFireAt < getEffectiveFireCooldown(bot, BOT_FIRE_COOLDOWN)) return bot;
 
     const angle = Math.atan2(target.y - bot.y, target.x - bot.x);
@@ -4245,11 +4302,11 @@ function BattleRoyale({ user, onExitToMenu }) {
             (cell) => cell.id !== collectedCell.id
           );
 
-          createDamageText(bot.x, bot.y - 92, "ENERGY 100", "heal");
+          createDamageText(bot.x, bot.y - 92, `ENERGY +${ENERGY_CELL_RESTORE_AMOUNT}`, "heal");
 
           return {
             ...bot,
-            energy: START_ENERGY,
+            energy: Math.min(START_ENERGY, (bot.energy ?? START_ENERGY) + ENERGY_CELL_RESTORE_AMOUNT),
             targetEnergyCellId: null,
           };
         });
@@ -4386,7 +4443,7 @@ function BattleRoyale({ user, onExitToMenu }) {
         setEnergyCells([...remainingEnergyCells]);
 
         if (collectedEnergy) {
-          createDamageText(nextX, nextY - 100, "ENERGY FULL", "heal");
+          createDamageText(nextX, nextY - 100, `ENERGY +${ENERGY_CELL_RESTORE_AMOUNT}`, "heal");
         }
       }
 
@@ -4465,7 +4522,9 @@ function BattleRoyale({ user, onExitToMenu }) {
         progress,
         nextDroneAt,
         drones: Math.min(drones, MAX_DRONES),
-        energy: collectedEnergy ? START_ENERGY : playerRef.current.energy,
+        energy: collectedEnergy
+          ? Math.min(START_ENERGY, (playerRef.current.energy ?? START_ENERGY) + ENERGY_CELL_RESTORE_AMOUNT)
+          : playerRef.current.energy,
         mass: 1250 + totalCollected * 10,
       };
 
@@ -4637,7 +4696,7 @@ function BattleRoyale({ user, onExitToMenu }) {
   const cameraY = viewportSize.height / 2 - viewTarget.y * mobileWorldScale;
 
   // Countdown text pentru cat timp mai are zona pana se strange complet -
-  // util pentru HUD ("Zone closes in: MM:SS"), cerinta explicita de 10 minute.
+  // util pentru HUD ("Zone closes in: MM:SS"), zona se strange in 7 minute.
   const zoneRemainingMs = Math.max(
     0,
     ZONE_SHRINK_DURATION - (Date.now() - zoneStartTimeRef.current)
@@ -4671,6 +4730,18 @@ function BattleRoyale({ user, onExitToMenu }) {
       <div className="battle-royale-zone-timer">
         ZONE CLOSES IN: {zoneRemainingMinutes}:{zoneRemainingSeconds}
       </div>
+
+      {battleCountdown > 0 && !gameOver && (
+        <div className="battle-royale-peace-countdown">
+          <strong>PREPARE PHASE</strong>
+          <b>{battleCountdown}</b>
+          <span>Attack, shield and collision damage are locked.</span>
+        </div>
+      )}
+
+      {battleBeginFlash && !gameOver && (
+        <div className="battle-royale-begin-flash">BATTLE BEGIN</div>
+      )}
 
       {coreNotice && (
         <div
@@ -4977,6 +5048,7 @@ function BattleRoyale({ user, onExitToMenu }) {
         coreTypes={CORE_TYPES}
         otherPlayerSize={104}
         otherPlayerQuality={2}
+        forceLowQuality={false}
       />
 
       {showMobileControls && (
