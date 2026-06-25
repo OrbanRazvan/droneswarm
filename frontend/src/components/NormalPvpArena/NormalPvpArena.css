@@ -600,7 +600,7 @@
 
 .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-buttons {
   right: max(22px, calc(env(safe-area-inset-right) + 18px)) !important;
-  bottom: max(330px, calc(env(safe-area-inset-bottom) + 326px)) !important;
+  bottom: max(500px, calc(env(safe-area-inset-bottom) + 326px)) !important;
   gap: 18px !important;
   align-items: center !important;
   z-index: 10080 !important;
@@ -772,7 +772,7 @@
   width: 236px !important;
   height: 236px !important;
   left: max(26px, calc(env(safe-area-inset-left) + 22px)) !important;
-  bottom: max(132px, calc(env(safe-area-inset-bottom) + 128px)) !important;
+  bottom: max(270px, calc(env(safe-area-inset-bottom) + 128px)) !important;
 }
 
 .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick-knob {
