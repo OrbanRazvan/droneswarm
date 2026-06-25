@@ -8,8 +8,8 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 const COLORS = ["cyan", "green", "orange", "purple", "red", "pink"];
 
-const WORLD_WIDTH = 15000;
-const WORLD_HEIGHT = 15000;
+const WORLD_WIDTH = 14000;
+const WORLD_HEIGHT = 14000;
 const VIEW_PADDING = 120;
 
 const MAX_ORBS = 140;

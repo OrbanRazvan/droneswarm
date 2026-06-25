@@ -7,9 +7,9 @@ import "./ZonePvpArena.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
-const WORLD_WIDTH_FALLBACK = 13000;
-const WORLD_HEIGHT_FALLBACK = 13000;
-const ZONE_RADIUS_FALLBACK = 4700;
+const WORLD_WIDTH_FALLBACK = 14000;
+const WORLD_HEIGHT_FALLBACK = 14000;
+const ZONE_RADIUS_FALLBACK = 7050;
 
 // GameArena movement: 2.8 px / 60fps frame ~= 168 px/sec.
 // Daca backend-ul tau ruleaza la 30 ticks/sec, PLAYER_SPEED pe server trebuie sa fie 5.6.
@@ -41,8 +41,8 @@ const LOCAL_PROJECTILE_MAX_DISTANCE = 4200;
 const PROJECTILE_HIT_VISUAL_RADIUS = 118;
 const LOCAL_PROJECTILE_SPEED = 3.55;
 const FIRE_COOLDOWN = 3000;
-const ORB_STABLE_TTL = 1600;
-const MINIMAP_STABLE_TTL = 7000;
+const ORB_STABLE_TTL = 2400;
+const MINIMAP_STABLE_TTL = 8000;
 
 // Colectare vizuala locala: clientul ascunde instant orbul/energia/core-ul
 // cand intra in el, fara sa astepte urmatorul pachet de la server.
@@ -50,9 +50,9 @@ const MINIMAP_STABLE_TTL = 7000;
 const LOCAL_ORB_COLLECT_DISTANCE = 150;
 const LOCAL_ENERGY_COLLECT_DISTANCE = 135;
 const LOCAL_CORE_COLLECT_DISTANCE = 155;
-const LOCAL_COLLECT_HIDE_TTL = 1400;
+const LOCAL_COLLECT_HIDE_TTL = 1800;
 
-const MAX_VISIBLE_REMOTE_PLAYERS = 12;
+const MAX_VISIBLE_REMOTE_PLAYERS = 24;
 
 const CORE_TYPES = [
   { type: "nano", name: "Nano Core", shortName: "Nano", color: "#00eaff", effect: "+10 MAX HP" },
@@ -138,7 +138,7 @@ function getCoreMeta(type) {
 }
 
 function getNextDroneAt(currentDrones = 0) {
-  const requirements = [5, 15, 25, 35];
+  const requirements = [5, 15, 25, 35, 50];
   const index = Math.max(0, Math.min(currentDrones, requirements.length - 1));
   return requirements[index];
 }
@@ -150,7 +150,7 @@ function applyOptimisticOrbCollection(unit, count) {
   let drones = Number(unit.drones || 0);
   let nextDroneAt = Number(unit.nextDroneAt || getNextDroneAt(drones));
 
-  while (drones < 4 && progress >= nextDroneAt) {
+  while (drones < 5 && progress >= nextDroneAt) {
     progress -= nextDroneAt;
     drones += 1;
     nextDroneAt = getNextDroneAt(drones);
@@ -352,12 +352,14 @@ function getActiveEffectBadges(unit, now = Date.now()) {
   return badges.slice(0, 2);
 }
 
-function getViewportBounds(cameraX, cameraY, viewport, padding = 650) {
+function getViewportBounds(cameraX, cameraY, viewport, padding = 650, scale = 1) {
+  const safeScale = Math.max(0.2, Number(scale || 1));
+
   return {
-    left: -cameraX - padding,
-    right: -cameraX + viewport.width + padding,
-    top: -cameraY - padding,
-    bottom: -cameraY + viewport.height + padding,
+    left: (-cameraX - padding) / safeScale,
+    right: (viewport.width - cameraX + padding) / safeScale,
+    top: (-cameraY - padding) / safeScale,
+    bottom: (viewport.height - cameraY + padding) / safeScale,
   };
 }
 
@@ -1002,11 +1004,14 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           ? { ...me, skin: normalizeSkin(me?.skin || getSelectedSkin(user)) }
           : null;
 
-      const liveCameraX = liveCameraSubject ? viewport.width / 2 - liveCameraSubject.x : 0;
-      const liveCameraY = liveCameraSubject ? viewport.height / 2 - liveCameraSubject.y : 0;
+      const liveIsMobileLike = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(hover: none)").matches;
+      const liveCameraScale = liveIsMobileLike ? 1 : 0.72;
+      const liveCameraX = liveCameraSubject ? viewport.width / 2 - liveCameraSubject.x * liveCameraScale : 0;
+      const liveCameraY = liveCameraSubject ? viewport.height / 2 - liveCameraSubject.y * liveCameraScale : 0;
 
       if (worldElementRef.current) {
-        worldElementRef.current.style.transform = `translate3d(${liveCameraX}px, ${liveCameraY}px, 0)`;
+        worldElementRef.current.style.transformOrigin = "0 0";
+        worldElementRef.current.style.transform = `translate3d(${liveCameraX}px, ${liveCameraY}px, 0) scale(${liveCameraScale})`;
       }
 
       // Cercul zonei si fumul verde sunt tinute la diametrul initial.
@@ -1023,7 +1028,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         zoneSmokeElementRef.current.style.transform = zoneTransform;
       }
 
-      const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 820);
+      const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 980, liveCameraScale);
       const livePlayers = collectVisible(
         remoteMap.values(),
         (player) => player?.id !== liveYou?.id && isVisible(player, liveBounds, 380),
@@ -1033,22 +1038,22 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const liveOrbs = collectVisible(
         stableOrbMapRef.current.values(),
         (orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id) && isVisible(orb, liveBounds, 45),
-        120
+        140
       );
       const liveEnergyCells = collectVisible(
         stableEnergyMapRef.current.values(),
         (cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id) && isVisible(cell, liveBounds, 70),
-        28
+        50
       );
       const liveCores = collectVisible(
         data.cores || [],
         (core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id) && isVisible(core, liveBounds, 130),
-        8
+        9
       );
       const liveProjectiles = collectVisible(
         projectileMap.values(),
         (projectile) => isVisible(projectile, liveBounds, 180),
-        35
+        45
       );
 
       pixiLiveRef.current = {
@@ -1063,7 +1068,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         simpleProjectiles: [],
         cameraX: liveCameraX,
         cameraY: liveCameraY,
-        scale: 1,
+        scale: liveCameraScale,
         viewportWidth: viewport.width,
         viewportHeight: viewport.height,
         coreColorMap: coreColorMapRef.current,
@@ -1429,15 +1434,22 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
   const cameraSubject = isDead ? (spectatorTarget || you) : you;
 
-  const cameraX = cameraSubject ? viewport.width / 2 - cameraSubject.x : 0;
-  const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y : 0;
-  const bounds = getViewportBounds(cameraX, cameraY, viewport, 520);
+  // CAMERA / ZOOM - identic cu BattleRoyaleMode:
+  // Desktop/laptop: 0.72 = vezi harta mai de sus.
+  // Telefon/tableta touch: 1 = ramane aproape pentru controale si lizibilitate.
+  const DESKTOP_CAMERA_SCALE = 0.72;
+  const MOBILE_CAMERA_SCALE = 1;
+  const cameraScale = isMobileControls ? MOBILE_CAMERA_SCALE : DESKTOP_CAMERA_SCALE;
 
-  const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), 120);
-  const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), 28);
-  const visibleCores = collectVisible(renderData.cores || [], (core) => isVisible(core, bounds, 120), 8);
+  const cameraX = cameraSubject ? viewport.width / 2 - cameraSubject.x * cameraScale : 0;
+  const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y * cameraScale : 0;
+  const bounds = getViewportBounds(cameraX, cameraY, viewport, 720, cameraScale);
+
+  const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), 140);
+  const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), 50);
+  const visibleCores = collectVisible(renderData.cores || [], (core) => isVisible(core, bounds, 120), 9);
   const visiblePlayers = collectVisible(renderData.players || [], (player) => isVisible(player, bounds, 360), MAX_VISIBLE_REMOTE_PLAYERS);
-  const visibleProjectiles = collectVisible(renderData.projectiles || [], (projectile) => isVisible(projectile, bounds, 160), 35);
+  const visibleProjectiles = collectVisible(renderData.projectiles || [], (projectile) => isVisible(projectile, bounds, 160), 45);
 
   const rendererPlayer = isDead && spectatorTarget
     ? {
@@ -1519,7 +1531,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         style={{
           width: worldWidth,
           height: worldHeight,
-          transform: `translate3d(${cameraX}px, ${cameraY}px, 0)`,
+          transformOrigin: "0 0",
+          transform: `translate3d(${cameraX}px, ${cameraY}px, 0) scale(${cameraScale})`,
         }}
       >
         <div
@@ -1554,7 +1567,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         projectiles={visibleProjectiles}
         cameraX={cameraX}
         cameraY={cameraY}
-        scale={1}
+        scale={cameraScale}
         viewportWidth={viewport.width}
         viewportHeight={viewport.height}
         coreTypes={CORE_TYPES}

@@ -15,8 +15,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.GameGateway = void 0;
 const websockets_1 = require("@nestjs/websockets");
 const socket_io_1 = require("socket.io");
-const WORLD_WIDTH = 11000;
-const WORLD_HEIGHT = 11000;
+const WORLD_WIDTH = 15000;
+const WORLD_HEIGHT = 15000;
 const ROOM_MAX_PLAYERS = 50;
 const ROOM_MIN_PLAYERS = 2;
 const NORMAL_ROOM_MAX_PLAYERS = 50;
@@ -33,7 +33,7 @@ const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 50;
 const ZONE_PVP_ROOM_MAX_PLAYERS = 2;
 const ZONE_PVP_ROOM_MIN_PLAYERS = 2;
 const ZONE_PVP_START_COUNTDOWN_MS = 5000;
-const ZONE_PVP_ZONE_SHRINK_DURATION = 600000;
+const ZONE_PVP_ZONE_SHRINK_DURATION = 300000;
 const ZONE_PVP_ZONE_DAMAGE = 10;
 const ZONE_PVP_ZONE_DAMAGE_INTERVAL = 1000;
 const ZONE_PVP_VISIBLE_PLAYERS_LIMIT = 60;
@@ -41,14 +41,14 @@ const COLLISION_GRID_CELL_SIZE = 600;
 const ROOM_START_COUNTDOWN_MS = 5000;
 const MAP_MIN_SIZE = Math.min(WORLD_WIDTH, WORLD_HEIGHT);
 const ZONE_START_RADIUS = MAP_MIN_SIZE * 0.47;
-const ZONE_END_RADIUS = MAP_MIN_SIZE * 0.07;
+const ZONE_END_RADIUS = 1;
 const ZONE_SHRINK_DURATION = 300000;
 const PLAYER_SPEED = 2.6;
 const PLAYER_RADIUS = 80;
 const VIEW_DISTANCE = 2400;
-const MAX_ORBS = 500;
-const MIN_ORBS = 80;
-const VISIBLE_ORB_LIMIT = 260;
+const MAX_ORBS = 140;
+const MIN_ORBS = 70;
+const VISIBLE_ORB_LIMIT = 160;
 const ORB_COLLECT_DISTANCE = 180;
 const COLORS = ['cyan', 'green', 'orange', 'purple', 'red', 'pink'];
 const START_HP = 100;
@@ -58,17 +58,17 @@ const ENERGY_DRAIN_INTERVAL = 1000;
 const ENERGY_DRAIN_AMOUNT = 1;
 const ZONE_DAMAGE = 10;
 const ZONE_DAMAGE_INTERVAL = 1000;
-const MAX_ENERGY_CELLS = 70;
-const MIN_ENERGY_CELLS = 35;
+const MAX_ENERGY_CELLS = 50;
+const MIN_ENERGY_CELLS = 18;
 const VISIBLE_ENERGY_LIMIT = 45;
 const ENERGY_CELL_COLLECT_DISTANCE = 160;
-const DRONE_REQUIREMENTS = [5, 15, 25, 35];
-const MAX_DRONES = 4;
+const DRONE_REQUIREMENTS = [5, 15, 25, 35, 50];
+const MAX_DRONES = 5;
 const FIRE_COOLDOWN = 3000;
-const PROJECTILE_SPEED = 3.55;
+const PROJECTILE_SPEED = 4.4;
 const PROJECTILE_MAX_DISTANCE = 4200;
 const PROJECTILE_MAX_LIFETIME = 10000;
-const PROJECTILE_DAMAGE = 50;
+const PROJECTILE_DAMAGE = 15;
 const VISIBLE_PROJECTILE_LIMIT = 120;
 const CORE_WAVE_SIZE = 9;
 const CORE_RESPAWN_DELAY = 60000;
@@ -84,16 +84,16 @@ const VAMPIRE_HEAL_RATIO = 0.25;
 const SWARM_CORE_DRONES = 2;
 const SHIELD_BREAKER_SHOTS = 1;
 const BODY_COLLISION_DISTANCE = 145;
-const BODY_COLLISION_COOLDOWN = 450;
-const BODY_COLLISION_BOTH_HAVE_DRONES_DAMAGE = 10;
-const BODY_COLLISION_BOTH_NO_DRONES_DAMAGE = 35;
+const BODY_COLLISION_COOLDOWN = 650;
+const BODY_COLLISION_BOTH_HAVE_DRONES_DAMAGE = 5;
+const BODY_COLLISION_BOTH_NO_DRONES_DAMAGE = 15;
 const BODY_COLLISION_WITH_DRONES_DAMAGE = 5;
-const BODY_COLLISION_WITHOUT_DRONES_DAMAGE = 45;
-const BODY_COLLISION_LIGHT_PUSH = 1.4;
-const BODY_COLLISION_MEDIUM_PUSH = 2.2;
-const BODY_COLLISION_STRONG_PUSH = 3.0;
-const BODY_COLLISION_PUSH_DECAY = 0.62;
-const BODY_COLLISION_PUSH_MIN = 0.02;
+const BODY_COLLISION_WITHOUT_DRONES_DAMAGE = 15;
+const BODY_COLLISION_LIGHT_PUSH = 6;
+const BODY_COLLISION_MEDIUM_PUSH = 9;
+const BODY_COLLISION_STRONG_PUSH = 12;
+const BODY_COLLISION_PUSH_DECAY = 0.95;
+const BODY_COLLISION_PUSH_MIN = 0.04;
 const CORE_TYPES = [
     'nano',
     'rotor',
@@ -2111,12 +2111,12 @@ let GameGateway = class GameGateway {
         for (const player of alive) {
             const nearbyOrbs = room.orbs.filter((orb) => this.isNear(player, orb, 1800)).length;
             const nearbyEnergy = room.energyCells.filter((cell) => this.isNear(player, cell, 1800)).length;
-            const orbTargetNearPlayer = room.zonePvpMode ? 32 : 90;
-            const orbAddLimit = room.zonePvpMode ? 10 : 45;
-            const orbExtraCap = room.zonePvpMode ? 32 : 90;
-            const energyTargetNearPlayer = room.zonePvpMode ? 3 : 4;
+            const orbTargetNearPlayer = room.zonePvpMode ? 18 : 90;
+            const orbAddLimit = room.zonePvpMode ? 4 : 45;
+            const orbExtraCap = room.zonePvpMode ? 18 : 90;
+            const energyTargetNearPlayer = room.zonePvpMode ? 2 : 4;
             const energyAddLimit = room.zonePvpMode ? 1 : 3;
-            const energyExtraCap = room.zonePvpMode ? 3 : 6;
+            const energyExtraCap = room.zonePvpMode ? 2 : 6;
             if (nearbyOrbs < orbTargetNearPlayer && room.orbs.length < MAX_ORBS + alive.length * orbExtraCap) {
                 const toAdd = Math.min(orbTargetNearPlayer - nearbyOrbs, orbAddLimit);
                 for (let i = 0; i < toAdd; i += 1) {
@@ -2130,8 +2130,8 @@ let GameGateway = class GameGateway {
                 }
             }
         }
-        const orbExtraCap = room.zonePvpMode ? 32 : 90;
-        const energyExtraCap = room.zonePvpMode ? 3 : 6;
+        const orbExtraCap = room.zonePvpMode ? 18 : 90;
+        const energyExtraCap = room.zonePvpMode ? 2 : 6;
         if (room.orbs.length > MAX_ORBS + alive.length * orbExtraCap) {
             room.orbs = room.orbs.slice(-(MAX_ORBS + alive.length * orbExtraCap));
         }

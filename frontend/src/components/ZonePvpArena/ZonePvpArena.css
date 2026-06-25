@@ -1,5 +1,5 @@
 /* =========================================================
-   ZONE PVP ARENA - OPTIMIZAT PENTRU FPS MOBIL
+   ZONE PVP ARENA - BATTLE ROYALE CAMERA + SUPER OPTIMIZAT
    Replace complet pentru: ZonePvpArena.css
 
    Ce face varianta asta:
@@ -17,6 +17,9 @@
 .zone-pvp-dom-arena .world {
   will-change: transform;
   transition: none;
+  transform-origin: 0 0;
+  backface-visibility: hidden;
+  contain: layout paint style;
 }
 
 .zone-pvp-dom-arena .swarm {
@@ -538,5 +541,45 @@
   .zone-pvp-loader {
     box-shadow: none !important;
     animation: none !important;
+  }
+}
+
+
+/* =========================================================
+   FINAL PERFORMANCE OVERRIDES - clean / smooth / no freeze
+========================================================= */
+.zone-pvp-dom-arena,
+.zone-pvp-dom-arena * {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.zone-pvp-dom-arena .pixi-arena-layer {
+  contain: strict !important;
+  pointer-events: none !important;
+}
+
+.zone-pvp-dom-arena .pixi-arena-layer canvas {
+  image-rendering: auto !important;
+}
+
+.zone-pvp-dom-arena .zone-pvp-battle-zone,
+.zone-pvp-dom-arena .zone-pvp-danger-smoke {
+  will-change: transform !important;
+  transform-origin: center center !important;
+  backface-visibility: hidden !important;
+  contain: layout paint style !important;
+}
+
+@media (hover: none), (max-width: 760px) {
+  .zone-pvp-dom-arena .zone-pvp-danger-smoke::before,
+  .zone-pvp-dom-arena .zone-pvp-danger-smoke::after {
+    display: none !important;
+  }
+
+  .zone-pvp-dom-arena .zone-pvp-danger-smoke {
+    box-shadow:
+      0 0 0 12px rgba(103, 255, 177, 0.16),
+      0 0 0 34px rgba(70, 255, 130, 0.08),
+      0 0 0 68px rgba(24, 150, 72, 0.035) !important;
   }
 }
