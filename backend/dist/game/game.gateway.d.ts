@@ -30,6 +30,7 @@ export declare class GameGateway {
     updateRoomStatus(room: any, now: any): void;
     updateBattleRoyaleOnlineRoomStatus(room: any, now: any): void;
     updateZonePvpRoomStatus(room: any, now: any): void;
+    isBattlePrepareLocked(room: any, now?: number): boolean;
     updatePlayers(room: any, now: any, zoneRadius: any, deltaFrames?: number): void;
     getNextDroneAt(currentDrones?: number): number;
     resetDroneProgress(player: any): void;
@@ -87,6 +88,7 @@ export declare class GameGateway {
         killStreak: any;
         rapidFireUntil: any;
         attackCooldownMultiplier: any;
+        killAttackSpeedMultiplier: any;
         skin: any;
         alive: any;
         attacking: boolean;

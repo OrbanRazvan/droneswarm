@@ -37,7 +37,8 @@ const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 50;
 const ZONE_PVP_ROOM_MAX_PLAYERS = 2;
 const ZONE_PVP_ROOM_MIN_PLAYERS = 2;
 const ZONE_PVP_START_COUNTDOWN_MS = 5000;
-const ZONE_PVP_ZONE_SHRINK_DURATION = 300000;
+const ZONE_PVP_BATTLE_PREPARE_DURATION = 30000;
+const ZONE_PVP_ZONE_SHRINK_DURATION = 420000;
 const ZONE_PVP_ZONE_DAMAGE = 10;
 const ZONE_PVP_ZONE_DAMAGE_INTERVAL = 1000;
 const ZONE_PVP_VISIBLE_PLAYERS_LIMIT = 60;
@@ -59,6 +60,9 @@ const ORB_COLLECT_DISTANCE = 180;
 const COLORS = ['cyan', 'green', 'orange', 'purple', 'red', 'pink'];
 const START_HP = 100;
 const MAX_HP = 150;
+const KILL_HP_REWARD = 10;
+const KILL_ATTACK_SPEED_MULTIPLIER = 0.85;
+const MIN_KILL_ATTACK_SPEED_MULTIPLIER = 0.45;
 const START_ENERGY = 100;
 const ENERGY_DRAIN_INTERVAL = 1000;
 const ENERGY_DRAIN_AMOUNT = 1;
@@ -511,6 +515,9 @@ export class GameGateway {
             safeZoneRadius: zoneRadius,
             zoneShrinkDuration: ZONE_PVP_ZONE_SHRINK_DURATION,
             matchStartedAt: room.matchStartedAt,
+            battlePrepareUntil: room.battlePrepareUntil || null,
+            battlePrepareRemainingMs: room.battlePrepareUntil ? Math.max(0, room.battlePrepareUntil - Date.now()) : 0,
+            battleBeginFlashUntil: room.battleBeginFlashUntil || null,
             playerCount: this.getAlivePlayers(room).length,
             minPlayers: ZONE_PVP_ROOM_MIN_PLAYERS,
             maxPlayers: ZONE_PVP_ROOM_MAX_PLAYERS,
@@ -709,12 +716,19 @@ export class GameGateway {
             room.locked = true;
             room.countdownStartedAt = null;
             room.matchStartedAt = now;
+            room.battlePrepareUntil = now + ZONE_PVP_BATTLE_PREPARE_DURATION;
+            room.battleBeginFlashUntil = room.battlePrepareUntil + 1800;
             room.matchHadMultiplePlayers = true;
             room.lastCoreWaveAt = now - CORE_RESPAWN_DELAY + CORE_WARNING_DELAY;
         }
     }
 
+    isBattlePrepareLocked(room, now = Date.now()) {
+        return Boolean(room?.zonePvpMode && room?.battlePrepareUntil && now < room.battlePrepareUntil);
+    }
+
     updatePlayers(room, now, zoneRadius, deltaFrames = 1) {
+        const battleLocked = this.isBattlePrepareLocked(room, now);
         for (const player of room.players.values()) {
             if (!player.alive)
                 continue;
@@ -747,7 +761,7 @@ export class GameGateway {
                 }
             }
             player.shieldActive = Boolean(player.shieldUntil && player.shieldUntil > now);
-            if (player.input.shield &&
+            if (!battleLocked && player.input.shield &&
                 (player.drones || 0) > 0 &&
                 player.energy >= 20 &&
                 !player.shieldActive &&
@@ -782,7 +796,7 @@ export class GameGateway {
                 player.moveY = 0;
                 player.isMoving = false;
             }
-            if (input.attacking) {
+            if (!battleLocked && input.attacking) {
                 this.tryFireProjectile(room, player, now);
             }
             if (Number(input.seq || 0) > 0) {
@@ -804,6 +818,14 @@ export class GameGateway {
         killer.drones = Math.min(MAX_DRONES, (killer.drones || 0) + 1);
         killer.progress = 0;
         killer.nextDroneAt = this.getNextDroneAt(killer.drones || 0);
+
+        const nextMaxHp = Math.min(MAX_HP, (killer.maxHp || START_HP) + KILL_HP_REWARD);
+        killer.maxHp = nextMaxHp;
+        killer.hp = Math.min(nextMaxHp, (killer.hp || START_HP) + KILL_HP_REWARD);
+        killer.killAttackSpeedMultiplier = Math.max(
+            MIN_KILL_ATTACK_SPEED_MULTIPLIER,
+            (killer.killAttackSpeedMultiplier || 1) * KILL_ATTACK_SPEED_MULTIPLIER
+        );
 
         if (killer.killStreak >= 3) {
             killer.rapidFireUntil = Date.now() + 10000;
@@ -971,6 +993,8 @@ export class GameGateway {
         this.addSmoothKnockback(b, dirX, dirY, separation);
         this.applyKnockbackStep(a, zoneRadius, room);
         this.applyKnockbackStep(b, zoneRadius, room);
+        if (this.isBattlePrepareLocked(room, now))
+            return;
         if (now - lastAt < BODY_COLLISION_COOLDOWN)
             return;
         room.collisionCooldowns.set(key, now);
@@ -988,6 +1012,8 @@ export class GameGateway {
     }
 
     tryFireProjectile(room, player, now) {
+        if (this.isBattlePrepareLocked(room, now))
+            return;
         if ((player.drones || 0) <= 0)
             return;
         const cooldown = this.getFireCooldown(player, now);
@@ -1039,6 +1065,7 @@ export class GameGateway {
         if (player.overclockUntil && player.overclockUntil > now) {
             cooldown *= 0.5;
         }
+        cooldown *= Math.max(MIN_KILL_ATTACK_SPEED_MULTIPLIER, player.killAttackSpeedMultiplier || 1);
         return Math.max(420, Math.floor(cooldown));
     }
     updateProjectiles(room, deltaFrames = 1) {
@@ -1648,6 +1675,7 @@ export class GameGateway {
             killStreak: player.killStreak || 0,
             rapidFireUntil: player.rapidFireUntil || 0,
             attackCooldownMultiplier: player.attackCooldownMultiplier || 1,
+            killAttackSpeedMultiplier: player.killAttackSpeedMultiplier || 1,
             skin: player.skin,
             alive: player.alive,
             attacking: Boolean(player.input?.attacking),
@@ -2088,6 +2116,9 @@ export class GameGateway {
                 safeZoneRadius: zoneRadius,
                 zoneShrinkDuration: BR_ONLINE_ZONE_SHRINK_DURATION,
                 matchStartedAt: room.matchStartedAt,
+                battlePrepareUntil: room.battlePrepareUntil || null,
+                battlePrepareRemainingMs,
+                battleBeginFlashUntil: room.battleBeginFlashUntil || null,
                 you: this.serializePlayer(player),
                 players: visiblePlayers,
                 spectatorTargetId: spectatorTarget?.id || null,
@@ -2131,6 +2162,8 @@ export class GameGateway {
             countdownStartedAt: null,
             createdAt: Date.now(),
             matchStartedAt: null,
+            battlePrepareUntil: null,
+            battleBeginFlashUntil: null,
             matchHadMultiplePlayers: false,
             lastCoreWaveAt: 0,
             nextCoreWaveAt: null,
@@ -2198,6 +2231,9 @@ export class GameGateway {
         const zonePvpCountdown = room.status === 'countdown' && room.countdownStartedAt
             ? Math.max(1, Math.ceil((ZONE_PVP_START_COUNTDOWN_MS - (now - room.countdownStartedAt)) / 1000))
             : null;
+        const battlePrepareRemainingMs = room.battlePrepareUntil
+            ? Math.max(0, room.battlePrepareUntil - now)
+            : 0;
 
         const leaderboard = players
             .slice()
@@ -2289,6 +2325,9 @@ export class GameGateway {
                 safeZoneRadius: zoneRadius,
                 zoneShrinkDuration: ZONE_PVP_ZONE_SHRINK_DURATION,
                 matchStartedAt: room.matchStartedAt,
+                battlePrepareUntil: room.battlePrepareUntil || null,
+                battlePrepareRemainingMs,
+                battleBeginFlashUntil: room.battleBeginFlashUntil || null,
                 you: this.serializePlayer(player),
                 players: visiblePlayers,
                 spectatorTargetId: spectatorTarget?.id || null,

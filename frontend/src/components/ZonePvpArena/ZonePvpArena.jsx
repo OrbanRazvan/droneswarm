@@ -41,6 +41,7 @@ const LOCAL_PROJECTILE_MAX_DISTANCE = 4200;
 const PROJECTILE_HIT_VISUAL_RADIUS = 118;
 const LOCAL_PROJECTILE_SPEED = 3.55;
 const FIRE_COOLDOWN = 3000;
+const BATTLE_PREPARE_DURATION = 30000;
 const ORB_STABLE_TTL = 2400;
 const MINIMAP_STABLE_TTL = 8000;
 
@@ -563,6 +564,30 @@ function interpolateSnapshotBuffer(buffer = [], renderTime) {
   };
 }
 
+
+function getBattlePrepareRemainingMs(data = {}) {
+  if (!data || data.status !== "playing") return 0;
+  if (Number.isFinite(Number(data.battlePrepareRemainingMs)) && Number(data.battlePrepareRemainingMs) > 0) {
+    return Number(data.battlePrepareRemainingMs);
+  }
+  if (data.battlePrepareUntil) {
+    return Math.max(0, Number(data.battlePrepareUntil) - Date.now());
+  }
+  if (data.matchStartedAt) {
+    return Math.max(0, BATTLE_PREPARE_DURATION - (Date.now() - Number(data.matchStartedAt)));
+  }
+  return 0;
+}
+
+function isBattlePrepareLocked(data = {}) {
+  return getBattlePrepareRemainingMs(data) > 0;
+}
+
+function getBattleBeginFlashActive(data = {}) {
+  if (!data?.battleBeginFlashUntil) return false;
+  return Date.now() < Number(data.battleBeginFlashUntil);
+}
+
 function FlyingAttackDrone({ projectile }) {
   const skin = normalizeSkin(projectile.skin || "cyan");
   const angle = projectile.angle || Math.atan2(projectile.vy || 0, projectile.vx || 1);
@@ -877,6 +902,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const dt = Math.min(50, Math.max(1, now - lastInputSentAtRef.current));
       lastInputSentAtRef.current = now;
 
+      const battleLocked = isBattlePrepareLocked(worldRef.current);
+
       const input = {
         seq: inputSeqRef.current + 1,
         dt,
@@ -888,8 +915,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         moveX: mobileMove.active ? mobileMove.x : 0,
         moveY: mobileMove.active ? mobileMove.y : 0,
         mobileMove: Boolean(mobileMove.active),
-        attacking: Boolean(keysRef.current.mouseDown),
-        shield: Boolean(keysRef.current.rightMouseDown),
+        attacking: !battleLocked && Boolean(keysRef.current.mouseDown),
+        shield: !battleLocked && Boolean(keysRef.current.rightMouseDown),
         mouseX: mouseWorldX,
         mouseY: mouseWorldY,
       };
@@ -955,8 +982,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           moveX: mobileMove.active ? mobileMove.x : 0,
           moveY: mobileMove.active ? mobileMove.y : 0,
           mobileMove: Boolean(mobileMove.active),
-          attacking: Boolean(keysRef.current.mouseDown),
-          shield: Boolean(keysRef.current.rightMouseDown),
+          attacking: !isBattlePrepareLocked(worldRef.current) && Boolean(keysRef.current.mouseDown),
+          shield: !isBattlePrepareLocked(worldRef.current) && Boolean(keysRef.current.rightMouseDown),
           mouseX: current.x + (mouseRef.current.x - window.innerWidth / 2),
           mouseY: current.y + (mouseRef.current.y - window.innerHeight / 2),
         };
@@ -1006,6 +1033,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
         if (
           data.status === "playing" &&
+          !isBattlePrepareLocked(data) &&
           wantsToAttack &&
           predicted?.alive !== false &&
           (predicted?.drones || 0) > 0 &&
@@ -1618,6 +1646,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const countdown = hudData.countdown || renderData.countdown || 5;
   const winnerName = hudData.winnerName || renderData.winnerName;
   const coreDropCountdown = hudData.coreDropCountdown || renderData.coreDropCountdown;
+  const battlePrepareSource = hudData.status ? hudData : renderData;
+  const battlePrepareRemainingMs = getBattlePrepareRemainingMs(battlePrepareSource);
+  const isBattlePrepare = status === "playing" && !isFinished && battlePrepareRemainingMs > 0;
+  const battlePrepareSeconds = Math.max(0, Math.ceil(battlePrepareRemainingMs / 1000));
+  const showBattleBeginFlash = !isMatchmaking && !isFinished && getBattleBeginFlashActive(battlePrepareSource);
 
   // IMPORTANT: cand meciul se termina (status === "finished"), nu mai
   // asteptam un click manual pe "EXIT TO MENU" - scoatem automat jucatorul
@@ -1646,7 +1679,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const nextDroneAt = hudYou?.nextDroneAt ?? 5;
 
   return (
-    <div className={`game-arena pvp-dom-arena normal-pvp-dom-arena zone-pvp-dom-arena ${isMobileControls ? "is-mobile-device is-mobile-portrait" : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""}`}>
+    <div className={`game-arena pvp-dom-arena normal-pvp-dom-arena zone-pvp-dom-arena ${isMobileControls ? "is-mobile-device is-mobile-portrait" : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""} ${isBattlePrepare ? "is-battle-prepare" : ""}`}>
       {isMatchmaking && !connectionError && (
         <div className="zone-pvp-matchmaking-screen">
           <div className="zone-pvp-matchmaking-card">
@@ -1766,7 +1799,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       </div>
 
       {!isFinished && !isMatchmaking && (
-        <div className="zone-pvp-zone-timer">
+        <div className="zone-pvp-zone-timer battle-royale-zone-timer">
           ZONE CLOSES IN: {zoneRemainingMinutes}:{zoneRemainingSeconds}
         </div>
       )}
@@ -1799,6 +1832,18 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           <b>{coreDropCountdown}</b>
           <span>Power cores entering the arena.</span>
         </div>
+      )}
+
+
+      {isBattlePrepare && (
+        <div className="battle-royale-peace-countdown zone-pvp-peace-countdown">
+          <strong>PREPARE PHASE <b>{battlePrepareSeconds}s</b></strong>
+          <span>Attack, shield and collision damage are locked.</span>
+        </div>
+      )}
+
+      {showBattleBeginFlash && !isBattlePrepare && (
+        <div className="battle-royale-begin-flash zone-pvp-begin-flash">BATTLE BEGIN</div>
       )}
 
       {connectionError && (
@@ -1860,7 +1905,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         <div className="pvp-mobile-buttons">
           <button
             type="button"
-            className={`pvp-mobile-action pvp-mobile-shield ${mobileShieldActive ? "is-active" : ""}`}
+            className={`pvp-mobile-action pvp-mobile-shield ${mobileShieldActive ? "is-active" : ""} ${isBattlePrepare ? "is-locked" : ""}`}
             onPointerDown={onShieldPointerDown}
             onPointerUp={stopMobileShield}
             onPointerCancel={stopMobileShield}
@@ -1870,7 +1915,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
           <button
             type="button"
-            className={`pvp-mobile-action pvp-mobile-attack ${mobileAttackActive ? "is-active" : ""}`}
+            className={`pvp-mobile-action pvp-mobile-attack ${mobileAttackActive ? "is-active" : ""} ${isBattlePrepare ? "is-locked" : ""}`}
             onPointerDown={onAttackPointerDown}
             onPointerMove={onAttackPointerMove}
             onPointerUp={stopMobileAttack}
