@@ -15,22 +15,22 @@ const ZONE_RADIUS_FALLBACK = 4700;
 // Daca backend-ul tau ruleaza la 30 ticks/sec, PLAYER_SPEED pe server trebuie sa fie 5.6.
 // VITEZA DRONEI PRINCIPALE IN PVP.
 // Identic cu Normal PvP, ca senzatia de miscare sa fie aceeasi.
-const GAME_FRAME_SPEED = 2.15;
+const GAME_FRAME_SPEED = 2.6;
 const CLIENT_SPEED = GAME_FRAME_SPEED * 60;
 
 // Delta-time smoothing. Valorile sunt "pe secunda", nu pe frame.
 // Asta inseamna ca jocul se simte la fel la 45 FPS, 60 FPS sau 144 FPS.
-const SELF_CORRECTION_MOVING = 0.18;
+const SELF_CORRECTION_MOVING = 0.08;
 const SELF_CORRECTION_IDLE = 0;
 const SELF_SNAP_DISTANCE = 0.25;
-const SELF_HARD_SNAP_DISTANCE = 560;
-const SELF_MAX_CORRECTION_SPEED = 900; // px/sec - viteza maxima cu care predictia se "trage" spre server
-const SELF_IDLE_FREEZE_DISTANCE = 180;
+const SELF_HARD_SNAP_DISTANCE = 900;
+const SELF_MAX_CORRECTION_SPEED = 520; // px/sec - viteza maxima cu care predictia se "trage" spre server
+const SELF_IDLE_FREEZE_DISTANCE = 360;
 
-const REMOTE_SMOOTHING = 16.5;
+const REMOTE_SMOOTHING = 10.5;
 const REMOTE_PREDICTION = 1.0;
-const REMOTE_HARD_SNAP_DISTANCE = 520;
-const REMOTE_MAX_EXTRAPOLATE_MS = 140;
+const REMOTE_HARD_SNAP_DISTANCE = 980;
+const REMOTE_MAX_EXTRAPOLATE_MS = 110;
 
 const PROJECTILE_SMOOTHING = 18;
 const PROJECTILE_FRAME_SCALE = 60;
@@ -41,8 +41,8 @@ const LOCAL_PROJECTILE_MAX_DISTANCE = 4200;
 const PROJECTILE_HIT_VISUAL_RADIUS = 118;
 const LOCAL_PROJECTILE_SPEED = 3.55;
 const FIRE_COOLDOWN = 3000;
-const ORB_STABLE_TTL = 220;
-const MINIMAP_STABLE_TTL = 5200;
+const ORB_STABLE_TTL = 1600;
+const MINIMAP_STABLE_TTL = 7000;
 
 // Colectare vizuala locala: clientul ascunde instant orbul/energia/core-ul
 // cand intra in el, fara sa astepte urmatorul pachet de la server.
@@ -50,9 +50,9 @@ const MINIMAP_STABLE_TTL = 5200;
 const LOCAL_ORB_COLLECT_DISTANCE = 150;
 const LOCAL_ENERGY_COLLECT_DISTANCE = 135;
 const LOCAL_CORE_COLLECT_DISTANCE = 155;
-const LOCAL_COLLECT_HIDE_TTL = 2200;
+const LOCAL_COLLECT_HIDE_TTL = 1400;
 
-const MAX_VISIBLE_REMOTE_PLAYERS = 25;
+const MAX_VISIBLE_REMOTE_PLAYERS = 12;
 
 const CORE_TYPES = [
   { type: "nano", name: "Nano Core", shortName: "Nano", color: "#00eaff", effect: "+10 MAX HP" },
@@ -711,12 +711,12 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     sendInputRef.current = sendInputNow;
 
-    const inputTimer = window.setInterval(sendInputNow, 20);
+    const inputTimer = window.setInterval(sendInputNow, 33);
 
     const hudTimer = window.setInterval(() => {
       const data = worldRef.current;
       setHudData({ ...data, you: predictedYouRef.current || data.you, fps: fpsRef.current.value });
-    }, 33);
+    }, 66);
 
     return () => {
       window.clearInterval(inputTimer);
@@ -1033,22 +1033,22 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const liveOrbs = collectVisible(
         stableOrbMapRef.current.values(),
         (orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id) && isVisible(orb, liveBounds, 45),
-        560
+        120
       );
       const liveEnergyCells = collectVisible(
         stableEnergyMapRef.current.values(),
         (cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id) && isVisible(cell, liveBounds, 70),
-        130
+        28
       );
       const liveCores = collectVisible(
         data.cores || [],
         (core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id) && isVisible(core, liveBounds, 130),
-        18
+        8
       );
       const liveProjectiles = collectVisible(
         projectileMap.values(),
         (projectile) => isVisible(projectile, liveBounds, 180),
-        120
+        35
       );
 
       pixiLiveRef.current = {
@@ -1068,7 +1068,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         viewportHeight: viewport.height,
         coreColorMap: coreColorMapRef.current,
         otherPlayerSize: 112,
-        otherPlayerQuality: 2,
+        otherPlayerQuality: 0,
       };
 
       if (now - lastRenderSyncRef.current >= 66) {
@@ -1431,13 +1431,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
   const cameraX = cameraSubject ? viewport.width / 2 - cameraSubject.x : 0;
   const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y : 0;
-  const bounds = getViewportBounds(cameraX, cameraY, viewport, 750);
+  const bounds = getViewportBounds(cameraX, cameraY, viewport, 520);
 
-  const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), 520);
-  const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), 120);
-  const visibleCores = collectVisible(renderData.cores || [], (core) => isVisible(core, bounds, 120), 18);
+  const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), 120);
+  const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), 28);
+  const visibleCores = collectVisible(renderData.cores || [], (core) => isVisible(core, bounds, 120), 8);
   const visiblePlayers = collectVisible(renderData.players || [], (player) => isVisible(player, bounds, 360), MAX_VISIBLE_REMOTE_PLAYERS);
-  const visibleProjectiles = collectVisible(renderData.projectiles || [], (projectile) => isVisible(projectile, bounds, 160), 100);
+  const visibleProjectiles = collectVisible(renderData.projectiles || [], (projectile) => isVisible(projectile, bounds, 160), 35);
 
   const rendererPlayer = isDead && spectatorTarget
     ? {
@@ -1559,9 +1559,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         viewportHeight={viewport.height}
         coreTypes={CORE_TYPES}
         otherPlayerSize={112}
-        otherPlayerQuality={2}
+        otherPlayerQuality={0}
         liveDataRef={pixiLiveRef}
-        forceLowQuality={graphicsQuality === "low"}
+        forceLowQuality={true}
       />
 
       {you && !isDead && (

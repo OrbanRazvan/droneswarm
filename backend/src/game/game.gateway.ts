@@ -2180,10 +2180,10 @@ export class GameGateway {
                 spectatorTargetId: spectatorTarget?.id || null,
                 spectatingPlayer: spectatorTarget ? this.serializePlayer(spectatorTarget) : null,
 
-                orbs: this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, VISIBLE_ORB_LIMIT),
-                energyCells: this.filterNear(viewAnchor, room.energyCells, VIEW_DISTANCE, VISIBLE_ENERGY_LIMIT),
-                cores: this.filterNear(viewAnchor, room.cores, VIEW_DISTANCE + 600, 18),
-                projectiles: this.filterNear(viewAnchor, room.projectiles, VIEW_DISTANCE + 400, VISIBLE_PROJECTILE_LIMIT),
+                orbs: this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, 140),
+                energyCells: this.filterNear(viewAnchor, room.energyCells, VIEW_DISTANCE, 30),
+                cores: this.filterNear(viewAnchor, room.cores, VIEW_DISTANCE + 600, 8),
+                projectiles: this.filterNear(viewAnchor, room.projectiles, VIEW_DISTANCE + 400, 45),
 
                 minimapOrbs,
                 minimapEnergyCells,
@@ -2336,24 +2336,34 @@ export class GameGateway {
         for (const player of alive) {
             const nearbyOrbs = room.orbs.filter((orb) => this.isNear(player, orb, 1800)).length;
             const nearbyEnergy = room.energyCells.filter((cell) => this.isNear(player, cell, 1800)).length;
-            if (nearbyOrbs < 90 && room.orbs.length < MAX_ORBS + alive.length * 90) {
-                const toAdd = Math.min(90 - nearbyOrbs, 45);
+            const orbTargetNearPlayer = room.zonePvpMode ? 32 : 90;
+            const orbAddLimit = room.zonePvpMode ? 10 : 45;
+            const orbExtraCap = room.zonePvpMode ? 32 : 90;
+            const energyTargetNearPlayer = room.zonePvpMode ? 3 : 4;
+            const energyAddLimit = room.zonePvpMode ? 1 : 3;
+            const energyExtraCap = room.zonePvpMode ? 3 : 6;
+
+            if (nearbyOrbs < orbTargetNearPlayer && room.orbs.length < MAX_ORBS + alive.length * orbExtraCap) {
+                const toAdd = Math.min(orbTargetNearPlayer - nearbyOrbs, orbAddLimit);
                 for (let i = 0; i < toAdd; i += 1) {
                     room.orbs.push(this.createOrb(zoneRadius, player.x, player.y));
                 }
             }
-            if (nearbyEnergy < 4 && room.energyCells.length < MAX_ENERGY_CELLS + alive.length * 6) {
-                const toAdd = Math.min(4 - nearbyEnergy, 3);
+            if (nearbyEnergy < energyTargetNearPlayer && room.energyCells.length < MAX_ENERGY_CELLS + alive.length * energyExtraCap) {
+                const toAdd = Math.min(energyTargetNearPlayer - nearbyEnergy, energyAddLimit);
                 for (let i = 0; i < toAdd; i += 1) {
                     room.energyCells.push(this.createEnergyCell(zoneRadius, player.x, player.y));
                 }
             }
         }
-        if (room.orbs.length > MAX_ORBS + alive.length * 90) {
-            room.orbs = room.orbs.slice(-(MAX_ORBS + alive.length * 90));
+        const orbExtraCap = room.zonePvpMode ? 32 : 90;
+        const energyExtraCap = room.zonePvpMode ? 3 : 6;
+
+        if (room.orbs.length > MAX_ORBS + alive.length * orbExtraCap) {
+            room.orbs = room.orbs.slice(-(MAX_ORBS + alive.length * orbExtraCap));
         }
-        if (room.energyCells.length > MAX_ENERGY_CELLS + alive.length * 6) {
-            room.energyCells = room.energyCells.slice(-(MAX_ENERGY_CELLS + alive.length * 6));
+        if (room.energyCells.length > MAX_ENERGY_CELLS + alive.length * energyExtraCap) {
+            room.energyCells = room.energyCells.slice(-(MAX_ENERGY_CELLS + alive.length * energyExtraCap));
         }
     }
     randomSafePointNear(nearX, nearY, zoneRadius, margin = 120, minDistance = 300, maxDistance = 1400) {

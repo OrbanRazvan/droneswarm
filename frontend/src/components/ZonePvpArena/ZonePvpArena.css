@@ -480,3 +480,63 @@
     font-size: 13px;
   }
 }
+
+
+/* =========================================================
+   SUPER SMOOTH MOBILE / LOW QUALITY GLOBAL - Zone PvP
+   Lipit la final: reduce efectele scumpe si ascunde sageata SVG pe telefon
+   ca sa nu mai scada FPS-ul cand tii apasat pe atac.
+========================================================= */
+.zone-pvp-dom-arena,
+.zone-pvp-dom-arena *,
+.zone-pvp-dom-arena *::before,
+.zone-pvp-dom-arena *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.zone-pvp-dom-arena .world,
+.zone-pvp-dom-arena .swarm,
+.zone-pvp-dom-arena .pixi-arena-layer canvas {
+  transform-style: flat !important;
+  backface-visibility: hidden !important;
+}
+
+.zone-pvp-dom-arena .pixi-arena-layer,
+.zone-pvp-dom-arena .pixi-arena-renderer,
+.zone-pvp-dom-arena .pixi-arena-renderer canvas {
+  contain: strict !important;
+  pointer-events: none !important;
+}
+
+.zone-pvp-dom-arena .aim-svg {
+  will-change: auto !important;
+}
+
+@media (hover: none), (max-width: 760px) {
+  .zone-pvp-dom-arena .aim-svg {
+    display: none !important;
+  }
+
+  .zone-pvp-danger-smoke {
+    box-shadow: 0 0 0 16px rgba(103, 255, 177, 0.16) !important;
+  }
+
+  .zone-pvp-danger-smoke::before,
+  .zone-pvp-danger-smoke::after {
+    display: none !important;
+    content: none !important;
+  }
+
+  .zone-pvp-battle-zone {
+    border-width: 2px !important;
+    box-shadow: none !important;
+  }
+
+  .zone-pvp-matchmaking-screen,
+  .zone-pvp-matchmaking-card,
+  .zone-pvp-loader {
+    box-shadow: none !important;
+    animation: none !important;
+  }
+}
