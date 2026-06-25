@@ -35,7 +35,7 @@ const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 50;
 // care au deja zona.
 // ---------------------------------------------------------------------------
 const ZONE_PVP_ROOM_MAX_PLAYERS = 2;
-const ZONE_PVP_ROOM_MIN_PLAYERS = 2;
+const ZONE_PVP_ROOM_MIN_PLAYERS = 1;
 const ZONE_PVP_START_COUNTDOWN_MS = 5000;
 const ZONE_PVP_BATTLE_PREPARE_DURATION = 30000;
 const ZONE_PVP_ZONE_SHRINK_DURATION = 420000;
@@ -1577,20 +1577,20 @@ export class GameGateway {
 
         // Camera declara castigator doar dupa ce meciul a pornit valid cu minim 2 jucatori.
         // Daca unul moare, devine spectator sau se deconecteaza, ultimul ramas viu castiga.
-        if (room.matchHadMultiplePlayers && alive.length <= 1) {
-            const winner = alive[0] || null;
-            room.status = 'finished';
-            room.locked = true;
-            room.winnerId = winner?.id || null;
-            room.winnerName = winner?.username || null;
-            room.finishedAt = now;
-            room.projectiles = [];
-            for (const player of room.players.values()) {
-                player.input = {};
-                player.shieldActive = false;
-                player.shieldUntil = 0;
-            }
-        }
+        //if (room.matchHadMultiplePlayers && alive.length <= 1) {
+         //   const winner = alive[0] || null;
+         //   room.status = 'finished';
+         //   room.locked = true;
+         //   room.winnerId = winner?.id || null;
+         //   room.winnerName = winner?.username || null;
+         //   room.finishedAt = now;
+          //  room.projectiles = [];
+          //  for (const player of room.players.values()) {
+          //      player.input = {};
+          //      player.shieldActive = false;
+          //      player.shieldUntil = 0;
+          //  }
+       // }
     }
     broadcastRoomState(room, now) {
         const players = [...room.players.values()];
