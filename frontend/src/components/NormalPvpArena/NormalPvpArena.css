@@ -1747,3 +1747,200 @@
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
+
+
+/* =========================================================
+   FINAL FIX 2026 - NORMAL PVP MOBILE PORTRAIT LAYOUT
+   Ridica joystick + attack/shield + minimap si pune Exit sub joystick.
+   Afecteaza DOAR telefon vertical.
+========================================================= */
+@media (hover: none) and (orientation: portrait) {
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait {
+    touch-action: none !important;
+    overscroll-behavior: none !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-controls,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-controls {
+    display: block !important;
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 10050 !important;
+    pointer-events: none !important;
+    background: transparent !important;
+  }
+
+  /* JOYSTICK - ridicat mult mai sus, complet vizibil */
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick {
+    display: block !important;
+    position: fixed !important;
+    left: max(18px, calc(env(safe-area-inset-left) + 16px)) !important;
+    bottom: max(195px, calc(env(safe-area-inset-bottom) + 188px)) !important;
+    width: 186px !important;
+    height: 186px !important;
+    border-radius: 50% !important;
+    pointer-events: auto !important;
+    touch-action: none !important;
+    z-index: 10080 !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick-ring,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick-ring {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background:
+      radial-gradient(circle at 50% 50%, rgba(0, 234, 255, 0.18), rgba(2, 8, 18, 0.34) 58%, rgba(2, 8, 18, 0.62) 100%) !important;
+    border: 1px solid rgba(0, 234, 255, 0.46) !important;
+    box-shadow:
+      0 0 22px rgba(0, 234, 255, 0.18),
+      inset 0 0 24px rgba(0, 234, 255, 0.08) !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick-knob,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick-knob {
+    width: 74px !important;
+    height: 74px !important;
+    will-change: transform !important;
+  }
+
+  /* ATTACK + SHIELD - ridicate, dar nu peste minimap */
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-buttons,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-buttons {
+    display: flex !important;
+    position: fixed !important;
+    right: max(16px, calc(env(safe-area-inset-right) + 14px)) !important;
+    bottom: max(245px, calc(env(safe-area-inset-bottom) + 238px)) !important;
+    gap: 10px !important;
+    align-items: center !important;
+    pointer-events: auto !important;
+    touch-action: none !important;
+    z-index: 10085 !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-action,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-action {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border-radius: 999px !important;
+    text-transform: uppercase !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-shield,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-shield {
+    width: 82px !important;
+    height: 82px !important;
+    font-size: 10px !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-attack,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-attack {
+    width: 104px !important;
+    height: 104px !important;
+    font-size: 12px !important;
+  }
+
+  /* MINI-MAP - ridicat ca sa nu mai fie taiat jos */
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .mobile-minimap-frame,
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .minimap,
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait [class*="minimap"],
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .mobile-minimap-frame,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .minimap,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait [class*="minimap"] {
+    position: fixed !important;
+    right: max(12px, calc(env(safe-area-inset-right) + 10px)) !important;
+    bottom: max(92px, calc(env(safe-area-inset-bottom) + 84px)) !important;
+    z-index: 10020 !important;
+    opacity: 1 !important;
+    filter: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    transform: none !important;
+  }
+
+  /* EXIT TO MENU - sub joystick, pe stanga */
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-exit-btn,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-exit-btn {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    position: fixed !important;
+    left: max(24px, calc(env(safe-area-inset-left) + 20px)) !important;
+    bottom: max(92px, calc(env(safe-area-inset-bottom) + 84px)) !important;
+    z-index: 10090 !important;
+    min-width: 118px !important;
+    height: 34px !important;
+    padding: 0 12px !important;
+    border-radius: 9px !important;
+    font-size: 10px !important;
+    line-height: 1 !important;
+    letter-spacing: 0.35px !important;
+    white-space: nowrap !important;
+    pointer-events: auto !important;
+    touch-action: manipulation !important;
+    background: rgba(2, 8, 18, 0.88) !important;
+    border: 1px solid rgba(0, 234, 255, 0.38) !important;
+    color: #dffcff !important;
+    box-shadow: 0 0 12px rgba(0, 234, 255, 0.12) !important;
+  }
+}
+
+/* Telefoane foarte inguste - mutam totul putin mai sus si micsoram controalele */
+@media (hover: none) and (max-width: 430px) and (orientation: portrait) {
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick {
+    left: 16px !important;
+    bottom: max(182px, calc(env(safe-area-inset-bottom) + 176px)) !important;
+    width: 172px !important;
+    height: 172px !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick-knob,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick-knob {
+    width: 68px !important;
+    height: 68px !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-buttons,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-buttons {
+    right: 10px !important;
+    bottom: max(232px, calc(env(safe-area-inset-bottom) + 226px)) !important;
+    gap: 8px !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-shield,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-shield {
+    width: 74px !important;
+    height: 74px !important;
+    font-size: 9px !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-attack,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-attack {
+    width: 94px !important;
+    height: 94px !important;
+    font-size: 11px !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .mobile-minimap-frame,
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .minimap,
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait [class*="minimap"],
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .mobile-minimap-frame,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .minimap,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait [class*="minimap"] {
+    right: 8px !important;
+    bottom: max(78px, calc(env(safe-area-inset-bottom) + 72px)) !important;
+    max-width: 160px !important;
+    max-height: 118px !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-exit-btn,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-exit-btn {
+    left: 18px !important;
+    bottom: max(78px, calc(env(safe-area-inset-bottom) + 72px)) !important;
+    min-width: 104px !important;
+    height: 31px !important;
+    font-size: 9px !important;
+  }
+}
