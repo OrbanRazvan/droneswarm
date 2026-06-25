@@ -738,3 +738,262 @@
     display: none !important;
   }
 }
+
+/* =========================================================
+   FINAL FIX - ZONE PVP exact BattleRoyaleMode phase + mobile layout
+   - NU mai muta minimap-ul aiurea.
+   - PREPARE PHASE apare jos, mic si transparent.
+   - BATTLE BEGIN apare scurt in centru, ca in BattleRoyaleMode.
+========================================================= */
+.zone-pvp-dom-arena .mobile-minimap-frame,
+.zone-pvp-dom-arena .minimap,
+.zone-pvp-dom-arena .mini-map,
+.zone-pvp-dom-arena .world-map,
+.zone-pvp-dom-arena [class*="minimap"],
+.zone-pvp-dom-arena [class*="mini-map"],
+.zone-pvp-dom-arena [class*="world-map"] {
+  filter: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  opacity: 1 !important;
+}
+
+.zone-pvp-dom-arena .battle-royale-peace-countdown,
+.zone-pvp-dom-arena .zone-pvp-peace-countdown {
+  position: fixed !important;
+  left: 50% !important;
+  right: auto !important;
+  top: auto !important;
+  bottom: max(20px, calc(env(safe-area-inset-bottom) + 18px)) !important;
+  transform: translateX(-50%) !important;
+  z-index: 10020 !important;
+
+  width: min(330px, calc(100vw - 32px)) !important;
+  min-height: 0 !important;
+  padding: 7px 12px 8px !important;
+  border-radius: 13px !important;
+
+  border: 1px solid rgba(103, 255, 177, 0.26) !important;
+  background: rgba(2, 8, 18, 0.30) !important;
+  box-shadow:
+    0 0 12px rgba(103, 255, 177, 0.07),
+    inset 0 0 10px rgba(103, 255, 177, 0.03) !important;
+
+  color: #dffcff !important;
+  text-align: center !important;
+  pointer-events: none !important;
+  backdrop-filter: blur(2px) !important;
+  -webkit-backdrop-filter: blur(2px) !important;
+  opacity: 0.78 !important;
+  contain: layout paint style !important;
+}
+
+.zone-pvp-dom-arena .battle-royale-peace-countdown strong,
+.zone-pvp-dom-arena .zone-pvp-peace-countdown strong {
+  display: inline-block !important;
+  margin: 0 7px 0 0 !important;
+  color: rgba(103, 255, 177, 0.92) !important;
+  font-size: 10px !important;
+  line-height: 1 !important;
+  font-weight: 1000 !important;
+  letter-spacing: 1.5px !important;
+  text-transform: uppercase !important;
+  text-shadow: 0 0 7px rgba(103, 255, 177, 0.28) !important;
+  vertical-align: middle !important;
+}
+
+.zone-pvp-dom-arena .battle-royale-peace-countdown b,
+.zone-pvp-dom-arena .zone-pvp-peace-countdown b,
+.zone-pvp-dom-arena .battle-royale-peace-countdown strong b,
+.zone-pvp-dom-arena .zone-pvp-peace-countdown strong b {
+  display: inline-block !important;
+  margin: 0 7px 0 0 !important;
+  color: #00eaff !important;
+  font-size: 21px !important;
+  line-height: 1 !important;
+  font-weight: 1000 !important;
+  vertical-align: middle !important;
+  text-shadow: 0 0 9px rgba(0, 234, 255, 0.45) !important;
+}
+
+.zone-pvp-dom-arena .battle-royale-peace-countdown span,
+.zone-pvp-dom-arena .zone-pvp-peace-countdown span {
+  display: inline-block !important;
+  max-width: 155px !important;
+  color: rgba(223, 252, 255, 0.58) !important;
+  font-size: 8px !important;
+  line-height: 1.1 !important;
+  font-weight: 800 !important;
+  vertical-align: middle !important;
+  white-space: normal !important;
+}
+
+.zone-pvp-dom-arena .battle-royale-begin-flash,
+.zone-pvp-dom-arena .zone-pvp-begin-flash {
+  position: fixed !important;
+  left: 50% !important;
+  top: 50% !important;
+  right: auto !important;
+  bottom: auto !important;
+  inset: auto !important;
+  transform: translate(-50%, -50%) !important;
+  z-index: 10030 !important;
+
+  display: block !important;
+  width: auto !important;
+  min-width: min(330px, calc(100vw - 36px)) !important;
+  padding: 13px 20px !important;
+  border-radius: 15px !important;
+  border: 1px solid rgba(103, 255, 177, 0.32) !important;
+  background: rgba(2, 8, 18, 0.40) !important;
+  box-shadow: 0 0 22px rgba(103, 255, 177, 0.13) !important;
+
+  color: #67ffb1 !important;
+  font-size: clamp(25px, 4.3vw, 52px) !important;
+  font-weight: 1000 !important;
+  letter-spacing: 1.5px !important;
+  text-align: center !important;
+  text-shadow:
+    0 0 18px rgba(103, 255, 177, 0.8),
+    0 0 30px rgba(0, 234, 255, 0.26) !important;
+  pointer-events: none !important;
+  backdrop-filter: blur(3px) !important;
+  -webkit-backdrop-filter: blur(3px) !important;
+  animation: zonePvpBattleBeginFinalPop 1.1s ease-out forwards !important;
+}
+
+@keyframes zonePvpBattleBeginFinalPop {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.88); }
+  18% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  70% { opacity: 1; transform: translate(-50%, -50%) scale(1.015); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.08); }
+}
+
+/* Layout mobile portrait pastrat ca in PvP-ul deja bun: minimap vizibil, nu lipit jos de tot. */
+@media (max-width: 760px) and (orientation: portrait) {
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .mobile-minimap-frame,
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .minimap-wrap {
+    right: max(12px, env(safe-area-inset-right)) !important;
+    bottom: max(16px, env(safe-area-inset-bottom)) !important;
+    width: 260px !important;
+    height: 170px !important;
+    opacity: 1 !important;
+    background: rgba(2, 8, 18, 0.88) !important;
+    box-shadow: 0 0 18px rgba(0, 234, 255, 0.18) !important;
+    z-index: 80 !important;
+  }
+
+  .zone-pvp-dom-arena .battle-royale-peace-countdown,
+  .zone-pvp-dom-arena .zone-pvp-peace-countdown {
+    left: 50% !important;
+    right: auto !important;
+    top: auto !important;
+    bottom: max(96px, calc(env(safe-area-inset-bottom) + 88px)) !important;
+    transform: translateX(-50%) !important;
+    width: min(245px, calc(100vw - 24px)) !important;
+    padding: 6px 9px 7px !important;
+    border-radius: 11px !important;
+    background: rgba(2, 8, 18, 0.30) !important;
+    opacity: 0.82 !important;
+  }
+
+  .zone-pvp-dom-arena .battle-royale-peace-countdown strong,
+  .zone-pvp-dom-arena .zone-pvp-peace-countdown strong {
+    font-size: 8px !important;
+    letter-spacing: 1.1px !important;
+  }
+
+  .zone-pvp-dom-arena .battle-royale-peace-countdown b,
+  .zone-pvp-dom-arena .zone-pvp-peace-countdown b,
+  .zone-pvp-dom-arena .battle-royale-peace-countdown strong b,
+  .zone-pvp-dom-arena .zone-pvp-peace-countdown strong b {
+    margin: 0 5px 0 0 !important;
+    font-size: 18px !important;
+  }
+
+  .zone-pvp-dom-arena .battle-royale-peace-countdown span,
+  .zone-pvp-dom-arena .zone-pvp-peace-countdown span {
+    max-width: 112px !important;
+    font-size: 7px !important;
+    line-height: 1.06 !important;
+  }
+
+  .zone-pvp-dom-arena .battle-royale-begin-flash,
+  .zone-pvp-dom-arena .zone-pvp-begin-flash {
+    min-width: min(260px, calc(100vw - 32px)) !important;
+    padding: 11px 15px !important;
+    border-radius: 13px !important;
+    font-size: 28px !important;
+  }
+}
+
+@media (max-width: 430px) and (orientation: portrait) {
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .mobile-minimap-frame,
+  .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .minimap-wrap {
+    width: 238px !important;
+    height: 154px !important;
+  }
+
+  .zone-pvp-dom-arena .battle-royale-peace-countdown,
+  .zone-pvp-dom-arena .zone-pvp-peace-countdown {
+    width: min(225px, calc(100vw - 22px)) !important;
+    bottom: max(88px, calc(env(safe-area-inset-bottom) + 80px)) !important;
+    padding: 5px 8px 6px !important;
+  }
+
+  .zone-pvp-dom-arena .battle-royale-peace-countdown strong,
+  .zone-pvp-dom-arena .zone-pvp-peace-countdown strong { font-size: 7px !important; }
+
+  .zone-pvp-dom-arena .battle-royale-peace-countdown b,
+  .zone-pvp-dom-arena .zone-pvp-peace-countdown b,
+  .zone-pvp-dom-arena .battle-royale-peace-countdown strong b,
+  .zone-pvp-dom-arena .zone-pvp-peace-countdown strong b { font-size: 16px !important; }
+
+  .zone-pvp-dom-arena .battle-royale-peace-countdown span,
+  .zone-pvp-dom-arena .zone-pvp-peace-countdown span { max-width: 100px !important; font-size: 6.6px !important; }
+}
+
+@media (hover: none) and (orientation: landscape), (max-height: 560px) and (orientation: landscape) {
+  .zone-pvp-dom-arena .battle-royale-peace-countdown,
+  .zone-pvp-dom-arena .zone-pvp-peace-countdown {
+    left: 50% !important;
+    right: auto !important;
+    top: auto !important;
+    bottom: max(8px, env(safe-area-inset-bottom)) !important;
+    transform: translateX(-50%) !important;
+    width: min(250px, calc(100vw - 180px)) !important;
+    padding: 5px 8px 6px !important;
+    border-radius: 10px !important;
+    background: rgba(2, 8, 18, 0.28) !important;
+    opacity: 0.78 !important;
+  }
+
+  .zone-pvp-dom-arena .battle-royale-peace-countdown strong,
+  .zone-pvp-dom-arena .zone-pvp-peace-countdown strong {
+    font-size: 7.5px !important;
+    letter-spacing: 1px !important;
+  }
+
+  .zone-pvp-dom-arena .battle-royale-peace-countdown b,
+  .zone-pvp-dom-arena .zone-pvp-peace-countdown b,
+  .zone-pvp-dom-arena .battle-royale-peace-countdown strong b,
+  .zone-pvp-dom-arena .zone-pvp-peace-countdown strong b {
+    margin: 0 5px 0 0 !important;
+    font-size: 16px !important;
+  }
+
+  .zone-pvp-dom-arena .battle-royale-peace-countdown span,
+  .zone-pvp-dom-arena .zone-pvp-peace-countdown span {
+    max-width: 108px !important;
+    font-size: 6.8px !important;
+    line-height: 1.05 !important;
+  }
+
+  .zone-pvp-dom-arena .battle-royale-begin-flash,
+  .zone-pvp-dom-arena .zone-pvp-begin-flash {
+    min-width: 220px !important;
+    padding: 9px 14px !important;
+    border-radius: 12px !important;
+    font-size: 26px !important;
+  }
+}

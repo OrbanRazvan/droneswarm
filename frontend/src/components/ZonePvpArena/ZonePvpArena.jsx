@@ -638,6 +638,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const pendingInputsRef = useRef([]);
   const remoteSnapshotBufferRef = useRef(new Map());
   const lastConfirmedHpRef = useRef(null);
+  const localBattlePrepareUntilRef = useRef(0);
+  const localBattleBeginFlashUntilRef = useRef(0);
+  const lastArenaStatusRef = useRef("connecting");
 
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
   const joystickPointerRef = useRef(null);
@@ -706,6 +709,41 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const applyState = (state) => {
       const now = performance.now();
+      const nowWall = Date.now();
+
+      // Sincronizare locala pentru PREPARE PHASE / BATTLE BEGIN.
+      // Serverul ramane autoritar, dar tinem si un fallback local ca HUD-ul sa nu dispara
+      // daca un packet ajunge fara battlePrepareRemainingMs/battlePrepareUntil.
+      if (state?.status === "playing") {
+        const serverPrepareRemaining = getBattlePrepareRemainingMs(state);
+        const serverPrepareUntil = state.battlePrepareUntil ? Number(state.battlePrepareUntil) : 0;
+
+        if (serverPrepareRemaining > 0 || serverPrepareUntil > nowWall) {
+          localBattlePrepareUntilRef.current = serverPrepareUntil > nowWall
+            ? serverPrepareUntil
+            : nowWall + serverPrepareRemaining;
+
+          localBattleBeginFlashUntilRef.current = state.battleBeginFlashUntil
+            ? Number(state.battleBeginFlashUntil)
+            : localBattlePrepareUntilRef.current + 1800;
+        } else if (state.matchStartedAt) {
+          const localPrepareUntil = Number(state.matchStartedAt) + BATTLE_PREPARE_DURATION;
+          if (localPrepareUntil > nowWall) {
+            localBattlePrepareUntilRef.current = Math.max(localBattlePrepareUntilRef.current || 0, localPrepareUntil);
+            localBattleBeginFlashUntilRef.current = Math.max(localBattleBeginFlashUntilRef.current || 0, localPrepareUntil + 1800);
+          }
+        } else if (lastArenaStatusRef.current !== "playing" && !localBattlePrepareUntilRef.current) {
+          localBattlePrepareUntilRef.current = nowWall + BATTLE_PREPARE_DURATION;
+          localBattleBeginFlashUntilRef.current = localBattlePrepareUntilRef.current + 1800;
+        }
+      } else if (state?.status === "waiting" || state?.status === "countdown") {
+        localBattlePrepareUntilRef.current = 0;
+        localBattleBeginFlashUntilRef.current = 0;
+      }
+
+      if (state?.status) {
+        lastArenaStatusRef.current = state.status;
+      }
 
       cleanupHiddenCollected(hiddenOrbIdsRef.current, now);
       cleanupHiddenCollected(hiddenEnergyIdsRef.current, now);
@@ -1647,10 +1685,15 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const winnerName = hudData.winnerName || renderData.winnerName;
   const coreDropCountdown = hudData.coreDropCountdown || renderData.coreDropCountdown;
   const battlePrepareSource = hudData.status ? hudData : renderData;
-  const battlePrepareRemainingMs = getBattlePrepareRemainingMs(battlePrepareSource);
+  const serverBattlePrepareRemainingMs = getBattlePrepareRemainingMs(battlePrepareSource);
+  const localBattlePrepareRemainingMs = Math.max(0, (localBattlePrepareUntilRef.current || 0) - Date.now());
+  const battlePrepareRemainingMs = Math.max(serverBattlePrepareRemainingMs, localBattlePrepareRemainingMs);
   const isBattlePrepare = status === "playing" && !isFinished && battlePrepareRemainingMs > 0;
   const battlePrepareSeconds = Math.max(0, Math.ceil(battlePrepareRemainingMs / 1000));
-  const showBattleBeginFlash = !isMatchmaking && !isFinished && getBattleBeginFlashActive(battlePrepareSource);
+  const showBattleBeginFlash = !isMatchmaking && !isFinished && !isBattlePrepare && (
+    getBattleBeginFlashActive(battlePrepareSource) ||
+    ((localBattleBeginFlashUntilRef.current || 0) > Date.now())
+  );
 
   // IMPORTANT: cand meciul se termina (status === "finished"), nu mai
   // asteptam un click manual pe "EXIT TO MENU" - scoatem automat jucatorul
@@ -1837,7 +1880,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       {isBattlePrepare && (
         <div className="battle-royale-peace-countdown zone-pvp-peace-countdown">
-          <strong>PREPARE PHASE <b>{battlePrepareSeconds}s</b></strong>
+          <strong>PREPARE PHASE</strong>
+          <b>{battlePrepareSeconds}s</b>
           <span>Attack, shield and collision damage are locked.</span>
         </div>
       )}
