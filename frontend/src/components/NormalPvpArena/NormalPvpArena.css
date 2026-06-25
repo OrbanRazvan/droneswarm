@@ -1760,10 +1760,10 @@
 
     /* MODIFICA MANUAL AICI daca mai vrei ajustari:
        valoare mai mare = elementul urca mai sus */
-    --npvp-joystick-bottom: calc(var(--npvp-safe-bottom) + clamp(150px, 18vh, 220px));
+    --npvp-joystick-bottom: calc(var(--npvp-safe-bottom) + clamp(150px, 18vh, 350px));
     --npvp-buttons-bottom: calc(var(--npvp-safe-bottom) + clamp(335px, 39vh, 440px));
-    --npvp-minimap-bottom: calc(var(--npvp-safe-bottom) + clamp(70px, 9vh, 125px));
-    --npvp-exit-bottom: calc(var(--npvp-safe-bottom) + clamp(44px, 5vh, 76px));
+    --npvp-minimap-bottom: calc(var(--npvp-safe-bottom) + clamp(70px, 9vh, 250px));
+    --npvp-exit-bottom: calc(var(--npvp-safe-bottom) + clamp(44px, 5vh, 150px));
   }
 
   .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-controls,
@@ -1867,10 +1867,10 @@
 @media (max-width: 430px) and (orientation: portrait) {
   .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait,
   .pvp-dom-arena.is-mobile-device.is-mobile-portrait {
-    --npvp-joystick-bottom: calc(var(--npvp-safe-bottom) + clamp(145px, 17vh, 205px));
+    --npvp-joystick-bottom: calc(var(--npvp-safe-bottom) + clamp(145px, 17vh, 2350px));
     --npvp-buttons-bottom: calc(var(--npvp-safe-bottom) + clamp(320px, 37vh, 405px));
-    --npvp-minimap-bottom: calc(var(--npvp-safe-bottom) + clamp(68px, 8vh, 112px));
-    --npvp-exit-bottom: calc(var(--npvp-safe-bottom) + clamp(40px, 4.5vh, 66px));
+    --npvp-minimap-bottom: calc(var(--npvp-safe-bottom) + clamp(68px, 8vh, 250px));
+    --npvp-exit-bottom: calc(var(--npvp-safe-bottom) + clamp(40px, 4.5vh, 150px));
   }
 
   .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick,
