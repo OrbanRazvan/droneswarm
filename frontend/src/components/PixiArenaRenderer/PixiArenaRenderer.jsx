@@ -74,264 +74,63 @@ const MOBILE_PERF_PROFILES = {
 // ---------------------------------------------------------------------------
 
 function getDeviceProfile() {
-  if (typeof window === "undefined" || typeof navigator === "undefined") {
-    return {
-      isMobile: false,
-      isPhonePortrait: false,
-      isLowEndMobile: false,
-      isVeryLowEndMobile: false,
-      isWeakDesktop: false,
-      tier: MOBILE_PERF_PROFILES.HIGH,
-      dpr: 1,
-      resolution: 1,
-    };
-  }
-
-  const ua = navigator.userAgent || "";
-  const isPhoneUa = /Android.*Mobile|iPhone|iPod|IEMobile|Opera Mini/i.test(ua);
-  const isHuaweiLike = /Huawei|HONOR|HUAWEI|VOG-|ANA-|ELS-|LYA-|MAR-|PRA-|CLT-|ANE-|FIG-/i.test(ua);
-  const hasTouch = navigator.maxTouchPoints > 0 || "ontouchstart" in window;
-  const shortSide = Math.min(window.innerWidth, window.innerHeight);
-  const longSide = Math.max(window.innerWidth, window.innerHeight);
-  const isMobile = Boolean(isPhoneUa && hasTouch && shortSide <= 980 && longSide <= 2800);
-  const isPhonePortrait = Boolean(isMobile && window.innerHeight >= window.innerWidth);
-
-  const cores = Number(navigator.hardwareConcurrency || 4);
-  const dpr = Math.max(1, Number(window.devicePixelRatio || 1));
-
-  // navigator.deviceMemory nu exista in Safari/Firefox (desktop sau mobil) -
-  // in acel caz reportedMemory ramane null, ca sa NU presupunem fals ca un
-  // device e slab doar pentru ca browserul respectiv nu raporteaza memoria.
-  // Doar pe Chrome/Edge (unde API-ul exista) folosim efectiv valoarea.
-  const reportedMemory = typeof navigator.deviceMemory === "number" ? navigator.deviceMemory : null;
-  const memory = reportedMemory ?? 4;
-
-  const isLowEndMobile = Boolean(
-    isMobile &&
-      (isHuaweiLike || cores <= 4 || memory <= 4 || dpr >= 3)
-  );
-
-  // Foarte slab: device vechi cu putine nuclee SI memorie mica, sau orice
-  // device Huawei-like detectat (acolo GPU-ul e aproape sigur mult mai slab
-  // la WebGL alpha blending, indiferent de cores/memory raportate).
-  const isVeryLowEndMobile = Boolean(
-    isMobile &&
-      (isHuaweiLike || (cores <= 4 && memory <= 3))
-  );
-
-  // ---------------------------------------------------------------------
-  // IMPORTANT: laptop/PC slab (NU mobil) - acelasi criteriu pe care l-am
-  // aplicat in BattleRoyale.jsx pentru bucla de AI: RAM <= 8GB SAU <= 4
-  // nuclee CPU (oricare conditie e suficienta). Inainte de aceasta adaugare,
-  // niciun desktop/laptop nu era marcat vreodata ca "slab" aici (toate
-  // verificarile de mai sus erau conditionate de isMobile), motiv pentru
-  // care dezactivarea animatiilor de rotire nu se aplica niciodata pe PC -
-  // doar pe telefon.
-  // ---------------------------------------------------------------------
-  const isWeakDesktop = Boolean(
-    !isMobile &&
-      (cores <= 4 || (reportedMemory !== null && reportedMemory <= 8))
-  );
-
-  const tier = !isMobile
-    ? (isWeakDesktop ? MOBILE_PERF_PROFILES.MID : MOBILE_PERF_PROFILES.HIGH)
-    : isLowEndMobile
-      ? MOBILE_PERF_PROFILES.LOW
-      : MOBILE_PERF_PROFILES.MID;
-
-  const resolution = !isMobile
-    ? Math.min(dpr, 2)
-    : isVeryLowEndMobile
-      ? 1 // pe device foarte slab, randam la rezolutie nativa CSS, fara supersampling
-      : isLowEndMobile
-        ? Math.min(dpr, 1.25)
-        : Math.min(dpr, 1.5);
-
+  // =========================================================
+  // FORCE LOW QUALITY GLOBAL
+  // =========================================================
+  // Pentru multiplayer vrem aceeasi randare minima pe orice device:
+  // telefon, laptop vechi, desktop, tableta. Nu mai incercam sa detectam
+  // device-ul si nu mai urcam automat calitatea. Totul ramane pe minim.
   return {
-    isMobile,
-    isPhonePortrait,
-    isLowEndMobile,
-    isVeryLowEndMobile,
-    isWeakDesktop,
-    tier,
-    dpr,
-    resolution,
+    isMobile: typeof window !== "undefined" && typeof navigator !== "undefined"
+      ? /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent || "")
+      : false,
+    isPhonePortrait: typeof window !== "undefined" ? window.innerHeight >= window.innerWidth : false,
+    isLowEndMobile: true,
+    isVeryLowEndMobile: true,
+    isWeakDesktop: true,
+    tier: MOBILE_PERF_PROFILES.LOW,
+    dpr: 1,
+    // 0.75 = canvas mai usor de randat, apoi scalat la dimensiunea ecranului.
+    // Grafica e mai simpla/blurry, dar FPS-ul e mult mai stabil.
+    resolution: 0.75,
   };
 }
 
-function getQualityBudget(device, dynamicQuality = 2) {
-  const tier = device?.tier || MOBILE_PERF_PROFILES.HIGH;
-  const q = Math.max(0, Math.min(3, dynamicQuality));
-  // Pe device foarte slab, dezactivam complet glow-urile (cel mai scump efect
-  // vizual per obiect pe GPU-uri vechi) si fortam drawLiteItems pentru toate
-  // tipurile de obiecte, nu doar orbs/energy.
-  const disableGlow = Boolean(device?.isVeryLowEndMobile);
+function getQualityBudget(device, dynamicQuality = 0) {
+  // =========================================================
+  // FORCE LOW QUALITY GLOBAL BUDGET
+  // =========================================================
+  // Buget unic pentru toate device-urile. Scop: multiplayer cat mai fluent,
+  // nu grafica spectaculoasa.
+  return {
+    quality: 0,
+    margin: 140,
 
-  // ---------------------------------------------------------------------
-  // IMPORTANT: pe laptop/PC slab (isWeakDesktop), problema raportata nu e
-  // costul global de a avea 70 de boti pe harta - e costul de a randa la
-  // CALITATE COMPLETA mai multi boti deodata cand se aglomereaza langa
-  // jucator (lupte/coliziuni in grup). Pe tier HIGH normal, pana la 24 de
-  // boti pot fi randati la calitate completa simultan (cu glow, rotoare,
-  // mini-drone orbitale) - prea mult pentru un CPU/GPU slab cand se intampla
-  // efectiv. Reducem agresiv DOAR limita de boti/players la calitate maxima,
-  // fara sa retrogradam tot tier-ul la LOW (care ar afecta si orbs/energy/
-  // cores, lucruri pe care utilizatorul nu vrea reduse).
-  // ---------------------------------------------------------------------
-  if (device?.isWeakDesktop && tier !== MOBILE_PERF_PROFILES.LOW) {
-    const baseBudget = q <= 1
-      ? {
-          quality: 1,
-          margin: 320,
-          orbs: 260,
-          energy: 60,
-          cores: 10,
-          players: 24,
-          bots: 12,
-          simpleBots: 20,
-          projectiles: 80,
-          simpleProjectiles: 35,
-          botQuality: 1,
-          playerQuality: 2,
-          drawLiteItems: false,
-          disableGlow: false,
-        }
-      : {
-          quality: 2,
-          margin: 420,
-          orbs: 420,
-          energy: 100,
-          cores: 16,
-          players: 48,
-          bots: 24,
-          simpleBots: 45,
-          projectiles: 130,
-          simpleProjectiles: 70,
-          botQuality: 1,
-          playerQuality: 2,
-          drawLiteItems: false,
-          disableGlow: false,
-        };
+    // Iteme randate per frame. Tine cifrele mici pentru CPU/GPU slab.
+    orbs: 70,
+    energy: 12,
+    cores: 3,
 
-    return {
-      ...baseBudget,
-      // Limita boti/players la calitate completa: 7 in loc de 12-24.
-      // simpleBots (randati ca puncte simple, fara rotoare/glow) preiau
-      // restul - botii rimasi vizibili dar nu mai costa la fel de mult.
-      bots: 7,
-      players: 7,
-      simpleBots: Math.max(baseBudget.simpleBots, 38),
-      // Pe device slab, botii apropiati (deja la quality 1, nu 2) - reducem
-      // si raza la care un bot e considerat "near" implicit prin botQuality.
-      botQuality: q <= 1 ? 0 : 1,
-    };
-  }
+    // Jucatori/drone complexe aproape dezactivate.
+    // Playerul tau ramane vizibil, dar ceilalti sunt desenati cat mai simplu.
+    players: 1,
+    bots: 0,
+    simpleBots: 90,
 
-  if (tier === MOBILE_PERF_PROFILES.LOW) {
-    return q <= 0
-      ? {
-          quality: 0,
-          margin: 170,
-          orbs: 90,
-          energy: 20,
-          cores: 4,
-          players: 4,
-          bots: 3,
-          simpleBots: 0,
-          projectiles: 14,
-          simpleProjectiles: 5,
-          botQuality: 0,
-          playerQuality: disableGlow ? 0 : 1,
-          drawLiteItems: true,
-          disableGlow,
-        }
-      : {
-          quality: 0,
-          margin: 200,
-          orbs: 120,
-          energy: 22,
-          cores: 5,
-          players: 5,
-          bots: 4,
-          simpleBots: 0,
-          projectiles: 22,
-          simpleProjectiles: 8,
-          botQuality: 0,
-          playerQuality: disableGlow ? 0 : 1,
-          drawLiteItems: true,
-          disableGlow,
-        };
-  }
+    // Proiectile limitate agresiv.
+    projectiles: 10,
+    simpleProjectiles: 12,
 
-  if (tier === MOBILE_PERF_PROFILES.MID) {
-    return q <= 1
-      ? {
-          quality: 1,
-          margin: 260,
-          orbs: 180,
-          energy: 34,
-          cores: 6,
-          players: 8,
-          bots: 7,
-          simpleBots: 0,
-          projectiles: 40,
-          simpleProjectiles: 16,
-          botQuality: 0,
-          playerQuality: 2,
-          drawLiteItems: false,
-          disableGlow: false,
-        }
-      : {
-          quality: 1,
-          margin: 320,
-          orbs: 250,
-          energy: 52,
-          cores: 8,
-          players: 12,
-          bots: 10,
-          simpleBots: 0,
-          projectiles: 58,
-          simpleProjectiles: 24,
-          botQuality: 1,
-          playerQuality: 2,
-          drawLiteItems: false,
-          disableGlow: false,
-        };
-  }
+    // Calitate minima pentru drone.
+    botQuality: 0,
+    playerQuality: 0,
 
-  return q <= 1
-    ? {
-        quality: 1,
-        margin: 320,
-        orbs: 260,
-        energy: 60,
-        cores: 10,
-        players: 24,
-        bots: 12,
-        simpleBots: 20,
-        projectiles: 80,
-        simpleProjectiles: 35,
-        botQuality: 1,
-        playerQuality: 2,
-        drawLiteItems: false,
-        disableGlow: false,
-      }
-    : {
-        quality: 2,
-        margin: 420,
-        orbs: 420,
-        energy: 100,
-        cores: 16,
-        players: 48,
-        bots: 24,
-        simpleBots: 45,
-        projectiles: 130,
-        simpleProjectiles: 70,
-        botQuality: 1,
-        playerQuality: 2,
-        drawLiteItems: false,
-        disableGlow: false,
-      };
+    // Desen simplificat pentru orbs/energy/core-uri.
+    drawLiteItems: true,
+
+    // Fara glow/umbre scumpe.
+    disableGlow: true,
+  };
 }
 
 function drawOrbLite(g, orb, cameraX, cameraY, scale, vw, vh) {
@@ -361,6 +160,53 @@ function drawEnergyLite(g, cell, cameraX, cameraY, scale, vw, vh) {
     color: 0x67ffb1,
     alpha: 0.92,
   });
+}
+
+
+// =========================================================
+// ULTRA LOW QUALITY WORLD DRAWING
+// =========================================================
+// Aceste functii deseneaza itemele in coordonate de lume, nu in coordonate de ecran.
+// Avantaj: mutam containerul static cu camera in fiecare frame, dar redesenam orb/energy/core
+// mult mai rar. Asta reduce masiv g.clear() + sute de primitive refacute la fiecare frame.
+function drawOrbLiteWorld(g, orb) {
+  if (!orb) return;
+  const color = ORB_COLORS[orb.color] || ORB_COLORS.cyan;
+  g.circle(orb.x, orb.y, 10).fill({ color, alpha: 0.9 });
+  g.circle(orb.x - 2.5, orb.y - 2.5, 2.8).fill({ color: 0xffffff, alpha: 0.35 });
+}
+
+function drawEnergyLiteWorld(g, cell) {
+  if (!cell) return;
+  g.roundRect(cell.x - 8, cell.y - 12, 16, 24, 4).fill({ color: 0x06351f, alpha: 0.9 });
+  g.roundRect(cell.x - 5, cell.y - 8, 10, 16, 3).fill({ color: 0x67ffb1, alpha: 0.9 });
+}
+
+function drawCoreLiteWorld(g, core, coreColorMap = {}) {
+  if (!core) return;
+  const color = hex(core.color || coreColorMap[core.type] || "#ffffff");
+  g.circle(core.x, core.y, 18).fill({ color, alpha: 0.88 });
+  g.circle(core.x, core.y, 25).stroke({ color, width: 3, alpha: 0.38 });
+}
+
+function makeStaticSignature(bounds, scale, orbs = [], energyCells = [], cores = []) {
+  const tile = 700;
+  return [
+    Math.floor(bounds.left / tile),
+    Math.floor(bounds.right / tile),
+    Math.floor(bounds.top / tile),
+    Math.floor(bounds.bottom / tile),
+    Math.round((scale || 1) * 100) / 100,
+    orbs.length,
+    energyCells.length,
+    cores.length,
+    orbs[0]?.id || "",
+    orbs[orbs.length - 1]?.id || "",
+    energyCells[0]?.id || "",
+    energyCells[energyCells.length - 1]?.id || "",
+    cores[0]?.id || "",
+    cores[cores.length - 1]?.id || "",
+  ].join("|");
 }
 
 function normalizeSkin(skin) {
@@ -1091,10 +937,26 @@ function PixiArenaRenderer({
   // schimbarea switch-ului in timpul unui meci nu se aplica live, ci la
   // urmatoarea intrare in arena (remount). Simplu si predictibil, fara
   // bucle de redetectie sau resize-uri repetate la runtime.
-  forceLowQuality = false,
+  forceLowQuality = true,
 }) {
   const hostRef = useRef(null);
   const appRef = useRef(null);
+
+  // Layer pooling: nu mai avem un singur Graphics sters si redesenat complet.
+  // staticLayer = orbs/energy/cores in coordonate de lume, redesenate rar;
+  // dynamicGraphics = playeri/boti, redesenati in fiecare frame;
+  // projectileGraphics = proiectile, separat pentru clear ieftin si draw calls mai simple.
+  const staticLayerRef = useRef(null);
+  const staticGraphicsRef = useRef(null);
+  const dynamicGraphicsRef = useRef(null);
+  const projectileGraphicsRef = useRef(null);
+  const renderCacheRef = useRef({
+    lastStaticSignature: "",
+    lastStaticDrawAt: 0,
+    lastFrameDrawAt: 0,
+  });
+
+  // compatibilitate cu cleanup-ul vechi
   const graphicsRef = useRef(null);
   const latestRef = useRef(null);
   const performanceRef = useRef({
@@ -1103,7 +965,7 @@ function PixiArenaRenderer({
     frames: 0,
     fpsStartedAt: typeof performance !== "undefined" ? performance.now() : 0,
     fps: 60,
-    dynamicQuality: 2,
+    dynamicQuality: 0,
     lastQualityChangeAt: 0,
     device: getDeviceProfile(),
   });
@@ -1154,7 +1016,9 @@ function PixiArenaRenderer({
       // (1, fara supersampling), fara antialias, calitate dinamica 0 de la
       // pornire.
       const effectiveResolution = forceLowQuality ? 1 : device.resolution;
-      const effectiveAntialias = forceLowQuality ? false : !device.isVeryLowEndMobile;
+      // Antialias este scump pe laptopurile vechi cand ai multi boti/proiectile.
+      // Il dezactivam si pe weak desktop, nu doar pe telefoane foarte slabe.
+      const effectiveAntialias = forceLowQuality ? false : !(device.isVeryLowEndMobile || device.isWeakDesktop);
 
       // Pe device foarte slab SAU cu Low Quality activat manual, incepem direct
       // cu calitate dinamica redusa, in loc sa asteptam ca FPS-ul sa scada o
@@ -1162,6 +1026,9 @@ function PixiArenaRenderer({
       // de "sacaiala" pana se auto-ajusteaza.
       if (device.isVeryLowEndMobile || forceLowQuality) {
         performanceRef.current.dynamicQuality = 0;
+      } else if (device.isWeakDesktop || device.isLowEndMobile) {
+        // Pornim direct mai jos pe laptopuri vechi, ca sa nu avem primele secunde sacadate.
+        performanceRef.current.dynamicQuality = 1;
       }
 
       const config = {
@@ -1173,7 +1040,7 @@ function PixiArenaRenderer({
         // Low Quality activat manual il dezactivam complet; marginile sunt usor
         // mai aspre, dar framerate-ul devine mult mai stabil.
         antialias: effectiveAntialias,
-        resolution: Math.max(1, effectiveResolution),
+        resolution: Math.max(0.5, effectiveResolution),
         autoDensity: true,
         powerPreference: "high-performance",
         preference: "webgl",
@@ -1193,9 +1060,33 @@ function PixiArenaRenderer({
       appRef.current = app;
       hostRef.current.appendChild(app.canvas || app.view);
 
-      const graphics = new PIXI.Graphics();
-      graphicsRef.current = graphics;
-      app.stage.addChild(graphics);
+      app.stage.eventMode = "none";
+      app.stage.interactiveChildren = false;
+
+      const staticLayer = new PIXI.Container();
+      staticLayer.eventMode = "none";
+      staticLayer.interactiveChildren = false;
+
+      const staticGraphics = new PIXI.Graphics();
+      staticGraphics.eventMode = "none";
+      staticLayer.addChild(staticGraphics);
+
+      const projectileGraphics = new PIXI.Graphics();
+      projectileGraphics.eventMode = "none";
+
+      const dynamicGraphics = new PIXI.Graphics();
+      dynamicGraphics.eventMode = "none";
+
+      staticLayerRef.current = staticLayer;
+      staticGraphicsRef.current = staticGraphics;
+      projectileGraphicsRef.current = projectileGraphics;
+      dynamicGraphicsRef.current = dynamicGraphics;
+      graphicsRef.current = dynamicGraphics;
+
+      // Ordine: iteme jos, proiectile la mijloc, playeri sus.
+      app.stage.addChild(staticLayer);
+      app.stage.addChild(projectileGraphics);
+      app.stage.addChild(dynamicGraphics);
 
       const resize = () => {
         const width = hostRef.current?.clientWidth || window.innerWidth;
@@ -1206,7 +1097,7 @@ function PixiArenaRenderer({
         const targetResolution = forceLowQuality ? 1 : nextDevice.resolution;
 
         if (app.renderer?.resolution !== targetResolution) {
-          app.renderer.resolution = Math.max(1, targetResolution);
+          app.renderer.resolution = Math.max(0.5, targetResolution);
         }
 
         app.renderer.resize(width, height);
@@ -1222,10 +1113,13 @@ function PixiArenaRenderer({
       // exact senzatia de miscare "in trepte"/sacadata pe device-uri slabe.
 
       app.ticker.add(() => {
-        const g = graphicsRef.current;
+        const staticLayer = staticLayerRef.current;
+        const staticG = staticGraphicsRef.current;
+        const dynamicG = dynamicGraphicsRef.current;
+        const projectileG = projectileGraphicsRef.current;
         const data = liveDataRef?.current || latestRef.current;
 
-        if (!g || !data) return;
+        if (!staticLayer || !staticG || !dynamicG || !projectileG || !data) return;
 
         const {
           player: currentPlayer,
@@ -1264,22 +1158,22 @@ function PixiArenaRenderer({
           // Pe device foarte slab folosim praguri puțin mai relaxate ca sa nu
           // oscileze constant intre calitati cand framerate-ul natural al
           // device-ului e deja sub 60fps stabil.
-          const lowThreshold = device.isVeryLowEndMobile ? 22 : 47;
-          const highThreshold = device.isVeryLowEndMobile ? 27 : 57;
+          const lowThreshold = device.isVeryLowEndMobile ? 22 : device.isWeakDesktop ? 42 : 47;
+          const highThreshold = device.isVeryLowEndMobile ? 27 : device.isWeakDesktop ? 54 : 57;
 
           if (time - perf.lastQualityChangeAt > 1400) {
             if (perf.fps < lowThreshold && perf.dynamicQuality > 0) {
               perf.dynamicQuality -= 1;
               perf.lowQualityUntil = time + 1800;
               perf.lastQualityChangeAt = time;
-            } else if (perf.fps > highThreshold && perf.dynamicQuality < 3 && !device.isLowEndMobile) {
+            } else if (perf.fps > highThreshold && perf.dynamicQuality < 3 && !device.isLowEndMobile && !device.isWeakDesktop) {
               perf.dynamicQuality += 1;
               perf.lastQualityChangeAt = time;
             }
           }
         }
 
-        const slowFrameThresholdMs = device.isVeryLowEndMobile ? 46 : 24;
+        const slowFrameThresholdMs = device.isVeryLowEndMobile ? 46 : device.isWeakDesktop ? 30 : 24;
         if (app.ticker.deltaMS > slowFrameThresholdMs && time - perf.lastSlowFrameAt > 220) {
           perf.lowQualityUntil = time + 1200;
           perf.lastSlowFrameAt = time;
@@ -1290,7 +1184,7 @@ function PixiArenaRenderer({
           }
         }
 
-        const isForcedLow = Boolean(perf.forceLowQuality);
+        const isForcedLow = true;
 
         const budget = isForcedLow
           ? getQualityBudget(
@@ -1315,11 +1209,33 @@ function PixiArenaRenderer({
         );
         const viewBounds = getWorldViewBounds(cx, cy, worldScale, vw, vh, budget.margin);
 
-        g.clear();
+        // Layer static in coordonate de lume: il mutam cu camera in fiecare frame,
+        // dar il redesenam doar cand zona vizibila / itemele se schimba suficient.
+        staticLayer.position.set(cx, cy);
+        staticLayer.scale.set(worldScale || 1);
 
-        const visibleOrbs = filterVisibleItems(currentOrbs, viewBounds, 24, budget.orbs);
-        const visibleEnergyCells = filterVisibleItems(currentEnergyCells, viewBounds, 45, budget.energy);
-        const visibleCores = filterVisibleItems(currentCores, viewBounds, 85, budget.cores);
+        const staticBounds = getWorldViewBounds(cx, cy, worldScale, vw, vh, 1050);
+        const visibleOrbs = filterVisibleItems(currentOrbs, staticBounds, 24, budget.orbs);
+        const visibleEnergyCells = filterVisibleItems(currentEnergyCells, staticBounds, 45, budget.energy);
+        const visibleCores = filterVisibleItems(currentCores, staticBounds, 85, budget.cores);
+
+        const cache = renderCacheRef.current;
+        const staticSignature = makeStaticSignature(staticBounds, worldScale, visibleOrbs, visibleEnergyCells, visibleCores);
+        const shouldRedrawStatic =
+          staticSignature !== cache.lastStaticSignature ||
+          time - cache.lastStaticDrawAt > 180;
+
+        if (shouldRedrawStatic) {
+          staticG.clear();
+          visibleOrbs.forEach((orb) => drawOrbLiteWorld(staticG, orb));
+          visibleEnergyCells.forEach((cell) => drawEnergyLiteWorld(staticG, cell));
+          visibleCores.forEach((core) => drawCoreLiteWorld(staticG, core, map));
+          cache.lastStaticSignature = staticSignature;
+          cache.lastStaticDrawAt = time;
+        }
+
+        dynamicG.clear();
+        projectileG.clear();
 
         const visiblePlayers = (currentPlayers || [])
           .filter((unit) => unit?.alive !== false && unit.id !== currentPlayer?.id && isWorldVisible(unit, viewBounds, 330))
@@ -1338,34 +1254,19 @@ function PixiArenaRenderer({
         const visibleProjectiles = filterVisibleItems(currentProjectiles, viewBounds, 120, budget.projectiles);
         const visibleSimpleProjectiles = filterVisibleItems(currentSimpleProjectiles, viewBounds, 80, budget.simpleProjectiles);
 
-        if (budget.drawLiteItems) {
-          visibleOrbs.forEach((orb) => drawOrbLite(g, orb, cx, cy, worldScale, vw, vh));
-          visibleEnergyCells.forEach((cell) => drawEnergyLite(g, cell, cx, cy, worldScale, vw, vh));
-        } else {
-          visibleOrbs.forEach((orb) => drawOrb(g, orb, cx, cy, worldScale, vw, vh, disableGlow));
-          visibleEnergyCells.forEach((cell) => drawEnergy(g, cell, cx, cy, worldScale, vw, vh, disableGlow));
-        }
-
-        visibleCores.forEach((core) => drawCore(g, core, cx, cy, worldScale, map, time, vw, vh, disableGlow));
-
         visibleSimpleBots.forEach((bot) => {
           const p = screen(bot.x, bot.y, cx, cy, worldScale);
           const skin = normalizeSkin(bot.skin);
           const color = hex((SKIN_THEMES[skin] || SKIN_THEMES.cyan)[0]);
 
-          g.circle(p.x, p.y, Math.max(8, 13 * worldScale)).fill({
+          dynamicG.circle(p.x, p.y, Math.max(7, 11 * worldScale)).fill({
             color,
-            alpha: 0.84,
-          });
-
-          g.circle(p.x - 2 * worldScale, p.y - 2 * worldScale, Math.max(2, 4 * worldScale)).fill({
-            color: 0xffffff,
-            alpha: 0.5,
+            alpha: 0.82,
           });
         });
 
         if (currentPlayer && currentPlayer.alive !== false) {
-          drawDrone(g, currentPlayer, cx, cy, worldScale, time, {
+          drawDrone(dynamicG, currentPlayer, cx, cy, worldScale, time, {
             size: STANDARD_DRONE_SIZE,
             isPlayer: true,
             isNear: true,
@@ -1376,7 +1277,7 @@ function PixiArenaRenderer({
         }
 
         visiblePlayers.forEach((unit) => {
-          drawDrone(g, unit, cx, cy, worldScale, time, {
+          drawDrone(dynamicG, unit, cx, cy, worldScale, time, {
             size: STANDARD_DRONE_SIZE,
             isPlayer: false,
             isNear: true,
@@ -1391,7 +1292,7 @@ function PixiArenaRenderer({
           const dy = (unit.y || 0) - (currentPlayer?.y || 0);
           const isNear = dx * dx + dy * dy < 900 * 900;
 
-          drawDrone(g, unit, cx, cy, worldScale, time, {
+          drawDrone(dynamicG, unit, cx, cy, worldScale, time, {
             size: STANDARD_DRONE_SIZE,
             isPlayer: false,
             isNear,
@@ -1402,11 +1303,11 @@ function PixiArenaRenderer({
         });
 
         visibleProjectiles.forEach((projectile) => {
-          drawAttackDrone(g, projectile, cx, cy, worldScale, time, vw, vh, true, disableGlow);
+          drawAttackDrone(projectileG, projectile, cx, cy, worldScale, time, vw, vh, false, disableGlow);
         });
 
         visibleSimpleProjectiles.forEach((projectile) => {
-          drawAttackDrone(g, projectile, cx, cy, worldScale, time, vw, vh, false, disableGlow);
+          drawAttackDrone(projectileG, projectile, cx, cy, worldScale, time, vw, vh, false, disableGlow);
         });
       });
 
@@ -1432,6 +1333,10 @@ function PixiArenaRenderer({
 
       appRef.current = null;
       graphicsRef.current = null;
+      staticLayerRef.current = null;
+      staticGraphicsRef.current = null;
+      dynamicGraphicsRef.current = null;
+      projectileGraphicsRef.current = null;
 
       if (hostRef.current) {
         hostRef.current.innerHTML = "";

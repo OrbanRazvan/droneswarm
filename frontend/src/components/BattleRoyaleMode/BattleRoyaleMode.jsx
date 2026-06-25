@@ -8,8 +8,8 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 const COLORS = ["cyan", "green", "orange", "purple", "red", "pink"];
 
-const WORLD_WIDTH = 12000;
-const WORLD_HEIGHT = 12000;
+const WORLD_WIDTH = 15000;
+const WORLD_HEIGHT = 15000;
 const VIEW_PADDING = 120;
 
 const MAX_ORBS = 140;
@@ -2283,13 +2283,40 @@ function BattleRoyale({ user, onExitToMenu }) {
 
   const showMobileControls = player.alive && !gameOver && isMobileLike;
 
-  const mobileWorldScale = 1;
+  // CAMERA / ZOOM
+  // Desktop: 0.72 = vezi harta mai de sus, ca o camera mai indepartata.
+  // Daca vrei si mai de sus, scade la 0.65.
+  // Daca vrei mai aproape, creste la 0.82 - 0.9.
+  // Mobile ramane 1, ca sa nu stricam controalele si lizibilitatea pe telefon.
+  const DESKTOP_CAMERA_SCALE = 0.72;
+  const MOBILE_CAMERA_SCALE = 1;
 
-  const mobileViewDistance = isMobileLandscape ? 560 : VIEW_DISTANCE;
-  const mobileBotRenderDistance = isMobileLandscape ? 900 : BOT_RENDER_DISTANCE;
-  const mobileBotSimpleDistance = isMobileLandscape ? 1350 : BOT_SIMPLE_RENDER_DISTANCE;
-  const mobileProjectileDistance = isMobileLandscape ? 920 : PROJECTILE_RENDER_DISTANCE;
-  const mobileFullBotLimit = isMobileLandscape ? 6 : MAX_FULL_RENDER_BOTS;
+  const mobileWorldScale = isMobileLike ? MOBILE_CAMERA_SCALE : DESKTOP_CAMERA_SCALE;
+
+  // Cand camera e mai sus pe desktop, marim si distantele de filtrare/randare.
+  // Altfel vezi zoom-out, dar obiectele aflate spre marginea ecranului pot lipsi.
+  const desktopCameraDistanceMultiplier = isMobileLike ? 1 : 1 / DESKTOP_CAMERA_SCALE;
+
+  const mobileViewDistance = isMobileLandscape
+    ? 560
+    : Math.ceil(VIEW_DISTANCE * desktopCameraDistanceMultiplier);
+
+  const mobileBotRenderDistance = isMobileLandscape
+    ? 900
+    : Math.ceil(BOT_RENDER_DISTANCE * desktopCameraDistanceMultiplier);
+
+  const mobileBotSimpleDistance = isMobileLandscape
+    ? 1350
+    : Math.ceil(BOT_SIMPLE_RENDER_DISTANCE * desktopCameraDistanceMultiplier);
+
+  const mobileProjectileDistance = isMobileLandscape
+    ? 920
+    : Math.ceil(PROJECTILE_RENDER_DISTANCE * desktopCameraDistanceMultiplier);
+
+  const mobileFullBotLimit = isMobileLandscape
+    ? 6
+    : Math.max(MAX_FULL_RENDER_BOTS, 22);
+
   const mobileFullProjectileLimit = isMobileLandscape ? 7 : MAX_FULL_PROJECTILES;
   const mobileSimpleProjectileLimit = isMobileLandscape ? 28 : MAX_SIMPLE_PROJECTILES;
 

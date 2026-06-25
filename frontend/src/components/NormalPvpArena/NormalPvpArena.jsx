@@ -506,7 +506,7 @@ function FlyingAttackDrone({ projectile }) {
   );
 }
 
-function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
+function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "low" }) {
   const socketRef = useRef(null);
   const keysRef = useRef({});
   const mouseRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
@@ -1567,9 +1567,9 @@ worldRef.current = {
         viewportHeight={viewport.height}
         coreTypes={CORE_TYPES}
         otherPlayerSize={112}
-        otherPlayerQuality={2}
+        otherPlayerQuality={0}
         liveDataRef={pixiLiveRef}
-        forceLowQuality={graphicsQuality === "low"}
+        forceLowQuality={true}
       />
 
       {you && !isDead && (
