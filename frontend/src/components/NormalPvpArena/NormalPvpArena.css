@@ -2123,23 +2123,22 @@
   --pvp-joy-size: clamp(178px, 25vw, 230px);
   --pvp-joy-knob: clamp(72px, 10vw, 96px);
   --pvp-joy-left: max(18px, calc(env(safe-area-inset-left, 0px) + 16px));
-  --pvp-joy-bottom: calc(var(--pvp-safe-bottom) + clamp(68px, 8vh, 118px));
+  --pvp-joy-bottom: calc(var(--pvp-safe-bottom) + 160px);
 
   --pvp-map-width: clamp(250px, 33vw, 320px);
   --pvp-map-height: clamp(150px, 19vw, 205px);
   --pvp-map-right: max(12px, calc(env(safe-area-inset-right, 0px) + 10px));
-  --pvp-map-bottom: calc(var(--pvp-safe-bottom) + clamp(18px, 2.2vh, 42px));
-
+  --pvp-map-bottom: calc(var(--pvp-safe-bottom) + 90px);
   --pvp-buttons-right: max(18px, calc(env(safe-area-inset-right, 0px) + 14px));
   --pvp-buttons-bottom: calc(
-    var(--pvp-map-bottom) + var(--pvp-map-height) + clamp(22px, 3.2vh, 54px)
+  --pvp-buttons-bottom: calc(var(--pvp-safe-bottom) + 360px);
   );
   --pvp-buttons-gap: clamp(10px, 1.8vw, 18px);
   --pvp-shield-size: clamp(82px, 11vw, 112px);
   --pvp-attack-size: clamp(108px, 14vw, 146px);
 
   --pvp-exit-left: max(16px, calc(env(safe-area-inset-left, 0px) + 12px));
-  --pvp-exit-bottom: calc(var(--pvp-safe-bottom) + 16px);
+  --pvp-exit-bottom: calc(var(--pvp-safe-bottom) + 45px);
 }
 
 .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-controls {
