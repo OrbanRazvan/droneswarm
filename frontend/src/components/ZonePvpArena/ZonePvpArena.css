@@ -959,12 +959,12 @@
 
   .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick {
     left: max(18px, calc(env(safe-area-inset-left) + 16px)) !important;
-    bottom: max(112px, calc(env(safe-area-inset-bottom) + 102px)) !important;
+    bottom: max(160px, calc(env(safe-area-inset-bottom) + 152px)) !important;
   }
 
   .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-buttons {
     right: max(16px, calc(env(safe-area-inset-right) + 14px)) !important;
-    bottom: max(112px, calc(env(safe-area-inset-bottom) + 102px)) !important;
+    bottom: 250px !important;
   }
 }
 
@@ -1171,18 +1171,18 @@
   .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .minimap,
   .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait [class*="minimap"] {
     right: 12px !important;
-    bottom: max(146px, calc(env(safe-area-inset-bottom) + 138px)) !important;
+    bottom: max(155px, calc(env(safe-area-inset-bottom) + 138px)) !important;
     transform: none !important;
   }
 
   .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick {
     left: max(18px, calc(env(safe-area-inset-left) + 16px)) !important;
-    bottom: max(112px, calc(env(safe-area-inset-bottom) + 104px)) !important;
+    bottom: max(160px, calc(env(safe-area-inset-bottom) + 152px)) !important;
   }
 
   .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-buttons {
     right: max(18px, calc(env(safe-area-inset-right) + 16px)) !important;
-    bottom: max(156px, calc(env(safe-area-inset-bottom) + 146px)) !important;
+    bottom: 300px !important;
   }
 
   .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-exit-btn,
