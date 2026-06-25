@@ -1842,6 +1842,9 @@ let GameGateway = class GameGateway {
         const countdown = room.status === 'countdown' && room.countdownStartedAt
             ? Math.max(1, Math.ceil((BR_ONLINE_START_COUNTDOWN_MS - (now - room.countdownStartedAt)) / 1000))
             : null;
+        const battlePrepareRemainingMs = room.battlePrepareUntil
+            ? Math.max(0, room.battlePrepareUntil - now)
+            : 0;
         const secondsUntilCoreDrop = room.cores.length === 0 && room.nextCoreWaveAt
             ? Math.ceil(Math.max(0, room.nextCoreWaveAt - now) / 1000)
             : null;
