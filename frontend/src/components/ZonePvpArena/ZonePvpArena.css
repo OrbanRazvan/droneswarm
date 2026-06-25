@@ -1188,7 +1188,7 @@
   .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-exit-btn,
   .zone-pvp-dom-arena.is-mobile-device.is-mobile-portrait .battle-royale-exit-btn {
     left: 10px !important;
-    bottom: 100px !important;
+    bottom: 180px !important;
     z-index: 10005 !important;
   }
 }
