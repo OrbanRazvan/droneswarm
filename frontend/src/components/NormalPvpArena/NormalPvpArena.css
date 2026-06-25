@@ -131,7 +131,7 @@
   position: fixed;
   z-index: 90;
   left: 18px;
-  bottom: 18px;
+  bottom: 50px;
   padding: 11px 16px;
   border-radius: 12px;
   border: 1px solid rgba(0, 234, 255, 0.35);
@@ -965,7 +965,7 @@
 
 .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick {
   left: max(20px, env(safe-area-inset-left)) !important;
-  bottom: max(118px, calc(env(safe-area-inset-bottom) + 108px)) !important;
+  bottom: max(180px, calc(env(safe-area-inset-bottom) + 170px)) !important;
   width: 260px !important;
   height: 260px !important;
   z-index: 160 !important;
@@ -1003,7 +1003,7 @@
 
   .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-buttons {
     right: 12px !important;
-    bottom: max(300px, calc(env(safe-area-inset-bottom) + 292px)) !important;
+    bottom: max(400px, calc(env(safe-area-inset-bottom) + 370px)) !important;
     gap: 8px !important;
   }
 
@@ -1746,4 +1746,184 @@
   filter: none !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+/* =========================================================
+   FINAL NORMAL PVP MOBILE CONTROLS LIFT
+   Lipit la FINAL. Ridica joystick, Attack/Shield, minimap si Exit.
+   Modifica doar mobile portrait, nu afecteaza desktop/landscape.
+========================================================= */
+@media (orientation: portrait) {
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait {
+    --npvp-safe-bottom: max(0px, env(safe-area-inset-bottom));
+
+    /* MODIFICA MANUAL AICI daca mai vrei ajustari:
+       valoare mai mare = elementul urca mai sus */
+    --npvp-joystick-bottom: calc(var(--npvp-safe-bottom) + clamp(150px, 18vh, 220px));
+    --npvp-buttons-bottom: calc(var(--npvp-safe-bottom) + clamp(335px, 39vh, 440px));
+    --npvp-minimap-bottom: calc(var(--npvp-safe-bottom) + clamp(70px, 9vh, 125px));
+    --npvp-exit-bottom: calc(var(--npvp-safe-bottom) + clamp(44px, 5vh, 76px));
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-controls,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-controls {
+    display: block !important;
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 10050 !important;
+    pointer-events: none !important;
+    background: transparent !important;
+    filter: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  /* JOYSTICK - stanga jos, ridicat si complet vizibil */
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick {
+    display: block !important;
+    position: fixed !important;
+    left: max(18px, calc(env(safe-area-inset-left) + 16px)) !important;
+    bottom: var(--npvp-joystick-bottom) !important;
+    width: min(232px, 28vh) !important;
+    height: min(232px, 28vh) !important;
+    z-index: 10090 !important;
+    pointer-events: auto !important;
+    touch-action: none !important;
+    border-radius: 50% !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick-knob,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick-knob {
+    width: min(94px, 11vh) !important;
+    height: min(94px, 11vh) !important;
+    will-change: transform !important;
+  }
+
+  /* ATTACK + SHIELD - dreapta, deasupra minimap-ului */
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-buttons,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-buttons {
+    display: flex !important;
+    position: fixed !important;
+    right: max(16px, calc(env(safe-area-inset-right) + 14px)) !important;
+    bottom: var(--npvp-buttons-bottom) !important;
+    gap: min(14px, 2vw) !important;
+    align-items: center !important;
+    z-index: 10100 !important;
+    pointer-events: auto !important;
+    touch-action: none !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-shield,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-shield {
+    width: min(106px, 12.5vh) !important;
+    height: min(106px, 12.5vh) !important;
+    font-size: 12px !important;
+    margin-bottom: 0 !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-attack,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-attack {
+    width: min(134px, 15.8vh) !important;
+    height: min(134px, 15.8vh) !important;
+    font-size: 15px !important;
+  }
+
+  /* MINI-MAP - dreapta jos, ridicat ca sa nu mai fie taiat */
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .mobile-minimap-frame,
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .minimap-wrap,
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .minimap,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .mobile-minimap-frame,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .minimap-wrap,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .minimap {
+    position: fixed !important;
+    right: max(14px, calc(env(safe-area-inset-right) + 12px)) !important;
+    bottom: var(--npvp-minimap-bottom) !important;
+    width: min(260px, 42vw) !important;
+    height: min(170px, 18.5vh) !important;
+    z-index: 10070 !important;
+    opacity: 1 !important;
+    transform: none !important;
+    transform-origin: bottom right !important;
+    filter: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  /* EXIT TO MENU - sub joystick, dar vizibil */
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-exit-btn,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-exit-btn {
+    position: fixed !important;
+    left: max(14px, calc(env(safe-area-inset-left) + 12px)) !important;
+    bottom: var(--npvp-exit-bottom) !important;
+    z-index: 10110 !important;
+    padding: 8px 12px !important;
+    font-size: 10px !important;
+  }
+}
+
+/* Telefoane mai inguste: putin mai compacte, dar tot ridicate */
+@media (max-width: 430px) and (orientation: portrait) {
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait {
+    --npvp-joystick-bottom: calc(var(--npvp-safe-bottom) + clamp(145px, 17vh, 205px));
+    --npvp-buttons-bottom: calc(var(--npvp-safe-bottom) + clamp(320px, 37vh, 405px));
+    --npvp-minimap-bottom: calc(var(--npvp-safe-bottom) + clamp(68px, 8vh, 112px));
+    --npvp-exit-bottom: calc(var(--npvp-safe-bottom) + clamp(40px, 4.5vh, 66px));
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick {
+    width: min(218px, 27vh) !important;
+    height: min(218px, 27vh) !important;
+    left: max(14px, calc(env(safe-area-inset-left) + 12px)) !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick-knob,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-joystick-knob {
+    width: min(86px, 10.5vh) !important;
+    height: min(86px, 10.5vh) !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-buttons,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-buttons {
+    right: max(10px, calc(env(safe-area-inset-right) + 8px)) !important;
+    gap: 8px !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-shield,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-shield {
+    width: min(94px, 11.8vh) !important;
+    height: min(94px, 11.8vh) !important;
+    font-size: 10px !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-attack,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .pvp-mobile-attack {
+    width: min(120px, 15vh) !important;
+    height: min(120px, 15vh) !important;
+    font-size: 13px !important;
+  }
+
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .mobile-minimap-frame,
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .minimap-wrap,
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait .minimap,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .mobile-minimap-frame,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .minimap-wrap,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait .minimap {
+    width: min(244px, 43vw) !important;
+    height: min(158px, 18vh) !important;
+    right: max(10px, calc(env(safe-area-inset-right) + 8px)) !important;
+  }
+}
+
+/* Telefoane foarte joase: evita suprapunerea butoanelor cu minimap-ul */
+@media (max-height: 760px) and (orientation: portrait) {
+  .normal-pvp-dom-arena.is-mobile-device.is-mobile-portrait,
+  .pvp-dom-arena.is-mobile-device.is-mobile-portrait {
+    --npvp-joystick-bottom: calc(var(--npvp-safe-bottom) + 132px);
+    --npvp-buttons-bottom: calc(var(--npvp-safe-bottom) + 292px);
+    --npvp-minimap-bottom: calc(var(--npvp-safe-bottom) + 58px);
+  }
 }
