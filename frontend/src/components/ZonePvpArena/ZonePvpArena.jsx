@@ -880,6 +880,27 @@ function interpolateSnapshotBuffer(buffer = [], renderTimelineTime) {
   };
 }
 
+function getBattlePrepareRemainingMs(data = {}) {
+  if (!data || data.status !== "playing") return 0;
+
+  const explicitRemaining = Number(data.battlePrepareRemainingMs);
+  if (Number.isFinite(explicitRemaining) && explicitRemaining > 0) {
+    return explicitRemaining;
+  }
+
+  const prepareUntil = Number(data.battlePrepareUntil);
+  if (Number.isFinite(prepareUntil) && prepareUntil > 0) {
+    return Math.max(0, prepareUntil - Date.now());
+  }
+
+  const matchStartedAt = Number(data.matchStartedAt);
+  if (Number.isFinite(matchStartedAt) && matchStartedAt > 0) {
+    return Math.max(0, BATTLE_PREPARE_DURATION - (Date.now() - matchStartedAt));
+  }
+
+  return 0;
+}
+
 function isBattlePrepareLocked(data = {}) {
   return getBattlePrepareRemainingMs(data) > 0;
 }
