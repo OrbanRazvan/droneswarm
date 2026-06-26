@@ -67,6 +67,7 @@ const STATIC_SYNC_INTERVAL_MS = 120;
 const ENTITY_STALE_MS = 500;
 const MAX_RENDERED_PLAYERS = 60;
 const MAX_RENDERED_PROJECTILES = 96;
+const COMBAT_EVENT_MAX_RENDERED = 32;
 
 // All motion below is transform-only: no Graphics geometry is rebuilt while
 // the game runs. That keeps turns and shields smooth even in 50–60 player rooms.
@@ -611,6 +612,125 @@ function createProjectileVisual(resources) {
   };
 }
 
+function createCombatTextStyles() {
+  const make = (fill) =>
+    new PIXI.TextStyle({
+      fontFamily: "Arial, Helvetica, sans-serif",
+      fontSize: 20,
+      fontWeight: "800",
+      letterSpacing: 0.4,
+      fill,
+      stroke: { color: 0x06101d, width: 4, join: "round" },
+    });
+
+  return {
+    default: make(0xffffff),
+    damage: make(0xff4b5e),
+    "drone-loss": make(0xffb449),
+    heal: make(0x63ff9b),
+    "drone-reward": make(0x68ecff),
+    "move-reward": make(0x9bff7a),
+    "attack-reward": make(0xf3d0ff),
+    shield: make(0x7de7ff),
+  };
+}
+
+function createCombatTextVisual(resources) {
+  const root = new PIXI.Text({
+    text: "",
+    style: resources.combatTextStyles.default,
+  });
+  root.anchor.set(0.5, 0.5);
+  root.eventMode = "none";
+  root.visible = false;
+
+  return {
+    root,
+    id: "",
+    kind: "",
+    createdAt: 0,
+    ttl: 2000,
+    lastSeenAt: 0,
+  };
+}
+
+function updateCombatTextVisual(visual, event, resources, now) {
+  const createdAt = Number(event?.createdAt || Date.now());
+  const ttl = Math.max(300, Number(event?.ttl || 2000));
+  const age = clamp((Date.now() - createdAt) / ttl, 0, 1);
+
+  if (age >= 1) {
+    visual.root.visible = false;
+    return false;
+  }
+
+  const kind = String(event?.kind || "default");
+  if (visual.id !== event.id || visual.kind !== kind) {
+    visual.id = event.id;
+    visual.kind = kind;
+    visual.root.text = String(event?.text || "");
+    visual.root.style =
+      resources.combatTextStyles[kind] || resources.combatTextStyles.default;
+  }
+
+  const side = Number(event?.side || 1) >= 0 ? 1 : -1;
+  const lane = clamp(Number(event?.lane || 0), 0, 3);
+  const easeOut = 1 - Math.pow(1 - age, 2);
+  const lateral = side * (26 + easeOut * 74);
+  const rise = 64 + easeOut * 88 + lane * 12;
+
+  visual.root.visible = true;
+  visual.root.position.set(
+    Number(event?.x || 0) + lateral,
+    Number(event?.y || 0) - rise,
+  );
+  visual.root.alpha = Math.pow(1 - age, 1.6);
+  const intro = Math.min(1, age * 9);
+  const scale = (0.86 + intro * 0.24) * (1 - age * 0.12);
+  visual.root.scale.set(scale);
+  visual.createdAt = createdAt;
+  visual.ttl = ttl;
+  visual.lastSeenAt = now;
+  return true;
+}
+
+function syncCombatTextLayer({ map, source, resources, parent, bounds, now }) {
+  const active = new Set();
+  const events = [];
+
+  for (const event of source || []) {
+    if (!event?.id || !isVisibleInBounds(event, bounds, 260)) continue;
+    const ttl = Math.max(300, Number(event.ttl || 2000));
+    if (Date.now() - Number(event.createdAt || 0) >= ttl) continue;
+    events.push(event);
+  }
+
+  events
+    .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0))
+    .slice(-COMBAT_EVENT_MAX_RENDERED)
+    .forEach((event) => {
+      active.add(event.id);
+      let visual = map.get(event.id);
+      if (!visual) {
+        visual = createCombatTextVisual(resources);
+        parent.addChild(visual.root);
+        map.set(event.id, visual);
+      }
+      updateCombatTextVisual(visual, event, resources, now);
+    });
+
+  for (const [id, visual] of map) {
+    if (!active.has(id)) {
+      visual.root.visible = false;
+    }
+    const age = Date.now() - Number(visual.createdAt || 0);
+    if (visual.createdAt && age > Number(visual.ttl || 2000) + 320) {
+      visual.root.destroy();
+      map.delete(id);
+    }
+  }
+}
+
 function createStaticVisual(context) {
   const root = new PIXI.Graphics(context);
   return { root, context, lastSeenAt: 0 };
@@ -949,6 +1069,7 @@ function createResources(coreTypes = []) {
     defaultCoreContext: createCoreContext(0x00eaff),
     orbitContext: createOrbitContext(),
     zoneContext: createZoneContext(),
+    combatTextStyles: createCombatTextStyles(),
   };
 }
 
@@ -991,6 +1112,7 @@ function PixiArenaRenderer({
   cores = [],
   projectiles = [],
   simpleProjectiles = [],
+  combatEvents = [],
   cameraX = 0,
   cameraY = 0,
   scale = 1,
@@ -1017,6 +1139,7 @@ function PixiArenaRenderer({
     cores,
     projectiles,
     simpleProjectiles,
+    combatEvents,
     cameraX,
     cameraY,
     scale,
@@ -1090,8 +1213,17 @@ function PixiArenaRenderer({
       const entitiesLayer = new PIXI.Container();
       entitiesLayer.eventMode = "none";
       entitiesLayer.zIndex = 3;
+      const combatLayer = new PIXI.Container();
+      combatLayer.eventMode = "none";
+      combatLayer.zIndex = 4;
 
-      world.addChild(zone, itemsLayer, projectilesLayer, entitiesLayer);
+      world.addChild(
+        zone,
+        itemsLayer,
+        projectilesLayer,
+        entitiesLayer,
+        combatLayer,
+      );
       app.stage.addChild(background, world);
 
       const staticMap = new Map();
@@ -1101,6 +1233,7 @@ function PixiArenaRenderer({
       const simpleBotPool = [];
       const projectilePool = [];
       const simpleProjectilePool = [];
+      const combatTextMap = new Map();
 
       let lastStaticSync = 0;
       let lastZoneRadius = null;
@@ -1244,6 +1377,14 @@ function PixiArenaRenderer({
           parent: projectilesLayer,
           bounds,
           max: Math.floor(config.maxProjectiles * 0.55),
+          now,
+        });
+        syncCombatTextLayer({
+          map: combatTextMap,
+          source: data.combatEvents,
+          resources,
+          parent: combatLayer,
+          bounds,
           now,
         });
       });

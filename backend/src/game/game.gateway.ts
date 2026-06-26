@@ -14,8 +14,28 @@ const ROOM_MIN_PLAYERS = 2;
 
 const NORMAL_ROOM_MAX_PLAYERS = 60;
 const NORMAL_ROOM_MIN_PLAYERS = 1;
+const NORMAL_WORLD_WIDTH = 14000;
+const NORMAL_WORLD_HEIGHT = 14000;
 const NORMAL_ROOM_ZONE_RADIUS = 100000;
 const NORMAL_VISIBLE_PLAYERS_LIMIT = 60;
+
+// 14k x 14k Normal PvP loot pacing. Orb density scales with active players;
+// energy is intentionally much rarer and every consumed item respawns at a
+// new random point in the arena.
+const NORMAL_ORB_BASE_TARGET = 300;
+const NORMAL_ORB_PER_ALIVE_PLAYER = 35;
+const NORMAL_ORB_MAX_TARGET = 460;
+const NORMAL_ENERGY_BASE_TARGET = 18;
+const NORMAL_ENERGY_PER_ALIVE_PLAYER = 2;
+const NORMAL_ENERGY_MAX_TARGET = 40;
+
+// Normal PvP movement / projectile pacing.
+const NORMAL_BASE_MOVE_SPEED_MULTIPLIER = 1.08;
+const NORMAL_BASE_ATTACK_DRONE_SPEED_MULTIPLIER = 1.12;
+const NORMAL_KILL_MOVE_SPEED_STEP = 0.15;
+const NORMAL_KILL_ATTACK_DRONE_SPEED_STEP = 0.05;
+const NORMAL_MAX_MOVE_SPEED_MULTIPLIER = 1.75;
+const NORMAL_MAX_ATTACK_DRONE_SPEED_MULTIPLIER = 1.25;
 
 const BR_ONLINE_ROOM_MAX_PLAYERS = 60;
 const BR_ONLINE_ROOM_MIN_PLAYERS = 2;
@@ -234,6 +254,106 @@ export class GameGateway {
 
     return now - emptySince >= EMPTY_ROOM_GRACE_MS;
   }
+
+  private getNormalOrbTarget(room: any) {
+    if (!room?.normalMode) return MAX_ORBS;
+    const aliveCount = this.getAlivePlayers(room).length;
+    return this.clamp(
+      NORMAL_ORB_BASE_TARGET + aliveCount * NORMAL_ORB_PER_ALIVE_PLAYER,
+      NORMAL_ORB_BASE_TARGET,
+      NORMAL_ORB_MAX_TARGET,
+    );
+  }
+
+  private getNormalEnergyTarget(room: any) {
+    if (!room?.normalMode) return MAX_ENERGY_CELLS;
+    const aliveCount = this.getAlivePlayers(room).length;
+    return this.clamp(
+      NORMAL_ENERGY_BASE_TARGET + aliveCount * NORMAL_ENERGY_PER_ALIVE_PLAYER,
+      NORMAL_ENERGY_BASE_TARGET,
+      NORMAL_ENERGY_MAX_TARGET,
+    );
+  }
+
+  private getNormalRandomPoint(margin = 120) {
+    return {
+      x: this.clamp(
+        margin + Math.random() * Math.max(1, NORMAL_WORLD_WIDTH - margin * 2),
+        PLAYER_RADIUS,
+        NORMAL_WORLD_WIDTH - PLAYER_RADIUS,
+      ),
+      y: this.clamp(
+        margin + Math.random() * Math.max(1, NORMAL_WORLD_HEIGHT - margin * 2),
+        PLAYER_RADIUS,
+        NORMAL_WORLD_HEIGHT - PLAYER_RADIUS,
+      ),
+    };
+  }
+
+  private createNormalOrb() {
+    const point = this.getNormalRandomPoint(120);
+    return {
+      id: crypto.randomUUID(),
+      x: point.x,
+      y: point.y,
+      color: COLORS[Math.floor(Math.random() * COLORS.length)],
+    };
+  }
+
+  private createNormalEnergyCell() {
+    const point = this.getNormalRandomPoint(160);
+    return { id: crypto.randomUUID(), x: point.x, y: point.y };
+  }
+
+  private createNormalCore() {
+    const point = this.getNormalRandomPoint(420);
+    return {
+      id: crypto.randomUUID(),
+      type: CORE_TYPES[Math.floor(Math.random() * CORE_TYPES.length)],
+      x: point.x,
+      y: point.y,
+    };
+  }
+
+  // Compact, short-lived world-space events. These are rendered in Pixi, not
+  // React, so rapid hits do not cause UI re-render spikes.
+  private pushCombatEvent(
+    room: any,
+    unit: any,
+    text: string,
+    kind: string,
+    now = Date.now(),
+  ) {
+    if (!room?.normalMode || !unit || !text) return;
+    if (!Array.isArray(room.combatEvents)) room.combatEvents = [];
+
+    const sequence = Number(room.combatEventSequence || 0) + 1;
+    room.combatEventSequence = sequence;
+    room.combatEvents.push({
+      id: `combat-${sequence}-${crypto.randomUUID()}`,
+      x: Math.round(Number(unit.x || 0)),
+      y: Math.round(Number(unit.y || 0)),
+      text: String(text).slice(0, 42),
+      kind,
+      side: sequence % 2 === 0 ? 1 : -1,
+      lane: sequence % 3,
+      createdAt: now,
+      ttl: 2000,
+    });
+
+    if (room.combatEvents.length > 96) {
+      room.combatEvents.splice(0, room.combatEvents.length - 96);
+    }
+  }
+
+  private cleanupCombatEvents(room: any, now = Date.now()) {
+    if (!room?.normalMode || !Array.isArray(room.combatEvents)) return;
+    room.combatEvents = room.combatEvents.filter(
+      (event) =>
+        now - Number(event?.createdAt || 0) <
+        Number(event?.ttl || 2000),
+    );
+  }
   afterInit() {
     this.startLoop();
   }
@@ -362,6 +482,8 @@ export class GameGateway {
       killStreak: 0,
       rapidFireUntil: 0,
       attackCooldownMultiplier: 1,
+      moveSpeedMultiplier: 1,
+      attackDroneSpeedMultiplier: 1,
       alive: true,
       input: {},
       lastSeenAt: Date.now(),
@@ -395,8 +517,8 @@ export class GameGateway {
     client.emit("normal-pvp:joined", {
       status: "playing",
       playerId: client.id,
-      worldWidth: WORLD_WIDTH,
-      worldHeight: WORLD_HEIGHT,
+      worldWidth: NORMAL_WORLD_WIDTH,
+      worldHeight: NORMAL_WORLD_HEIGHT,
       safeZoneRadius: NORMAL_ROOM_ZONE_RADIUS,
       playerCount: this.getAlivePlayers(room).length,
       minPlayers: NORMAL_ROOM_MIN_PLAYERS,
@@ -439,13 +561,13 @@ export class GameGateway {
       input?.mouseX,
       player.x,
       PLAYER_RADIUS,
-      WORLD_WIDTH - PLAYER_RADIUS,
+      NORMAL_WORLD_WIDTH - PLAYER_RADIUS,
     );
     const mouseY = this.sanitizeCoordinate(
       input?.mouseY,
       player.y,
       PLAYER_RADIUS,
-      WORLD_HEIGHT - PLAYER_RADIUS,
+      NORMAL_WORLD_HEIGHT - PLAYER_RADIUS,
     );
 
     player.input = {
@@ -799,6 +921,7 @@ export class GameGateway {
         this.collectCores(room, zoneRadius);
         this.updateProjectiles(room, deltaFrames, now);
         this.maintainWorldItems(room, zoneRadius, now);
+        this.cleanupCombatEvents(room, now);
 
         const broadcastInterval =
           room.players.size >= PVP_HEAVY_STATE_THRESHOLD
@@ -1008,7 +1131,11 @@ export class GameGateway {
       player.prevY = player.y;
 
       const length = Math.hypot(dx, dy) || 1;
-      const speed = PLAYER_SPEED;
+      const normalMoveMultiplier = room?.normalMode
+        ? NORMAL_BASE_MOVE_SPEED_MULTIPLIER *
+          Math.max(1, Number(player.moveSpeedMultiplier || 1))
+        : 1;
+      const speed = PLAYER_SPEED * normalMoveMultiplier;
       const rawX = player.x + (dx / length) * speed * deltaFrames;
       const rawY = player.y + (dy / length) * speed * deltaFrames;
       const safe = this.keepInsideSafeZone(
@@ -1018,11 +1145,21 @@ export class GameGateway {
         PLAYER_RADIUS + 18,
         Boolean(room.zonePvpMode),
       );
-      player.x = this.clamp(safe.x, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
+      const movementWorldWidth = room?.normalMode
+        ? NORMAL_WORLD_WIDTH
+        : WORLD_WIDTH;
+      const movementWorldHeight = room?.normalMode
+        ? NORMAL_WORLD_HEIGHT
+        : WORLD_HEIGHT;
+      player.x = this.clamp(
+        safe.x,
+        PLAYER_RADIUS,
+        movementWorldWidth - PLAYER_RADIUS,
+      );
       player.y = this.clamp(
         safe.y,
         PLAYER_RADIUS,
-        WORLD_HEIGHT - PLAYER_RADIUS,
+        movementWorldHeight - PLAYER_RADIUS,
       );
       this.applyKnockbackStep(player, zoneRadius, room);
       if (dx || dy) {
@@ -1057,10 +1194,19 @@ export class GameGateway {
     player.progress = 0;
     player.nextDroneAt = this.getNextDroneAt(player.drones || 0);
   }
-  applyKillReward(killer) {
+  applyKillReward(killer, room = null, now = Date.now()) {
+    if (!killer) return;
+
+    const previousDrones = Number(killer.drones || 0);
+    const previousHp = Number(killer.hp || START_HP);
+    const previousMoveSpeed = Number(killer.moveSpeedMultiplier || 1);
+    const previousAttackDroneSpeed = Number(
+      killer.attackDroneSpeedMultiplier || 1,
+    );
+
     killer.kills = (killer.kills || 0) + 1;
     killer.killStreak = (killer.killStreak || 0) + 1;
-    killer.drones = Math.min(MAX_DRONES, (killer.drones || 0) + 1);
+    killer.drones = Math.min(MAX_DRONES, previousDrones + 1);
     killer.progress = 0;
     killer.nextDroneAt = this.getNextDroneAt(killer.drones || 0);
 
@@ -1069,14 +1215,45 @@ export class GameGateway {
       (killer.maxHp || START_HP) + KILL_HP_REWARD,
     );
     killer.maxHp = nextMaxHp;
-    killer.hp = Math.min(nextMaxHp, (killer.hp || START_HP) + KILL_HP_REWARD);
+    killer.hp = Math.min(nextMaxHp, previousHp + KILL_HP_REWARD);
     killer.killAttackSpeedMultiplier = Math.max(
       MIN_KILL_ATTACK_SPEED_MULTIPLIER,
       (killer.killAttackSpeedMultiplier || 1) * KILL_ATTACK_SPEED_MULTIPLIER,
     );
 
+    if (room?.normalMode) {
+      killer.moveSpeedMultiplier = Math.min(
+        NORMAL_MAX_MOVE_SPEED_MULTIPLIER,
+        previousMoveSpeed + NORMAL_KILL_MOVE_SPEED_STEP,
+      );
+      killer.attackDroneSpeedMultiplier = Math.min(
+        NORMAL_MAX_ATTACK_DRONE_SPEED_MULTIPLIER,
+        previousAttackDroneSpeed + NORMAL_KILL_ATTACK_DRONE_SPEED_STEP,
+      );
+
+      const gainedHp = Math.max(0, Number(killer.hp || 0) - previousHp);
+      if (gainedHp > 0) {
+        this.pushCombatEvent(room, killer, `+${gainedHp} HP`, "heal", now);
+      }
+      if (killer.drones > previousDrones) {
+        this.pushCombatEvent(room, killer, "+1 DRONE", "drone-reward", now);
+      }
+      if (killer.moveSpeedMultiplier > previousMoveSpeed) {
+        this.pushCombatEvent(room, killer, "+15% MOVE SPEED", "move-reward", now);
+      }
+      if (killer.attackDroneSpeedMultiplier > previousAttackDroneSpeed) {
+        this.pushCombatEvent(
+          room,
+          killer,
+          "+5% ATTACK DRONE SPEED",
+          "attack-reward",
+          now,
+        );
+      }
+    }
+
     if (killer.killStreak >= 3) {
-      killer.rapidFireUntil = Date.now() + 10000;
+      killer.rapidFireUntil = now + 10000;
       killer.attackCooldownMultiplier = killer.killStreak >= 5 ? 0.5 : 0.65;
     }
   }
@@ -1255,8 +1432,22 @@ export class GameGateway {
       PLAYER_RADIUS + 18,
       Boolean(room?.zonePvpMode),
     );
-    player.x = this.clamp(safe.x, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
-    player.y = this.clamp(safe.y, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
+    const knockbackWorldWidth = room?.normalMode
+      ? NORMAL_WORLD_WIDTH
+      : WORLD_WIDTH;
+    const knockbackWorldHeight = room?.normalMode
+      ? NORMAL_WORLD_HEIGHT
+      : WORLD_HEIGHT;
+    player.x = this.clamp(
+      safe.x,
+      PLAYER_RADIUS,
+      knockbackWorldWidth - PLAYER_RADIUS,
+    );
+    player.y = this.clamp(
+      safe.y,
+      PLAYER_RADIUS,
+      knockbackWorldHeight - PLAYER_RADIUS,
+    );
     player.knockbackX = kx * BODY_COLLISION_PUSH_DECAY;
     player.knockbackY = ky * BODY_COLLISION_PUSH_DECAY;
   }
@@ -1369,8 +1560,8 @@ export class GameGateway {
       this.eliminatePlayer(room, b, a.alive !== false ? a : null, now, "collision", bWasAlive);
     }
 
-    if (aWasAlive && !a.alive && b.alive) this.applyKillReward(b);
-    if (bWasAlive && !b.alive && a.alive) this.applyKillReward(a);
+    if (aWasAlive && !a.alive && b.alive) this.applyKillReward(b, room, now);
+    if (bWasAlive && !b.alive && a.alive) this.applyKillReward(a, room, now);
   }
 
   tryFireProjectile(room, player, now) {
@@ -1385,11 +1576,16 @@ export class GameGateway {
       player.rapidFireUntil && player.rapidFireUntil > now ? 0.75 : 0;
     const overclockBonus =
       player.overclockUntil && player.overclockUntil > now ? 1.25 : 0;
+    const normalAttackDroneMultiplier = room?.normalMode
+      ? NORMAL_BASE_ATTACK_DRONE_SPEED_MULTIPLIER *
+        Math.max(1, Number(player.attackDroneSpeedMultiplier || 1))
+      : 1;
     const speed =
-      PROJECTILE_SPEED +
-      (player.projectileSpeedBonus || 0) +
-      rapidBonus +
-      overclockBonus;
+      (PROJECTILE_SPEED +
+        (player.projectileSpeedBonus || 0) +
+        rapidBonus +
+        overclockBonus) *
+      normalAttackDroneMultiplier;
     player.lastFireAt = now;
     player.drones = Math.max(0, player.drones - 1);
     this.resetDroneProgress(player);
@@ -1456,9 +1652,32 @@ export class GameGateway {
         const dy = target.y - projectile.y;
         if (dx * dx + dy * dy > 105 * 105) continue;
         const owner = room.players.get(projectile.ownerId);
-        const damageBlocked = target.shieldActive && !projectile.shieldBreaker;
-        if (!damageBlocked) {
-          target.hp = Math.max(0, target.hp - projectile.damage);
+
+        // Normal PvP shield absorbs one attack-drone hit completely: no HP
+        // damage and no escort-drone loss. The shield then disables at once.
+        const normalShieldIntercept = Boolean(
+          room?.normalMode && target.shieldActive,
+        );
+        const damageBlocked =
+          normalShieldIntercept ||
+          (target.shieldActive && !projectile.shieldBreaker);
+
+        if (normalShieldIntercept) {
+          target.shieldActive = false;
+          target.shieldUntil = 0;
+          this.pushCombatEvent(room, target, "SHIELD BLOCKED", "shield", now);
+          projectile.pierceLeft = 0;
+        } else if (!damageBlocked) {
+          const hpBefore = Number(target.hp || 0);
+          target.hp = Math.max(0, hpBefore - projectile.damage);
+
+          let removedDrone = false;
+          if (room?.normalMode && (target.drones || 0) > 0) {
+            target.drones = Math.max(0, Number(target.drones || 0) - 1);
+            target.nextDroneAt = this.getNextDroneAt(target.drones || 0);
+            removedDrone = true;
+          }
+
           if (owner && owner.id !== target.id) {
             target.lastDamageById = owner.id;
             target.lastDamageAt = now;
@@ -1469,10 +1688,24 @@ export class GameGateway {
               owner.hp + Math.floor(projectile.damage * VAMPIRE_HEAL_RATIO),
             );
           }
+
+          if (room?.normalMode) {
+            this.pushCombatEvent(
+              room,
+              target,
+              `-${Math.max(0, hpBefore - target.hp)} HP`,
+              "damage",
+              now,
+            );
+            if (removedDrone) {
+              this.pushCombatEvent(room, target, "-1 DRONE", "drone-loss", now);
+            }
+          }
+
           if (target.hp <= 0) {
             this.eliminatePlayer(room, target, owner, now, "projectile");
             if (owner) {
-              this.applyKillReward(owner);
+              this.applyKillReward(owner, room, now);
             }
           }
         }
@@ -1638,6 +1871,13 @@ export class GameGateway {
 
     if (collectedIds.size > 0) {
       room.orbs = room.orbs.filter((orb) => !collectedIds.has(orb.id));
+
+      if (room.normalMode) {
+        const missing = Math.max(0, this.getNormalOrbTarget(room) - room.orbs.length);
+        for (let index = 0; index < missing; index += 1) {
+          room.orbs.push(this.createNormalOrb());
+        }
+      }
     }
   }
   collectEnergy(room, zoneRadius) {
@@ -1698,6 +1938,16 @@ export class GameGateway {
       room.energyCells = room.energyCells.filter(
         (cell) => !collectedIds.has(cell.id),
       );
+
+      if (room.normalMode) {
+        const missing = Math.max(
+          0,
+          this.getNormalEnergyTarget(room) - room.energyCells.length,
+        );
+        for (let index = 0; index < missing; index += 1) {
+          room.energyCells.push(this.createNormalEnergyCell());
+        }
+      }
     }
   }
 
@@ -1884,12 +2134,32 @@ export class GameGateway {
       );
     }
 
-    while (room.orbs.length < MAX_ORBS) {
-      room.orbs.push(this.createOrb(zoneRadius));
+    const orbTarget = this.getNormalOrbTarget(room);
+    const energyTarget = this.getNormalEnergyTarget(room);
+
+    while (room.orbs.length < orbTarget) {
+      room.orbs.push(
+        room.normalMode
+          ? this.createNormalOrb()
+          : this.createOrb(zoneRadius),
+      );
     }
 
-    while (room.energyCells.length < MAX_ENERGY_CELLS) {
-      room.energyCells.push(this.createEnergyCell(zoneRadius));
+    while (room.energyCells.length < energyTarget) {
+      room.energyCells.push(
+        room.normalMode
+          ? this.createNormalEnergyCell()
+          : this.createEnergyCell(zoneRadius),
+      );
+    }
+
+    if (room.normalMode) {
+      if (room.orbs.length > orbTarget) {
+        room.orbs = room.orbs.slice(-orbTarget);
+      }
+      if (room.energyCells.length > energyTarget) {
+        room.energyCells = room.energyCells.slice(-energyTarget);
+      }
     }
 
     if (room.normalMode || room.battleRoyaleOnlineMode || room.zonePvpMode) {
@@ -1902,7 +2172,9 @@ export class GameGateway {
 
         if (now >= room.nextCoreWaveAt) {
           room.cores = Array.from({ length: CORE_WAVE_SIZE }, () =>
-            this.createCore(zoneRadius),
+            room.normalMode
+              ? this.createNormalCore()
+              : this.createCore(zoneRadius),
           );
           room.lastCoreWaveAt = now;
           room.nextCoreWaveAt = null;
@@ -2117,6 +2389,8 @@ export class GameGateway {
       rapidFireUntil: player.rapidFireUntil || 0,
       attackCooldownMultiplier: player.attackCooldownMultiplier || 1,
       killAttackSpeedMultiplier: player.killAttackSpeedMultiplier || 1,
+      moveSpeedMultiplier: player.moveSpeedMultiplier || 1,
+      attackDroneSpeedMultiplier: player.attackDroneSpeedMultiplier || 1,
       skin: player.skin,
       alive: player.alive,
       killedById: player.killedById || null,
@@ -2163,15 +2437,17 @@ export class GameGateway {
       id: `normal-${crypto.randomUUID()}`,
       status: "playing",
       players: new Map(),
-      orbs: Array.from({ length: MAX_ORBS }, () =>
-        this.createOrb(NORMAL_ROOM_ZONE_RADIUS),
+      orbs: Array.from({ length: NORMAL_ORB_BASE_TARGET }, () =>
+        this.createNormalOrb(),
       ),
-      energyCells: Array.from({ length: MAX_ENERGY_CELLS }, () =>
-        this.createEnergyCell(NORMAL_ROOM_ZONE_RADIUS),
+      energyCells: Array.from({ length: NORMAL_ENERGY_BASE_TARGET }, () =>
+        this.createNormalEnergyCell(),
       ),
       cores: [],
       pendingCores: [],
       projectiles: [],
+      combatEvents: [],
+      combatEventSequence: 0,
       countdownStartedAt: null,
       createdAt: Date.now(),
       emptySince: Date.now(),
@@ -2233,19 +2509,19 @@ export class GameGateway {
 
     if (existing.length === 0) {
       return {
-        x: WORLD_WIDTH / 2 - 520,
-        y: WORLD_HEIGHT / 2,
+        x: NORMAL_WORLD_WIDTH / 2 - 520,
+        y: NORMAL_WORLD_HEIGHT / 2,
       };
     }
 
-    const spawnAreaRadius = 6000;
+    const spawnAreaRadius = 5600;
     const minSpawnDistance = 700;
 
     for (let attempt = 0; attempt < 120; attempt += 1) {
       const angle = Math.random() * Math.PI * 2;
       const distance = Math.sqrt(Math.random()) * spawnAreaRadius;
-      const x = WORLD_WIDTH / 2 + Math.cos(angle) * distance;
-      const y = WORLD_HEIGHT / 2 + Math.sin(angle) * distance;
+      const x = NORMAL_WORLD_WIDTH / 2 + Math.cos(angle) * distance;
+      const y = NORMAL_WORLD_HEIGHT / 2 + Math.sin(angle) * distance;
 
       let farEnough = true;
       for (const other of existing) {
@@ -2259,22 +2535,22 @@ export class GameGateway {
 
       if (farEnough) {
         return {
-          x: this.clamp(x, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS),
-          y: this.clamp(y, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS),
+          x: this.clamp(x, PLAYER_RADIUS, NORMAL_WORLD_WIDTH - PLAYER_RADIUS),
+          y: this.clamp(y, PLAYER_RADIUS, NORMAL_WORLD_HEIGHT - PLAYER_RADIUS),
         };
       }
     }
 
     return {
       x: this.clamp(
-        WORLD_WIDTH / 2 + (Math.random() - 0.5) * spawnAreaRadius,
+        NORMAL_WORLD_WIDTH / 2 + (Math.random() - 0.5) * spawnAreaRadius,
         PLAYER_RADIUS,
-        WORLD_WIDTH - PLAYER_RADIUS,
+        NORMAL_WORLD_WIDTH - PLAYER_RADIUS,
       ),
       y: this.clamp(
-        WORLD_HEIGHT / 2 + (Math.random() - 0.5) * spawnAreaRadius,
+        NORMAL_WORLD_HEIGHT / 2 + (Math.random() - 0.5) * spawnAreaRadius,
         PLAYER_RADIUS,
-        WORLD_HEIGHT - PLAYER_RADIUS,
+        NORMAL_WORLD_HEIGHT - PLAYER_RADIUS,
       ),
     };
   }
@@ -2397,8 +2673,8 @@ export class GameGateway {
         playerCount: alivePlayers.length,
         minPlayers: NORMAL_ROOM_MIN_PLAYERS,
         maxPlayers: NORMAL_ROOM_MAX_PLAYERS,
-        worldWidth: WORLD_WIDTH,
-        worldHeight: WORLD_HEIGHT,
+        worldWidth: NORMAL_WORLD_WIDTH,
+        worldHeight: NORMAL_WORLD_HEIGHT,
         safeZoneRadius: NORMAL_ROOM_ZONE_RADIUS,
         you: snapshotsByPlayer.get(player.id),
         players: visiblePlayers,
@@ -2419,6 +2695,13 @@ export class GameGateway {
               VIEW_DISTANCE + 400,
               VISIBLE_PROJECTILE_LIMIT,
             ),
+        combatEvents: (room.combatEvents || [])
+          .filter((event) => {
+            const age = now - Number(event?.createdAt || 0);
+            if (age < 0 || age >= Number(event?.ttl || 2000)) return false;
+            return this.isNear(viewAnchor, event, VIEW_DISTANCE + 800);
+          })
+          .slice(-32),
       };
 
       if (includeViewportItems) {
@@ -3180,6 +3463,11 @@ export class GameGateway {
   }
   ensureLocalItemsAroundPlayers(room, zoneRadius) {
     const alive = this.getAlivePlayers(room);
+
+    // Every Normal PvP pickup already respawns randomly. Avoid creating
+    // near-player clusters that would turn the compact map into a farm lane.
+    if (room?.normalMode) return;
+
     for (const player of alive) {
       const nearbyOrbs = room.orbs.filter((orb) =>
         this.isNear(player, orb, 1800),

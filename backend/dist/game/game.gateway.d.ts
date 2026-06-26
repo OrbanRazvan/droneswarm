@@ -16,6 +16,14 @@ export declare class GameGateway {
     private markRoomOccupied;
     private markRoomEmptyIfNeeded;
     private shouldDeleteEmptyRoom;
+    private getNormalOrbTarget;
+    private getNormalEnergyTarget;
+    private getNormalRandomPoint;
+    private createNormalOrb;
+    private createNormalEnergyCell;
+    private createNormalCore;
+    private pushCombatEvent;
+    private cleanupCombatEvents;
     afterInit(): void;
     handleDisconnect(client: Socket): void;
     handlePvpJoin(client: Socket, data: any): void;
@@ -38,7 +46,7 @@ export declare class GameGateway {
     updatePlayers(room: any, now: any, zoneRadius: any, deltaFrames?: number): void;
     getNextDroneAt(currentDrones?: number): number;
     resetDroneProgress(player: any): void;
-    applyKillReward(killer: any): void;
+    applyKillReward(killer: any, room?: any, now?: number): void;
     getRecentKiller(room: any, victim: any, now?: number): any;
     getStableSpectatorTarget(room: any, victim: any, preferred?: any): any;
     eliminatePlayer(room: any, victim: any, killer?: any, now?: number, reason?: string, forceEmit?: boolean): any;
@@ -98,6 +106,8 @@ export declare class GameGateway {
         rapidFireUntil: any;
         attackCooldownMultiplier: any;
         killAttackSpeedMultiplier: any;
+        moveSpeedMultiplier: any;
+        attackDroneSpeedMultiplier: any;
         skin: any;
         alive: any;
         killedById: any;

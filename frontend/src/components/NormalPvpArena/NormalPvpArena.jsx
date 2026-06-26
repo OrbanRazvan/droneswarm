@@ -11,8 +11,8 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 // nu mai re-randeaza harta mica de zeci de ori pe secunda pe telefoane.
 const MemoizedMiniMap = memo(MiniMap);
 
-const WORLD_WIDTH_FALLBACK = 20000;
-const WORLD_HEIGHT_FALLBACK = 20000;
+const WORLD_WIDTH_FALLBACK = 14000;
+const WORLD_HEIGHT_FALLBACK = 14000;
 const ZONE_RADIUS_FALLBACK = 100000;
 
 // GameArena movement: 2.8 px / 60fps frame ~= 168 px/sec.
@@ -21,6 +21,10 @@ const ZONE_RADIUS_FALLBACK = 100000;
 // Identic cu Normal PvP, ca senzatia de miscare sa fie aceeasi.
 const GAME_FRAME_SPEED = 2.6;
 const CLIENT_SPEED = GAME_FRAME_SPEED * 60;
+
+// Keep local prediction exactly aligned with Normal PvP server pacing.
+const NORMAL_BASE_MOVE_SPEED_MULTIPLIER = 1.08;
+const NORMAL_BASE_ATTACK_DRONE_SPEED_MULTIPLIER = 1.12;
 
 // Delta-time smoothing. Valorile sunt "pe secunda", nu pe frame.
 // Asta inseamna ca jocul se simte la fel la 45 FPS, 60 FPS sau 144 FPS.
@@ -63,7 +67,7 @@ const LOCAL_PROJECTILE_MIN_VISUAL_MS = 85;
 const SERVER_PROJECTILE_FADE_TTL = 10000;
 const LOCAL_PROJECTILE_MAX_DISTANCE = 4200;
 const PROJECTILE_HIT_VISUAL_RADIUS = 118;
-const LOCAL_PROJECTILE_SPEED = 3.55;
+const LOCAL_PROJECTILE_SPEED = 4.4;
 const FIRE_COOLDOWN = 3000;
 const ORB_STABLE_TTL = 2400;
 const MINIMAP_STABLE_TTL = 8000;
@@ -750,6 +754,8 @@ function getLocalFireCooldown(unit, now = performance.now()) {
     cooldown *= 0.72;
   }
 
+  cooldown *= Math.max(0.45, Number(unit?.killAttackSpeedMultiplier || 1));
+
   return Math.max(420, Math.floor(cooldown));
 }
 
@@ -759,10 +765,12 @@ function getLocalProjectileSpeed(unit) {
   const overclockBonus =
     unit?.overclockUntil && unit.overclockUntil > Date.now() ? 1.25 : 0;
   return (
-    LOCAL_PROJECTILE_SPEED +
-    (unit?.projectileSpeedBonus || 0) +
-    rapidBonus +
-    overclockBonus
+    (LOCAL_PROJECTILE_SPEED +
+      (unit?.projectileSpeedBonus || 0) +
+      rapidBonus +
+      overclockBonus) *
+    NORMAL_BASE_ATTACK_DRONE_SPEED_MULTIPLIER *
+    Math.max(1, Number(unit?.attackDroneSpeedMultiplier || 1))
   );
 }
 
@@ -852,8 +860,12 @@ function predictUnitFromInput(
   let nextY = unit.y || 0;
 
   if (move.moving && (unit.energy ?? 1) > 0) {
-    nextX += move.nx * CLIENT_SPEED * safeDt;
-    nextY += move.ny * CLIENT_SPEED * safeDt;
+    const moveSpeed =
+      CLIENT_SPEED *
+      NORMAL_BASE_MOVE_SPEED_MULTIPLIER *
+      Math.max(1, Number(unit.moveSpeedMultiplier || 1));
+    nextX += move.nx * moveSpeed * safeDt;
+    nextY += move.ny * moveSpeed * safeDt;
   }
 
   const safe = keepInsideSafeZone(
@@ -1075,6 +1087,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     cores: [],
     minimapCores: [],
     projectiles: [],
+    combatEvents: [],
     leaderboard: [],
   });
 
@@ -1230,6 +1243,9 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         projectiles: Array.isArray(state.projectiles)
           ? state.projectiles
           : worldRef.current.projectiles,
+        combatEvents: Array.isArray(state.combatEvents)
+          ? state.combatEvents
+          : worldRef.current.combatEvents,
         leaderboard: Array.isArray(state.leaderboard)
           ? state.leaderboard
           : worldRef.current.leaderboard,
@@ -1956,6 +1972,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         cores: liveCores,
         projectiles: liveProjectiles,
         simpleProjectiles: [],
+        combatEvents: data.combatEvents || [],
         cameraX: liveCameraX,
         cameraY: liveCameraY,
         scale: liveCameraScale,
@@ -2553,6 +2570,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         energyCells={visibleEnergyCells}
         cores={visibleCores}
         projectiles={visibleProjectiles}
+        combatEvents={renderData.combatEvents || []}
         cameraX={cameraX}
         cameraY={cameraY}
         scale={cameraScale}
