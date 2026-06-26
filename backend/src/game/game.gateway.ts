@@ -260,6 +260,12 @@ export class GameGateway {
     return now - emptySince >= EMPTY_ROOM_GRACE_MS;
   }
 
+  // Normal PvP and Zone PvP share the same combat progression rules:
+  // shield-break, escort-drone loss, kill speed rewards and Pixi combat text.
+  private usesProgressionPvpCombat(room: any) {
+    return Boolean(room?.normalMode || room?.zonePvpMode);
+  }
+
   private getNormalOrbTarget(room: any) {
     if (!room?.normalMode) return MAX_ORBS;
     const aliveCount = this.getAlivePlayers(room).length;
@@ -329,7 +335,7 @@ export class GameGateway {
     kind: string,
     now = Date.now(),
   ) {
-    if (!room?.normalMode || !unit || !text) return;
+    if (!this.usesProgressionPvpCombat(room) || !unit || !text) return;
     if (!Array.isArray(room.combatEvents)) room.combatEvents = [];
 
     const sequence = Number(room.combatEventSequence || 0) + 1;
@@ -352,7 +358,7 @@ export class GameGateway {
   }
 
   private cleanupCombatEvents(room: any, now = Date.now()) {
-    if (!room?.normalMode || !Array.isArray(room.combatEvents)) return;
+    if (!this.usesProgressionPvpCombat(room) || !Array.isArray(room.combatEvents)) return;
     room.combatEvents = room.combatEvents.filter(
       (event) =>
         now - Number(event?.createdAt || 0) <
@@ -801,6 +807,9 @@ export class GameGateway {
       killStreak: 0,
       rapidFireUntil: 0,
       attackCooldownMultiplier: 1,
+      // Zone PvP now shares Normal PvP progression rewards.
+      moveSpeedMultiplier: 1,
+      attackDroneSpeedMultiplier: 1,
       alive: true,
       input: {},
       lastSeenAt: Date.now(),
@@ -1039,6 +1048,7 @@ export class GameGateway {
           this.collectCores(room, zoneRadius);
           this.updateProjectiles(room, deltaFrames, now);
           this.maintainWorldItems(room, zoneRadius, now);
+          this.cleanupCombatEvents(room, now);
           this.updateZonePvpWinCondition(room, now);
         }
 
@@ -1184,11 +1194,13 @@ export class GameGateway {
       player.prevY = player.y;
 
       const length = Math.hypot(dx, dy) || 1;
-      const normalMoveMultiplier = room?.normalMode
+      // Normal PvP and Zone PvP intentionally use identical base movement
+      // pacing and stack the same +15% movement reward after each kill.
+      const progressionMoveMultiplier = this.usesProgressionPvpCombat(room)
         ? NORMAL_BASE_MOVE_SPEED_MULTIPLIER *
           Math.max(1, Number(player.moveSpeedMultiplier || 1))
         : 1;
-      const speed = PLAYER_SPEED * normalMoveMultiplier;
+      const speed = PLAYER_SPEED * progressionMoveMultiplier;
       const rawX = player.x + (dx / length) * speed * deltaFrames;
       const rawY = player.y + (dy / length) * speed * deltaFrames;
       const safe = this.keepInsideSafeZone(
@@ -1274,7 +1286,7 @@ export class GameGateway {
       (killer.killAttackSpeedMultiplier || 1) * KILL_ATTACK_SPEED_MULTIPLIER,
     );
 
-    if (room?.normalMode) {
+    if (this.usesProgressionPvpCombat(room)) {
       killer.moveSpeedMultiplier = Math.min(
         NORMAL_MAX_MOVE_SPEED_MULTIPLIER,
         previousMoveSpeed + NORMAL_KILL_MOVE_SPEED_STEP,
@@ -1629,7 +1641,9 @@ export class GameGateway {
       player.rapidFireUntil && player.rapidFireUntil > now ? 0.75 : 0;
     const overclockBonus =
       player.overclockUntil && player.overclockUntil > now ? 1.25 : 0;
-    const normalAttackDroneMultiplier = room?.normalMode
+    // Keep attack-drone velocity identical between Normal and Zone PvP,
+    // including the +5% kill reward stack.
+    const progressionAttackDroneMultiplier = this.usesProgressionPvpCombat(room)
       ? NORMAL_BASE_ATTACK_DRONE_SPEED_MULTIPLIER *
         Math.max(1, Number(player.attackDroneSpeedMultiplier || 1))
       : 1;
@@ -1638,7 +1652,7 @@ export class GameGateway {
         (player.projectileSpeedBonus || 0) +
         rapidBonus +
         overclockBonus) *
-      normalAttackDroneMultiplier;
+      progressionAttackDroneMultiplier;
     player.lastFireAt = now;
     player.drones = Math.max(0, player.drones - 1);
     this.resetDroneProgress(player);
@@ -1706,16 +1720,17 @@ export class GameGateway {
         if (dx * dx + dy * dy > 105 * 105) continue;
         const owner = room.players.get(projectile.ownerId);
 
-        // Normal PvP shield absorbs one attack-drone hit completely: no HP
-        // damage and no escort-drone loss. The shield then disables at once.
-        const normalShieldIntercept = Boolean(
-          room?.normalMode && target.shieldActive,
+        // In both Normal PvP and Zone PvP, the shield absorbs exactly one
+        // attack drone completely: no HP damage and no escort-drone loss.
+        // It then drops immediately, even against a shield-breaker projectile.
+        const progressionShieldIntercept = Boolean(
+          this.usesProgressionPvpCombat(room) && target.shieldActive,
         );
         const damageBlocked =
-          normalShieldIntercept ||
+          progressionShieldIntercept ||
           (target.shieldActive && !projectile.shieldBreaker);
 
-        if (normalShieldIntercept) {
+        if (progressionShieldIntercept) {
           target.shieldActive = false;
           target.shieldUntil = 0;
           this.pushCombatEvent(room, target, "SHIELD BLOCKED", "shield", now);
@@ -1725,7 +1740,10 @@ export class GameGateway {
           target.hp = Math.max(0, hpBefore - projectile.damage);
 
           let removedDrone = false;
-          if (room?.normalMode && (target.drones || 0) > 0) {
+          if (
+            this.usesProgressionPvpCombat(room) &&
+            (target.drones || 0) > 0
+          ) {
             target.drones = Math.max(0, Number(target.drones || 0) - 1);
             target.nextDroneAt = this.getNextDroneAt(target.drones || 0);
             removedDrone = true;
@@ -1742,7 +1760,7 @@ export class GameGateway {
             );
           }
 
-          if (room?.normalMode) {
+          if (this.usesProgressionPvpCombat(room)) {
             this.pushCombatEvent(
               room,
               target,
@@ -3096,6 +3114,9 @@ export class GameGateway {
       cores: [],
       pendingCores: [],
       projectiles: [],
+      // Shared with Normal PvP: compact world-space Pixi combat messages.
+      combatEvents: [],
+      combatEventSequence: 0,
       countdownStartedAt: null,
       createdAt: Date.now(),
       emptySince: Date.now(),
@@ -3333,6 +3354,15 @@ export class GameGateway {
               VIEW_DISTANCE + 400,
               45,
             ),
+        // Short-lived, nearby text only. Sent outside the React render path;
+        // Pixi animates it for the same look as Normal PvP.
+        combatEvents: (room.combatEvents || [])
+          .filter((event) => {
+            const age = now - Number(event?.createdAt || 0);
+            if (age < 0 || age >= Number(event?.ttl || 2000)) return false;
+            return this.isNear(viewAnchor, event, VIEW_DISTANCE + 800);
+          })
+          .slice(-32),
 
       };
 

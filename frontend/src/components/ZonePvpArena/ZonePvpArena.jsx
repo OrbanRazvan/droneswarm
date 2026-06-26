@@ -18,6 +18,10 @@ const ZONE_RADIUS_FALLBACK = 7050;
 const GAME_FRAME_SPEED = 2.6;
 const CLIENT_SPEED = GAME_FRAME_SPEED * 60;
 
+// Zone PvP now uses the same combat progression pacing as Normal PvP.
+const ZONE_BASE_MOVE_SPEED_MULTIPLIER = 1.08;
+const ZONE_BASE_ATTACK_DRONE_SPEED_MULTIPLIER = 1.12;
+
 // Delta-time smoothing. Valorile sunt "pe secunda", nu pe frame.
 // Asta inseamna ca jocul se simte la fel la 45 FPS, 60 FPS sau 144 FPS.
 const SELF_CORRECTION_MOVING = 0.22;
@@ -39,7 +43,7 @@ const LOCAL_PROJECTILE_MIN_VISUAL_MS = 85;
 const SERVER_PROJECTILE_FADE_TTL = 10000;
 const LOCAL_PROJECTILE_MAX_DISTANCE = 4200;
 const PROJECTILE_HIT_VISUAL_RADIUS = 118;
-const LOCAL_PROJECTILE_SPEED = 3.55;
+const LOCAL_PROJECTILE_SPEED = 4.4;
 const FIRE_COOLDOWN = 3000;
 const BATTLE_PREPARE_DURATION = 30000;
 const ORB_STABLE_TTL = 2400;
@@ -428,13 +432,26 @@ function getLocalFireCooldown(unit, now = performance.now()) {
     cooldown *= 0.72;
   }
 
+  // Same kill-streak attack cadence as Normal PvP.
+  cooldown *= Math.max(0.45, Number(unit?.killAttackSpeedMultiplier || 1));
+
   return Math.max(420, Math.floor(cooldown));
 }
 
 function getLocalProjectileSpeed(unit) {
-  const rapidBonus = unit?.rapidFireUntil && unit.rapidFireUntil > Date.now() ? 0.75 : 0;
-  const overclockBonus = unit?.overclockUntil && unit.overclockUntil > Date.now() ? 1.25 : 0;
-  return LOCAL_PROJECTILE_SPEED + (unit?.projectileSpeedBonus || 0) + rapidBonus + overclockBonus;
+  const rapidBonus =
+    unit?.rapidFireUntil && unit.rapidFireUntil > Date.now() ? 0.75 : 0;
+  const overclockBonus =
+    unit?.overclockUntil && unit.overclockUntil > Date.now() ? 1.25 : 0;
+
+  return (
+    (LOCAL_PROJECTILE_SPEED +
+      (unit?.projectileSpeedBonus || 0) +
+      rapidBonus +
+      overclockBonus) *
+    ZONE_BASE_ATTACK_DRONE_SPEED_MULTIPLIER *
+    Math.max(1, Number(unit?.attackDroneSpeedMultiplier || 1))
+  );
 }
 
 function projectileHitsAnyTarget(projectile, targets = []) {
@@ -513,8 +530,12 @@ function predictUnitFromInput(unit, input, dt, worldWidth, worldHeight, zoneRadi
   let nextY = unit.y || 0;
 
   if (move.moving && (unit.energy ?? 1) > 0) {
-    nextX += move.nx * CLIENT_SPEED * safeDt;
-    nextY += move.ny * CLIENT_SPEED * safeDt;
+    const moveSpeed =
+      CLIENT_SPEED *
+      ZONE_BASE_MOVE_SPEED_MULTIPLIER *
+      Math.max(1, Number(unit.moveSpeedMultiplier || 1));
+    nextX += move.nx * moveSpeed * safeDt;
+    nextY += move.ny * moveSpeed * safeDt;
   }
 
   const safe = keepInsideSafeZone(
@@ -750,6 +771,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     cores: [],
     minimapCores: [],
     projectiles: [],
+    // Server sends these short-lived events; Pixi animates them in world space.
+    combatEvents: [],
     leaderboard: [],
   });
 
@@ -1373,6 +1396,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         cores: liveCores,
         projectiles: liveProjectiles,
         simpleProjectiles: [],
+        combatEvents: data.combatEvents || [],
         cameraX: liveCameraX,
         cameraY: liveCameraY,
         scale: liveCameraScale,

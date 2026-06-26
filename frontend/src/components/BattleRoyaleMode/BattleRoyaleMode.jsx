@@ -31,9 +31,10 @@ const PROJECTILE_RENDER_DISTANCE = 1650;
 // VITEZA DRONEI PRINCIPALE. Identica cu GameArena.jsx (Play vs AI) si cu
 // GAME_FRAME_SPEED din PvpArena.jsx, ca senzatia de miscare sa fie aceeasi
 // in toate modurile de joc.
-const PLAYER_SPEED = 2.6;
+// Battle Royale uses the same slightly faster baseline as Normal/Zone PvP.
+const PLAYER_SPEED = 2.8;
 
-const PROJECTILE_SPEED = 4.4;
+const PROJECTILE_SPEED = 4.8;
 const PROJECTILE_MAX_DISTANCE = 1500;
 const FIRE_COOLDOWN = 3000;
 
@@ -44,11 +45,20 @@ const BATTLE_PREPARE_DURATION = 30000;
 const KILL_HP_REWARD = 10;
 const KILL_ATTACK_SPEED_MULTIPLIER = 0.85;
 const MIN_KILL_ATTACK_SPEED_MULTIPLIER = 0.45;
+
+// Progression shared with Normal and Zone PvP. Each kill grants +15% movement
+// and +5% attack-drone speed, with caps that prevent runaway late-game speed.
+const KILL_MOVE_SPEED_STEP = 0.15;
+const KILL_ATTACK_DRONE_SPEED_STEP = 0.05;
+const MAX_MOVE_SPEED_MULTIPLIER = 1.75;
+const MAX_ATTACK_DRONE_SPEED_MULTIPLIER = 1.25;
 const ENERGY_CELL_RESTORE_AMOUNT = 25;
 const SHIELD_COST = 20;
 const SHIELD_DURATION = 3000;
 const HIT_DAMAGE = 15;
-const DRONE_HIT_DAMAGE = 10;
+// A launched attack drone always deals the projectile damage to HP. A target
+// with orbiting drones also loses one escort drone on that same impact.
+const DRONE_HIT_DAMAGE = 15;
 
 const BODY_COLLISION_DISTANCE = 145;
 const BODY_COLLISION_COOLDOWN = 650;
@@ -286,8 +296,17 @@ function getEffectiveProjectileSpeed(unit) {
   const now = Date.now();
   const rapidBonus = unit?.rapidFireUntil && unit.rapidFireUntil > now ? 0.75 : 0;
   const overclockBonus = unit?.overclockUntil && unit.overclockUntil > now ? 1.25 : 0;
+  const progressionMultiplier = Math.max(
+    1,
+    Number(unit?.attackDroneSpeedMultiplier || 1),
+  );
 
-  return PROJECTILE_SPEED + (unit?.projectileSpeedBonus || 0) + rapidBonus + overclockBonus;
+  return (
+    PROJECTILE_SPEED +
+    (unit?.projectileSpeedBonus || 0) +
+    rapidBonus +
+    overclockBonus
+  ) * progressionMultiplier;
 }
 
 function getProjectileDamage(unit) {
@@ -415,6 +434,16 @@ function applyKillRewardToUnit(unit) {
     nextDroneAt: getNextDroneAt(nextDrones),
     hp: nextHp,
     maxHp: nextMaxHp,
+    // Battle Royale now uses the same persistent kill progression as PvP.
+    moveSpeedMultiplier: Math.min(
+      MAX_MOVE_SPEED_MULTIPLIER,
+      Math.max(1, Number(unit.moveSpeedMultiplier || 1)) + KILL_MOVE_SPEED_STEP,
+    ),
+    attackDroneSpeedMultiplier: Math.min(
+      MAX_ATTACK_DRONE_SPEED_MULTIPLIER,
+      Math.max(1, Number(unit.attackDroneSpeedMultiplier || 1)) +
+        KILL_ATTACK_DRONE_SPEED_STEP,
+    ),
     killAttackSpeedMultiplier: nextKillAttackSpeedMultiplier,
     rapidFireUntil: hasRapidFireReward
       ? Date.now() + 10000
@@ -715,8 +744,16 @@ function applyBotMovement(bot, desiredMove, botDelta, currentZoneRadius, speedMu
   const vy = (bot.vy || 0) * 0.78 + move.y * 0.22;
   const smoothed = normalizeMove(vx, vy);
 
-  const rawX = bot.x + smoothed.x * BOT_SPEED * botDelta * speedMultiplier;
-  const rawY = bot.y + smoothed.y * BOT_SPEED * botDelta * speedMultiplier;
+  const progressionMoveMultiplier = Math.max(
+    1,
+    Number(bot.moveSpeedMultiplier || 1),
+  );
+  const rawX =
+    bot.x +
+    smoothed.x * BOT_SPEED * botDelta * speedMultiplier * progressionMoveMultiplier;
+  const rawY =
+    bot.y +
+    smoothed.y * BOT_SPEED * botDelta * speedMultiplier * progressionMoveMultiplier;
 
   const safePos = keepInsideSafeZone(rawX, rawY, currentZoneRadius, 35);
 
@@ -1222,6 +1259,8 @@ function createBot(index, spawnPoint = null) {
     rapidFireUntil: 0,
     attackCooldownMultiplier: 1,
     killAttackSpeedMultiplier: 1,
+    moveSpeedMultiplier: 1,
+    attackDroneSpeedMultiplier: 1,
     placement: null,
 
     hp: START_HP,
@@ -1579,7 +1618,9 @@ function BattleRoyale({ user, onExitToMenu }) {
   const energyCellsRef = useRef([]);
   const projectilesRef = useRef([]);
   const explosionsRef = useRef([]);
-  const damageTextsRef = useRef([]);
+  // Combat text is a compact world-space WebGL layer, not React/DOM state.
+  const combatEventsRef = useRef([]);
+  const combatEventSequenceRef = useRef(0);
   const coresRef = useRef([]);
   const pixiLiveRef = useRef(null);
 
@@ -1654,7 +1695,6 @@ function BattleRoyale({ user, onExitToMenu }) {
 
   const [projectiles, setProjectiles] = useState([]);
   const [explosions, setExplosions] = useState([]);
-  const [damageTexts, setDamageTexts] = useState([]);
   const [cores, setCores] = useState([]);
   const [coreNotice, setCoreNotice] = useState(null);
   const [effectTick, setEffectTick] = useState(Date.now());
@@ -1671,6 +1711,8 @@ function BattleRoyale({ user, onExitToMenu }) {
       rapidFireUntil: 0,
       attackCooldownMultiplier: 1,
       killAttackSpeedMultiplier: 1,
+    moveSpeedMultiplier: 1,
+    attackDroneSpeedMultiplier: 1,
     placement: null,
 
       hp: START_HP,
@@ -1799,24 +1841,45 @@ function BattleRoyale({ user, onExitToMenu }) {
     }, 550);
   };
 
+  const getCombatEventKind = (text, requestedKind = "damage") => {
+    const label = String(text || "").toUpperCase();
+    if (label.includes("SHIELD")) return "shield";
+    if (label.includes("ATTACK DRONE SPEED")) return "attack-reward";
+    if (label.includes("MOVE SPEED")) return "move-reward";
+    if (label.includes("+1 DRONE")) return "drone-reward";
+    if (label.includes("-1 DRONE") || label.includes("EMP -1 DRONE")) {
+      return "drone-loss";
+    }
+    if (requestedKind === "heal") return "heal";
+    return "damage";
+  };
+
+  // Keeps the same clean side-to-side animation and 2s lifetime as Normal/Zone PvP.
   const createDamageText = (x, y, text, type = "damage") => {
-    const item = {
-      id: crypto.randomUUID(),
-      x,
-      y,
-      text,
-      type,
+    const now = Date.now();
+    const sequence = combatEventSequenceRef.current + 1;
+    combatEventSequenceRef.current = sequence;
+
+    const event = {
+      id: `battle-combat-${sequence}-${crypto.randomUUID()}`,
+      x: Number(x || 0),
+      // Existing call sites pass a small upward offset for the old DOM text.
+      // Bring it back toward the drone; Pixi applies the final rising motion.
+      y: Number(y || 0) + 75,
+      text: String(text || "").slice(0, 42),
+      kind: getCombatEventKind(text, type),
+      side: sequence % 2 === 0 ? 1 : -1,
+      lane: sequence % 3,
+      createdAt: now,
+      ttl: 2000,
     };
 
-    damageTextsRef.current = [...damageTextsRef.current, item];
-    setDamageTexts([...damageTextsRef.current]);
-
-    setTimeout(() => {
-      damageTextsRef.current = damageTextsRef.current.filter(
-        (dmg) => dmg.id !== item.id
-      );
-      setDamageTexts([...damageTextsRef.current]);
-    }, 900);
+    combatEventsRef.current = [
+      ...combatEventsRef.current.filter(
+        (item) => now - Number(item?.createdAt || 0) < Number(item?.ttl || 2000),
+      ),
+      event,
+    ].slice(-96);
   };
 
   const addKillToPlayer = () => {
@@ -1824,27 +1887,46 @@ function BattleRoyale({ user, onExitToMenu }) {
     if (!p) return;
 
     const nextPlayer = applyKillRewardToUnit(p);
-
     playerRef.current = nextPlayer;
     setPlayer(nextPlayer);
 
-    createDamageText(
-      nextPlayer.x,
-      nextPlayer.y - 125,
-      nextPlayer.killStreak >= 3 ? "+10 HP +15% ATK + RAPID" : "+10 HP +15% ATK",
-      "heal"
-    );
+    const x = nextPlayer.x;
+    const y = nextPlayer.y;
+    const gainedHp = Math.max(0, nextPlayer.hp - p.hp);
+    if (gainedHp > 0) createDamageText(x, y - 44, `+${gainedHp} HP`, "heal");
+    if (nextPlayer.drones > p.drones) createDamageText(x, y - 62, "+1 DRONE", "drone-reward");
+    if (nextPlayer.moveSpeedMultiplier > (p.moveSpeedMultiplier || 1)) {
+      createDamageText(x, y - 80, "+15% MOVE SPEED", "move-reward");
+    }
+    if (nextPlayer.attackDroneSpeedMultiplier > (p.attackDroneSpeedMultiplier || 1)) {
+      createDamageText(x, y - 98, "+5% ATTACK DRONE SPEED", "attack-reward");
+    }
   };
 
   const addKillToBot = (botId) => {
+    let reward = null;
+    let before = null;
+
     const updatedBots = botsRef.current.map((bot) => {
       if (bot.id !== botId) return bot;
-
-      return applyKillRewardToUnit(bot);
+      before = bot;
+      reward = applyKillRewardToUnit(bot);
+      return reward;
     });
 
     botsRef.current = updatedBots;
     setBots(updatedBots);
+
+    if (!reward || !before) return;
+    const gainedHp = Math.max(0, reward.hp - before.hp);
+    if (gainedHp > 0) createDamageText(reward.x, reward.y - 44, `+${gainedHp} HP`, "heal");
+    if (reward.drones > before.drones) createDamageText(reward.x, reward.y - 62, "+1 DRONE", "drone-reward");
+    if (reward.moveSpeedMultiplier > (before.moveSpeedMultiplier || 1)) {
+      createDamageText(reward.x, reward.y - 80, "+15% MOVE SPEED", "move-reward");
+    }
+    if (reward.attackDroneSpeedMultiplier > (before.attackDroneSpeedMultiplier || 1)) {
+      createDamageText(reward.x, reward.y - 98, "+5% ATTACK DRONE SPEED", "attack-reward");
+    }
   };
 
   const buildMatchSummary = (matchWinner) => {
@@ -1942,6 +2024,8 @@ function BattleRoyale({ user, onExitToMenu }) {
       rapidFireUntil: 0,
       attackCooldownMultiplier: 1,
       killAttackSpeedMultiplier: 1,
+      moveSpeedMultiplier: 1,
+      attackDroneSpeedMultiplier: 1,
       shieldBreakerShots: 0,
       overclockUntil: 0,
       berserkUntil: 0,
@@ -2103,6 +2187,8 @@ function BattleRoyale({ user, onExitToMenu }) {
     setGameOver(false);
     setSpectatorTargetId(null);
     setDeathExplosion(null);
+    combatEventsRef.current = [];
+    combatEventSequenceRef.current = 0;
 
     const initialBots = createBots();
     botsRef.current = initialBots;
@@ -2129,6 +2215,8 @@ function BattleRoyale({ user, onExitToMenu }) {
       rapidFireUntil: 0,
       attackCooldownMultiplier: 1,
       killAttackSpeedMultiplier: 1,
+      moveSpeedMultiplier: 1,
+      attackDroneSpeedMultiplier: 1,
       shieldBreakerShots: 0,
       overclockUntil: 0,
       berserkUntil: 0,
@@ -2626,11 +2714,20 @@ function BattleRoyale({ user, onExitToMenu }) {
     }, CORE_RESPAWN_DELAY);
   };
 
-  const damagePlayer = (killerBotId = null, incomingDamage = HIT_DAMAGE, piercesShield = false, vampireOwnerType = null, vampireOwnerId = null) => {
+  const damagePlayer = (
+    killerBotId = null,
+    incomingDamage = HIT_DAMAGE,
+    piercesShield = false,
+    vampireOwnerType = null,
+    vampireOwnerId = null,
+  ) => {
     const p = playerRef.current;
     if (!p || !p.alive || gameOver) return;
 
-    if (p.shieldActive && !piercesShield) {
+    // Same as Normal/Zone PvP: every attack drone is fully absorbed by one
+    // active shield. It cannot damage HP or consume an orbital drone, even
+    // when a shield-breaker core fired the projectile. The shield drops now.
+    if (p.shieldActive) {
       if (shieldTimeoutRef.current) {
         clearTimeout(shieldTimeoutRef.current);
         shieldTimeoutRef.current = null;
@@ -2644,33 +2741,23 @@ function BattleRoyale({ user, onExitToMenu }) {
 
       playerRef.current = impact;
       setPlayer(impact);
-
       createExplosion(p.x, p.y, "shield");
-      createDamageText(p.x, p.y - 95, "SHIELD BROKEN", "block");
+      createDamageText(p.x, p.y - 72, "SHIELD BLOCKED", "shield");
       return;
     }
 
-    let nextDrones = p.drones;
-    let nextHp = p.hp;
-    let nextProgress = p.progress;
-    let nextDroneAt = p.nextDroneAt;
-
-    if (nextDrones > 0) {
-      nextDrones = Math.max(0, nextDrones - 1);
-      nextProgress = 0;
-      nextDroneAt = getNextDroneAt(nextDrones);
-      nextHp = Math.max(0, nextHp - DRONE_HIT_DAMAGE);
-
-      createExplosion(p.x, p.y, "cyan");
-      createDamageText(p.x, p.y - 95, "-1 DRONE", "damage");
-      createDamageText(p.x, p.y - 65, `-${DRONE_HIT_DAMAGE} HP`, "damage");
-    } else {
-      nextHp = Math.max(0, nextHp - incomingDamage);
-      createExplosion(p.x, p.y, "red");
-      createDamageText(p.x, p.y - 80, `-${incomingDamage}`, "damage");
-    }
-
+    const hpBefore = Number(p.hp || 0);
+    const removedDrone = Number(p.drones || 0) > 0;
+    const nextDrones = removedDrone ? Math.max(0, p.drones - 1) : p.drones;
+    const nextHp = Math.max(0, hpBefore - Math.max(0, Number(incomingDamage || HIT_DAMAGE)));
+    const nextProgress = removedDrone ? 0 : p.progress;
+    const nextDroneAt = removedDrone ? getNextDroneAt(nextDrones) : p.nextDroneAt;
+    const dealtDamage = Math.max(0, hpBefore - nextHp);
     const isDead = nextHp <= 0;
+
+    createExplosion(p.x, p.y, "red");
+    if (dealtDamage > 0) createDamageText(p.x, p.y - 62, `-${dealtDamage} HP`, "damage");
+    if (removedDrone) createDamageText(p.x, p.y - 90, "-1 DRONE", "drone-loss");
 
     const nextPlayer = {
       ...p,
@@ -2684,46 +2771,61 @@ function BattleRoyale({ user, onExitToMenu }) {
     playerRef.current = nextPlayer;
     setPlayer(nextPlayer);
 
-    if (vampireOwnerType && nextHp < p.hp) {
-      healVampireOwner(vampireOwnerType, vampireOwnerId, p.hp - nextHp);
+    if (vampireOwnerType && dealtDamage > 0) {
+      healVampireOwner(vampireOwnerType, vampireOwnerId, dealtDamage);
     }
 
     if (isDead) triggerPlayerDeath(nextPlayer, killerBotId);
   };
 
-  const damageBot = (botId, x, y, killerType = "player", killerBotId = null, incomingDamage = HIT_DAMAGE, piercesShield = false, vampireOwnerType = null, vampireOwnerId = null) => {
+  const damageBot = (
+    botId,
+    x,
+    y,
+    killerType = "player",
+    killerBotId = null,
+    incomingDamage = HIT_DAMAGE,
+    piercesShield = false,
+    vampireOwnerType = null,
+    vampireOwnerId = null,
+  ) => {
     let wasHit = false;
     let botDied = false;
+    let actualDamage = 0;
 
     const updatedBots = botsRef.current.map((bot) => {
       if (!bot.alive || bot.id !== botId) return bot;
-
       wasHit = true;
 
-      let nextDrones = bot.drones;
-      let nextHp = bot.hp;
-
-      if (nextDrones > 0) {
-        nextDrones = Math.max(0, nextDrones - 1);
-        nextHp = Math.max(0, nextHp - DRONE_HIT_DAMAGE);
-        createDamageText(x, y - 35, "-1 DRONE", "block");
-        createDamageText(x, y - 60, `-${DRONE_HIT_DAMAGE} HP`, "damage");
-      } else {
-        nextHp = Math.max(0, nextHp - incomingDamage);
-        createDamageText(x, y - 45, `-${incomingDamage}`, "damage");
+      // Bots also obey the same shield rule. They do not yet proactively cast
+      // a shield, but this preserves correct behavior for any active shield.
+      if (bot.shieldActive) {
+        createExplosion(x, y, "shield");
+        createDamageText(x, y - 72, "SHIELD BLOCKED", "shield");
+        return {
+          ...bot,
+          shieldActive: false,
+          shieldHit: Date.now(),
+        };
       }
 
-      if (nextHp <= 0 && bot.alive) {
-        botDied = true;
-      }
+      const hpBefore = Number(bot.hp || 0);
+      const removedDrone = Number(bot.drones || 0) > 0;
+      const nextDrones = removedDrone ? Math.max(0, bot.drones - 1) : bot.drones;
+      const nextHp = Math.max(0, hpBefore - Math.max(0, Number(incomingDamage || HIT_DAMAGE)));
+      actualDamage = Math.max(actualDamage, hpBefore - nextHp);
+
+      if (nextHp <= 0 && bot.alive) botDied = true;
 
       createExplosion(x, y, "red");
+      if (actualDamage > 0) createDamageText(x, y - 62, `-${hpBefore - nextHp} HP`, "damage");
+      if (removedDrone) createDamageText(x, y - 90, "-1 DRONE", "drone-loss");
 
       return {
         ...bot,
         drones: nextDrones,
-        progress: nextDrones < bot.drones ? 0 : bot.progress,
-        nextDroneAt: nextDrones < bot.drones ? getNextDroneAt(nextDrones) : bot.nextDroneAt,
+        progress: removedDrone ? 0 : bot.progress,
+        nextDroneAt: removedDrone ? getNextDroneAt(nextDrones) : bot.nextDroneAt,
         hp: nextHp,
         alive: nextHp > 0,
         killStreak: nextHp > 0 ? bot.killStreak || 0 : 0,
@@ -2737,18 +2839,13 @@ function BattleRoyale({ user, onExitToMenu }) {
       setBots(updatedBots);
     }
 
-    if (wasHit && vampireOwnerType) {
-      healVampireOwner(vampireOwnerType, vampireOwnerId, incomingDamage);
+    if (wasHit && vampireOwnerType && actualDamage > 0) {
+      healVampireOwner(vampireOwnerType, vampireOwnerId, actualDamage);
     }
 
     if (botDied) {
-      if (killerType === "player") {
-        addKillToPlayer();
-      }
-
-      if (killerType === "bot" && killerBotId) {
-        addKillToBot(killerBotId);
-      }
+      if (killerType === "player") addKillToPlayer();
+      if (killerType === "bot" && killerBotId) addKillToBot(killerBotId);
     }
 
     return wasHit;
@@ -3670,7 +3767,8 @@ function BattleRoyale({ user, onExitToMenu }) {
 
       let dx = 0;
       let dy = 0;
-      const speed = PLAYER_SPEED;
+      const speed =
+        PLAYER_SPEED * Math.max(1, Number(p.moveSpeedMultiplier || 1));
 
       if (isPlayerAlive) {
         if (keys.current["w"]) dy -= 1;
@@ -4585,6 +4683,7 @@ function BattleRoyale({ user, onExitToMenu }) {
         cores: coresRef.current,
         projectiles: updatedProjectiles,
         simpleProjectiles: [],
+        combatEvents: combatEventsRef.current,
         cameraX: liveViewportWidth / 2 - (liveTarget?.x || 0) * liveScale,
         cameraY: liveViewportHeight / 2 - (liveTarget?.y || 0) * liveScale,
         scale: liveScale,
@@ -4594,6 +4693,7 @@ function BattleRoyale({ user, onExitToMenu }) {
         worldHeight: WORLD_HEIGHT,
         safeZoneRadius: currentZoneRadius,
         showZone: true,
+        worldTheme: "battle-royale-pixel-terrain",
       };
 
       if (now - lastProjectilesRenderSyncRef.current >= (perfProfileRef.current.isLowEndDevice ? 100 : 66)) {
@@ -5042,18 +5142,6 @@ function BattleRoyale({ user, onExitToMenu }) {
           </div>
         ))}
 
-        {damageTexts.map((item) => (
-          <div
-            key={item.id}
-            className={`damage-text damage-${item.type}`}
-            style={{
-              left: item.x,
-              top: item.y,
-            }}
-          >
-            {item.text}
-          </div>
-        ))}
 
         {deathExplosion && (
           <div
@@ -5081,6 +5169,7 @@ function BattleRoyale({ user, onExitToMenu }) {
         cores={visibleCores}
         projectiles={fullProjectiles}
         simpleProjectiles={simpleProjectiles}
+        combatEvents={combatEventsRef.current}
         cameraX={cameraX}
         cameraY={cameraY}
         scale={mobileWorldScale}
@@ -5094,6 +5183,7 @@ function BattleRoyale({ user, onExitToMenu }) {
         worldHeight={WORLD_HEIGHT}
         safeZoneRadius={safeZoneRadius}
         showZone={true}
+        worldTheme="battle-royale-pixel-terrain"
         forceLowQuality={false}
       />
 

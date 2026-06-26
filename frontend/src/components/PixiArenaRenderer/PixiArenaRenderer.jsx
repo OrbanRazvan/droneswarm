@@ -69,6 +69,14 @@ const MAX_RENDERED_PLAYERS = 60;
 const MAX_RENDERED_PROJECTILES = 96;
 const COMBAT_EVENT_MAX_RENDERED = 32;
 
+// Battle Royale-only pixel terrain. It is generated once as a low-resolution
+// canvas texture and scaled across the complete world with nearest-neighbour
+// sampling. It is visual-only: no collision, spawn, loot or game-rule code
+// reads this layer.
+const PIXEL_TERRAIN_THEME = "battle-royale-pixel-terrain";
+const PIXEL_TERRAIN_TEXTURE_SIZE = 1536;
+const PIXEL_TERRAIN_CELL_SIZE = 3;
+
 // All motion below is transform-only: no Graphics geometry is rebuilt while
 // the game runs. That keeps turns and shields smooth even in 50–60 player rooms.
 const MAIN_ROTOR_POINTS = [
@@ -1075,19 +1083,430 @@ function createResources(coreTypes = []) {
 
 function drawBackground(graphics, width, height) {
   graphics.clear();
-  graphics.rect(0, 0, width, height).fill({ color: 0x040b18, alpha: 1 });
+  // This is visible only outside the actual world. The Battle Royale terrain
+  // itself lives inside the transformed world container, so it follows the
+  // camera across the full 14k x 14k map.
+  graphics.rect(0, 0, width, height).fill({ color: 0x02070d, alpha: 1 });
+}
 
-  const step = 96;
-  const startX = -step;
-  const startY = -step;
-  for (let x = startX; x <= width + step; x += step) {
-    graphics.moveTo(x, 0).lineTo(x, height).stroke({ color: 0x113056, width: 1, alpha: 0.18 });
+function pixelHash(x, y, seed = 1337) {
+  let value = (x * 374761393 + y * 668265263 + seed * 69069) >>> 0;
+  value = (value ^ (value >>> 13)) * 1274126177;
+  return ((value ^ (value >>> 16)) >>> 0) / 4294967295;
+}
+
+function pixelSmooth(value) {
+  return value * value * (3 - 2 * value);
+}
+
+function pixelNoise(x, y, scale, seed = 1337) {
+  const sx = x / scale;
+  const sy = y / scale;
+  const x0 = Math.floor(sx);
+  const y0 = Math.floor(sy);
+  const tx = pixelSmooth(sx - x0);
+  const ty = pixelSmooth(sy - y0);
+  const a = pixelHash(x0, y0, seed);
+  const b = pixelHash(x0 + 1, y0, seed);
+  const c = pixelHash(x0, y0 + 1, seed);
+  const d = pixelHash(x0 + 1, y0 + 1, seed);
+  const top = a + (b - a) * tx;
+  const bottom = c + (d - c) * tx;
+  return top + (bottom - top) * ty;
+}
+
+function pixelFractal(x, y, seed = 1337) {
+  return (
+    pixelNoise(x, y, 44, seed) * 0.54 +
+    pixelNoise(x, y, 19, seed + 47) * 0.28 +
+    pixelNoise(x, y, 7, seed + 91) * 0.18
+  );
+}
+
+function pixelLandScore(nx, ny) {
+  // Large, deterministic continental mass with bays, islands and a clear
+  // coastline. `nx` / `ny` are in [0, 1], so the same terrain works at any
+  // world size without touching gameplay coordinates.
+  const centerX = (nx - 0.52) / 0.78;
+  const centerY = (ny - 0.50) / 0.94;
+  const centralContinent = 0.94 - Math.hypot(centerX, centerY);
+  const northIsland = 0.54 - Math.hypot((nx - 0.22) / 0.25, (ny - 0.24) / 0.2);
+  const eastIsland = 0.42 - Math.hypot((nx - 0.83) / 0.18, (ny - 0.68) / 0.22);
+  const southIsland = 0.35 - Math.hypot((nx - 0.46) / 0.18, (ny - 0.84) / 0.15);
+  const coastline = pixelFractal(nx * 160, ny * 160, 808) * 0.34;
+  return Math.max(centralContinent, northIsland, eastIsland, southIsland) + coastline;
+}
+
+function fillPixelRect(ctx, x, y, size, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, size, size);
+}
+
+function drawPixelRoad(ctx, points, width, color) {
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineCap = "square";
+  ctx.lineJoin = "miter";
+  ctx.beginPath();
+  points.forEach((point, index) => {
+    if (index === 0) ctx.moveTo(Math.round(point[0]), Math.round(point[1]));
+    else ctx.lineTo(Math.round(point[0]), Math.round(point[1]));
+  });
+  ctx.stroke();
+  ctx.restore();
+}
+
+function findPixelLandSpot(mask, cells, random, margin = 10) {
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    const x = margin + Math.floor(random() * Math.max(1, cells - margin * 2));
+    const y = margin + Math.floor(random() * Math.max(1, cells - margin * 2));
+    if (mask[y * cells + x]) return { x, y };
   }
-  for (let y = startY; y <= height + step; y += step) {
-    graphics.moveTo(0, y).lineTo(width, y).stroke({ color: 0x113056, width: 1, alpha: 0.18 });
+  return { x: Math.floor(cells * 0.5), y: Math.floor(cells * 0.5) };
+}
+
+function createPixelTerrainTexture(worldWidth, worldHeight) {
+  // This is intentionally a smooth, high-detail aerial illustration, not a
+  // pixel-art map. It is generated only once for Battle Royale and remains a
+  // decorative canvas texture: no gameplay, collision, AI or loot data changes.
+  const size = isMobileDevice() ? 2048 : 3072;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+
+  const ctx = canvas.getContext("2d", { alpha: false });
+  ctx.imageSmoothingEnabled = true;
+
+  let randomState = 0x8f5c2a17;
+  const random = () => {
+    randomState = (randomState * 1664525 + 1013904223) >>> 0;
+    return randomState / 4294967296;
+  };
+
+  const px = (value) => value * size;
+
+  const ocean = ctx.createLinearGradient(0, 0, size, size);
+  ocean.addColorStop(0, "#0a3149");
+  ocean.addColorStop(0.38, "#0e5874");
+  ocean.addColorStop(0.72, "#11748a");
+  ocean.addColorStop(1, "#0b3d57");
+  ctx.fillStyle = ocean;
+  ctx.fillRect(0, 0, size, size);
+
+  // Soft depth / current patterns keep the ocean alive without looking tiled.
+  for (let index = 0; index < 150; index += 1) {
+    const x = random() * size;
+    const y = random() * size;
+    const radius = px(0.045 + random() * 0.12);
+    const wash = ctx.createRadialGradient(x, y, 0, x, y, radius);
+    wash.addColorStop(0, random() > 0.52 ? "rgba(102, 225, 237, 0.075)" : "rgba(0, 20, 55, 0.055)");
+    wash.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = wash;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
   }
 
-  graphics.circle(width * 0.5, height * 0.42, Math.max(width, height) * 0.5).fill({ color: 0x00314f, alpha: 0.07 });
+  const createIslandPath = (cx, cy, rx, ry, seed, points = 128) => {
+    const list = [];
+    for (let index = 0; index < points; index += 1) {
+      const angle = (index / points) * Math.PI * 2;
+      const broad = pixelNoise(
+        Math.cos(angle) * 90 + seed,
+        Math.sin(angle) * 90 - seed,
+        18,
+        seed,
+      );
+      const fine = pixelNoise(
+        Math.cos(angle) * 250 + seed * 2,
+        Math.sin(angle) * 250 - seed * 2,
+        33,
+        seed + 17,
+      );
+      const radius = 0.86 + (broad - 0.5) * 0.25 + (fine - 0.5) * 0.08;
+      list.push({
+        x: cx + Math.cos(angle) * rx * radius,
+        y: cy + Math.sin(angle) * ry * radius,
+      });
+    }
+
+    const path = new Path2D();
+    const first = list[0];
+    const last = list[list.length - 1];
+    path.moveTo((last.x + first.x) * 0.5, (last.y + first.y) * 0.5);
+    list.forEach((point, index) => {
+      const next = list[(index + 1) % list.length];
+      path.quadraticCurveTo(point.x, point.y, (point.x + next.x) * 0.5, (point.y + next.y) * 0.5);
+    });
+    path.closePath();
+    return path;
+  };
+
+  const drawRoad = (points, width = 10) => {
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    points.forEach(([x, y], index) => {
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = "rgba(32, 54, 46, 0.5)";
+    ctx.lineWidth = width + 5;
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(187, 170, 112, 0.72)";
+    ctx.lineWidth = width;
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(244, 227, 168, 0.36)";
+    ctx.lineWidth = Math.max(1, width * 0.18);
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  const drawRiver = (points, width = 28) => {
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    points.forEach(([x, y], index) => {
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = "rgba(5, 55, 72, 0.38)";
+    ctx.lineWidth = width + 16;
+    ctx.stroke();
+    const river = ctx.createLinearGradient(0, 0, size, size);
+    river.addColorStop(0, "#1c8eaa");
+    river.addColorStop(0.5, "#30b8c7");
+    river.addColorStop(1, "#187893");
+    ctx.strokeStyle = river;
+    ctx.lineWidth = width;
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(210, 253, 255, 0.32)";
+    ctx.lineWidth = Math.max(1, width * 0.16);
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  const drawForest = (cx, cy, radiusX, radiusY, count = 90) => {
+    for (let index = 0; index < count; index += 1) {
+      const angle = random() * Math.PI * 2;
+      const distance = Math.sqrt(random());
+      const x = cx + Math.cos(angle) * radiusX * distance;
+      const y = cy + Math.sin(angle) * radiusY * distance;
+      const radius = 3 + random() * 10;
+      const tree = ctx.createRadialGradient(x - radius * 0.25, y - radius * 0.32, 0, x, y, radius);
+      tree.addColorStop(0, "rgba(116, 185, 89, 0.82)");
+      tree.addColorStop(0.55, random() > 0.5 ? "rgba(39, 104, 62, 0.84)" : "rgba(30, 88, 58, 0.84)");
+      tree.addColorStop(1, "rgba(17, 55, 42, 0.16)");
+      ctx.fillStyle = tree;
+      ctx.beginPath();
+      ctx.ellipse(x, y, radius * (0.8 + random() * 0.45), radius * (0.75 + random() * 0.45), random() * Math.PI, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  };
+
+  const drawField = (x, y, width, height, angle, colorA, colorB) => {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    const field = ctx.createLinearGradient(-width * 0.5, -height * 0.5, width * 0.5, height * 0.5);
+    field.addColorStop(0, colorA);
+    field.addColorStop(1, colorB);
+    ctx.fillStyle = field;
+    ctx.fillRect(-width * 0.5, -height * 0.5, width, height);
+    ctx.strokeStyle = "rgba(52, 84, 43, 0.34)";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(-width * 0.5, -height * 0.5, width, height);
+    ctx.strokeStyle = "rgba(255, 245, 196, 0.12)";
+    ctx.lineWidth = 1;
+    for (let stripe = -width * 0.42; stripe < width * 0.42; stripe += 10) {
+      ctx.beginPath();
+      ctx.moveTo(stripe, -height * 0.45);
+      ctx.lineTo(stripe, height * 0.45);
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
+
+  const drawCity = (cx, cy, scale = 1) => {
+    const radius = 92 * scale;
+    const cityShade = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+    cityShade.addColorStop(0, "rgba(185, 207, 202, 0.92)");
+    cityShade.addColorStop(0.45, "rgba(112, 143, 143, 0.88)");
+    cityShade.addColorStop(1, "rgba(41, 68, 70, 0)");
+    ctx.fillStyle = cityShade;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, radius * 1.26, radius, 0.25, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(0.22);
+    for (let row = -7; row <= 7; row += 1) {
+      for (let col = -8; col <= 8; col += 1) {
+        if ((row + col) % 5 === 0) continue;
+        const blockW = 4 + random() * 5;
+        const blockH = 4 + random() * 5;
+        const bx = col * 8 + (row % 2) * 2;
+        const by = row * 7;
+        ctx.fillStyle = random() > 0.5 ? "rgba(211, 220, 205, 0.82)" : "rgba(108, 132, 135, 0.88)";
+        ctx.fillRect(bx - blockW * 0.5, by - blockH * 0.5, blockW, blockH);
+      }
+    }
+    ctx.strokeStyle = "rgba(72, 91, 90, 0.86)";
+    ctx.lineWidth = 2;
+    for (let lane = -5; lane <= 5; lane += 2) {
+      ctx.beginPath();
+      ctx.moveTo(-64, lane * 9);
+      ctx.lineTo(64, lane * 9);
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
+
+  const islands = [
+    { path: createIslandPath(px(0.48), px(0.52), px(0.40), px(0.45), 811), cx: px(0.48), cy: px(0.52), rx: px(0.40), ry: px(0.45) },
+    { path: createIslandPath(px(0.18), px(0.23), px(0.17), px(0.15), 917, 86), cx: px(0.18), cy: px(0.23), rx: px(0.17), ry: px(0.15) },
+    { path: createIslandPath(px(0.82), px(0.69), px(0.16), px(0.21), 1031, 92), cx: px(0.82), cy: px(0.69), rx: px(0.16), ry: px(0.21) },
+    { path: createIslandPath(px(0.46), px(0.87), px(0.18), px(0.12), 1201, 80), cx: px(0.46), cy: px(0.87), rx: px(0.18), ry: px(0.12) },
+  ];
+
+  islands.forEach((island, index) => {
+    ctx.save();
+    ctx.shadowColor = "rgba(0, 17, 30, 0.45)";
+    ctx.shadowBlur = 28;
+    ctx.shadowOffsetY = 10;
+    ctx.fillStyle = "#1d5e61";
+    ctx.fill(island.path);
+    ctx.restore();
+
+    ctx.save();
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "rgba(158, 239, 238, 0.5)";
+    ctx.lineWidth = 28;
+    ctx.stroke(island.path);
+    ctx.strokeStyle = "rgba(232, 211, 145, 0.95)";
+    ctx.lineWidth = 17;
+    ctx.stroke(island.path);
+
+    const land = ctx.createRadialGradient(
+      island.cx - island.rx * 0.28,
+      island.cy - island.ry * 0.32,
+      island.rx * 0.05,
+      island.cx,
+      island.cy,
+      Math.max(island.rx, island.ry) * 1.06,
+    );
+    land.addColorStop(0, index === 0 ? "#b7d76a" : "#a8ce71");
+    land.addColorStop(0.42, index === 0 ? "#70aa59" : "#6ca857");
+    land.addColorStop(1, "#356f4e");
+    ctx.fillStyle = land;
+    ctx.fill(island.path);
+    ctx.clip(island.path);
+
+    // Gentle elevation and grass / dirt variation.
+    for (let patch = 0; patch < 130; patch += 1) {
+      const x = island.cx + (random() - 0.5) * island.rx * 1.9;
+      const y = island.cy + (random() - 0.5) * island.ry * 1.9;
+      const r = 18 + random() * 110;
+      const tint = ctx.createRadialGradient(x, y, 0, x, y, r);
+      tint.addColorStop(0, random() > 0.54 ? "rgba(215, 234, 139, 0.10)" : "rgba(23, 79, 50, 0.10)");
+      tint.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ctx.fillStyle = tint;
+      ctx.beginPath();
+      ctx.ellipse(x, y, r, r * (0.55 + random() * 0.35), random() * Math.PI, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    for (let field = 0; field < (index === 0 ? 48 : 16); field += 1) {
+      const x = island.cx + (random() - 0.5) * island.rx * 1.45;
+      const y = island.cy + (random() - 0.5) * island.ry * 1.45;
+      drawField(
+        x,
+        y,
+        22 + random() * 44,
+        16 + random() * 34,
+        (random() - 0.5) * 0.7,
+        random() > 0.5 ? "rgba(186, 181, 84, 0.42)" : "rgba(124, 169, 83, 0.42)",
+        random() > 0.5 ? "rgba(147, 151, 69, 0.35)" : "rgba(97, 137, 68, 0.36)",
+      );
+    }
+
+    const forests = index === 0 ? 16 : 6;
+    for (let forest = 0; forest < forests; forest += 1) {
+      drawForest(
+        island.cx + (random() - 0.5) * island.rx * 1.3,
+        island.cy + (random() - 0.5) * island.ry * 1.25,
+        30 + random() * 85,
+        22 + random() * 58,
+        38 + Math.floor(random() * 58),
+      );
+    }
+
+    ctx.restore();
+  });
+
+  // Wide rivers / lakes above the terrain pass. Their bank shadows create depth.
+  drawRiver([ [px(0.20), px(0.10)], [px(0.23), px(0.22)], [px(0.20), px(0.34)], [px(0.25), px(0.46)], [px(0.22), px(0.60)], [px(0.28), px(0.78)] ], 30);
+  drawRiver([ [px(0.03), px(0.54)], [px(0.16), px(0.50)], [px(0.29), px(0.52)], [px(0.42), px(0.47)], [px(0.57), px(0.50)], [px(0.76), px(0.47)], [px(0.99), px(0.52)] ], 24);
+  drawRiver([ [px(0.53), px(0.05)], [px(0.50), px(0.17)], [px(0.55), px(0.29)], [px(0.52), px(0.41)], [px(0.58), px(0.55)], [px(0.56), px(0.70)] ], 20);
+
+  const city = [px(0.64), px(0.28)];
+  drawCity(city[0], city[1], 1.22);
+  drawCity(px(0.37), px(0.70), 0.66);
+  drawCity(px(0.79), px(0.66), 0.58);
+
+  drawRoad([city, [px(0.54), px(0.35)], [px(0.43), px(0.46)], [px(0.31), px(0.53)]], 8);
+  drawRoad([city, [px(0.72), px(0.39)], [px(0.79), px(0.52)], [px(0.82), px(0.66)]], 7);
+  drawRoad([city, [px(0.58), px(0.48)], [px(0.48), px(0.58)], [px(0.37), px(0.70)]], 8);
+  drawRoad([[px(0.37), px(0.70)], [px(0.43), px(0.78)], [px(0.47), px(0.87)]], 6);
+  drawRoad([[px(0.28), px(0.31)], [px(0.37), px(0.28)], [px(0.48), px(0.25)], city], 6);
+
+  // Fine atmospheric haze at the edge of the world. It gives the map a more
+  // premium aerial-camera look while preserving readability of drones and loot.
+  const vignette = ctx.createRadialGradient(px(0.5), px(0.5), px(0.18), px(0.5), px(0.5), px(0.78));
+  vignette.addColorStop(0, "rgba(0, 0, 0, 0)");
+  vignette.addColorStop(0.72, "rgba(3, 24, 34, 0.08)");
+  vignette.addColorStop(1, "rgba(3, 15, 25, 0.32)");
+  ctx.fillStyle = vignette;
+  ctx.fillRect(0, 0, size, size);
+
+  const texture = PIXI.Texture.from(canvas);
+  // Linear sampling removes the chunky pixel-art look from the earlier version.
+  if (texture?.source) texture.source.scaleMode = "linear";
+  if (texture?.baseTexture) texture.baseTexture.scaleMode = PIXI.SCALE_MODES?.LINEAR ?? "linear";
+
+  const sprite = new PIXI.Sprite(texture);
+  sprite.position.set(0, 0);
+  sprite.width = Math.max(1, Number(worldWidth || DEFAULT_WORLD_WIDTH));
+  sprite.height = Math.max(1, Number(worldHeight || DEFAULT_WORLD_HEIGHT));
+  sprite.alpha = 0.96;
+  sprite.eventMode = "none";
+  return sprite;
+}
+
+function syncWorldTerrain(layer, state, theme, worldWidth, worldHeight) {
+  const normalizedTheme = String(theme || "default");
+  const width = Math.max(1, Math.round(Number(worldWidth || DEFAULT_WORLD_WIDTH)));
+  const height = Math.max(1, Math.round(Number(worldHeight || DEFAULT_WORLD_HEIGHT)));
+  const key = `${normalizedTheme}:${width}:${height}`;
+  if (state.key === key) return;
+
+  state.key = key;
+  const previous = layer.removeChildren();
+  previous.forEach((child) => {
+    try {
+      child.destroy?.({ children: true, texture: true, textureSource: true });
+    } catch {
+      child.destroy?.();
+    }
+  });
+
+  if (normalizedTheme !== PIXEL_TERRAIN_THEME) return;
+  layer.addChild(createPixelTerrainTexture(width, height));
 }
 
 function safeDestroy(app) {
@@ -1126,6 +1545,7 @@ function PixiArenaRenderer({
   worldHeight = DEFAULT_WORLD_HEIGHT,
   safeZoneRadius = null,
   showZone = false,
+  worldTheme = "default",
 }) {
   const hostRef = useRef(null);
   const latestRef = useRef(null);
@@ -1150,6 +1570,7 @@ function PixiArenaRenderer({
     worldHeight,
     safeZoneRadius,
     showZone,
+    worldTheme,
     staticItemBudget,
   };
 
@@ -1201,6 +1622,11 @@ function PixiArenaRenderer({
       world.sortableChildren = true;
       world.zIndex = 1;
 
+      const terrainLayer = new PIXI.Container();
+      terrainLayer.eventMode = "none";
+      terrainLayer.interactiveChildren = false;
+      terrainLayer.zIndex = -1;
+
       const zone = new PIXI.Graphics(resources.zoneContext);
       zone.eventMode = "none";
       zone.visible = false;
@@ -1220,6 +1646,7 @@ function PixiArenaRenderer({
       combatLayer.zIndex = 4;
 
       world.addChild(
+        terrainLayer,
         zone,
         itemsLayer,
         projectilesLayer,
@@ -1236,6 +1663,7 @@ function PixiArenaRenderer({
       const projectilePool = [];
       const simpleProjectilePool = [];
       const combatTextMap = new Map();
+      const terrainState = { key: null };
 
       let lastStaticSync = 0;
       let lastZoneRadius = null;
@@ -1265,6 +1693,15 @@ function PixiArenaRenderer({
           scale: Math.max(0.1, Number(data.scale || 1)),
         };
 
+        // No game logic is executed here. This only makes a static sprite for
+        // Battle Royale and rebuilds it only when the theme or map size changes.
+        syncWorldTerrain(
+          terrainLayer,
+          terrainState,
+          data.worldTheme,
+          data.worldWidth,
+          data.worldHeight,
+        );
         setWorldTransform(world, camera.x, camera.y, camera.scale);
         const bounds = getBounds(camera.x, camera.y, camera.scale, width, height, 360);
 

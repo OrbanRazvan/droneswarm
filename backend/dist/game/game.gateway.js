@@ -199,6 +199,9 @@ let GameGateway = class GameGateway {
             room.emptySince = emptySince;
         return now - emptySince >= EMPTY_ROOM_GRACE_MS;
     }
+    usesProgressionPvpCombat(room) {
+        return Boolean(room?.normalMode || room?.zonePvpMode);
+    }
     getNormalOrbTarget(room) {
         if (!room?.normalMode)
             return MAX_ORBS;
@@ -240,7 +243,7 @@ let GameGateway = class GameGateway {
         };
     }
     pushCombatEvent(room, unit, text, kind, now = Date.now()) {
-        if (!room?.normalMode || !unit || !text)
+        if (!this.usesProgressionPvpCombat(room) || !unit || !text)
             return;
         if (!Array.isArray(room.combatEvents))
             room.combatEvents = [];
@@ -262,7 +265,7 @@ let GameGateway = class GameGateway {
         }
     }
     cleanupCombatEvents(room, now = Date.now()) {
-        if (!room?.normalMode || !Array.isArray(room.combatEvents))
+        if (!this.usesProgressionPvpCombat(room) || !Array.isArray(room.combatEvents))
             return;
         room.combatEvents = room.combatEvents.filter((event) => now - Number(event?.createdAt || 0) <
             Number(event?.ttl || 2000));
@@ -631,6 +634,8 @@ let GameGateway = class GameGateway {
             killStreak: 0,
             rapidFireUntil: 0,
             attackCooldownMultiplier: 1,
+            moveSpeedMultiplier: 1,
+            attackDroneSpeedMultiplier: 1,
             alive: true,
             input: {},
             lastSeenAt: Date.now(),
@@ -819,6 +824,7 @@ let GameGateway = class GameGateway {
                     this.collectCores(room, zoneRadius);
                     this.updateProjectiles(room, deltaFrames, now);
                     this.maintainWorldItems(room, zoneRadius, now);
+                    this.cleanupCombatEvents(room, now);
                     this.updateZonePvpWinCondition(room, now);
                 }
                 const broadcastInterval = room.players.size >= PVP_HEAVY_STATE_THRESHOLD
@@ -947,11 +953,11 @@ let GameGateway = class GameGateway {
             player.prevX = player.x;
             player.prevY = player.y;
             const length = Math.hypot(dx, dy) || 1;
-            const normalMoveMultiplier = room?.normalMode
+            const progressionMoveMultiplier = this.usesProgressionPvpCombat(room)
                 ? NORMAL_BASE_MOVE_SPEED_MULTIPLIER *
                     Math.max(1, Number(player.moveSpeedMultiplier || 1))
                 : 1;
-            const speed = PLAYER_SPEED * normalMoveMultiplier;
+            const speed = PLAYER_SPEED * progressionMoveMultiplier;
             const rawX = player.x + (dx / length) * speed * deltaFrames;
             const rawY = player.y + (dy / length) * speed * deltaFrames;
             const safe = this.keepInsideSafeZone(rawX, rawY, zoneRadius, PLAYER_RADIUS + 18, Boolean(room.zonePvpMode));
@@ -1007,7 +1013,7 @@ let GameGateway = class GameGateway {
         killer.maxHp = nextMaxHp;
         killer.hp = Math.min(nextMaxHp, previousHp + KILL_HP_REWARD);
         killer.killAttackSpeedMultiplier = Math.max(MIN_KILL_ATTACK_SPEED_MULTIPLIER, (killer.killAttackSpeedMultiplier || 1) * KILL_ATTACK_SPEED_MULTIPLIER);
-        if (room?.normalMode) {
+        if (this.usesProgressionPvpCombat(room)) {
             killer.moveSpeedMultiplier = Math.min(NORMAL_MAX_MOVE_SPEED_MULTIPLIER, previousMoveSpeed + NORMAL_KILL_MOVE_SPEED_STEP);
             killer.attackDroneSpeedMultiplier = Math.min(NORMAL_MAX_ATTACK_DRONE_SPEED_MULTIPLIER, previousAttackDroneSpeed + NORMAL_KILL_ATTACK_DRONE_SPEED_STEP);
             const gainedHp = Math.max(0, Number(killer.hp || 0) - previousHp);
@@ -1301,7 +1307,7 @@ let GameGateway = class GameGateway {
         const angle = Math.atan2(targetY - player.y, targetX - player.x);
         const rapidBonus = player.rapidFireUntil && player.rapidFireUntil > now ? 0.75 : 0;
         const overclockBonus = player.overclockUntil && player.overclockUntil > now ? 1.25 : 0;
-        const normalAttackDroneMultiplier = room?.normalMode
+        const progressionAttackDroneMultiplier = this.usesProgressionPvpCombat(room)
             ? NORMAL_BASE_ATTACK_DRONE_SPEED_MULTIPLIER *
                 Math.max(1, Number(player.attackDroneSpeedMultiplier || 1))
             : 1;
@@ -1309,7 +1315,7 @@ let GameGateway = class GameGateway {
             (player.projectileSpeedBonus || 0) +
             rapidBonus +
             overclockBonus) *
-            normalAttackDroneMultiplier;
+            progressionAttackDroneMultiplier;
         player.lastFireAt = now;
         player.drones = Math.max(0, player.drones - 1);
         this.resetDroneProgress(player);
@@ -1368,10 +1374,10 @@ let GameGateway = class GameGateway {
                 if (dx * dx + dy * dy > 105 * 105)
                     continue;
                 const owner = room.players.get(projectile.ownerId);
-                const normalShieldIntercept = Boolean(room?.normalMode && target.shieldActive);
-                const damageBlocked = normalShieldIntercept ||
+                const progressionShieldIntercept = Boolean(this.usesProgressionPvpCombat(room) && target.shieldActive);
+                const damageBlocked = progressionShieldIntercept ||
                     (target.shieldActive && !projectile.shieldBreaker);
-                if (normalShieldIntercept) {
+                if (progressionShieldIntercept) {
                     target.shieldActive = false;
                     target.shieldUntil = 0;
                     this.pushCombatEvent(room, target, "SHIELD BLOCKED", "shield", now);
@@ -1381,7 +1387,8 @@ let GameGateway = class GameGateway {
                     const hpBefore = Number(target.hp || 0);
                     target.hp = Math.max(0, hpBefore - projectile.damage);
                     let removedDrone = false;
-                    if (room?.normalMode && (target.drones || 0) > 0) {
+                    if (this.usesProgressionPvpCombat(room) &&
+                        (target.drones || 0) > 0) {
                         target.drones = Math.max(0, Number(target.drones || 0) - 1);
                         target.nextDroneAt = this.getNextDroneAt(target.drones || 0);
                         removedDrone = true;
@@ -1393,7 +1400,7 @@ let GameGateway = class GameGateway {
                     if (owner && owner.vampireUntil && owner.vampireUntil > now) {
                         owner.hp = Math.min(owner.maxHp, owner.hp + Math.floor(projectile.damage * VAMPIRE_HEAL_RATIO));
                     }
-                    if (room?.normalMode) {
+                    if (this.usesProgressionPvpCombat(room)) {
                         this.pushCombatEvent(room, target, `-${Math.max(0, hpBefore - target.hp)} HP`, "damage", now);
                         if (removedDrone) {
                             this.pushCombatEvent(room, target, "-1 DRONE", "drone-loss", now);
@@ -2402,6 +2409,8 @@ let GameGateway = class GameGateway {
             cores: [],
             pendingCores: [],
             projectiles: [],
+            combatEvents: [],
+            combatEventSequence: 0,
             countdownStartedAt: null,
             createdAt: Date.now(),
             emptySince: Date.now(),
@@ -2572,6 +2581,14 @@ let GameGateway = class GameGateway {
                 projectiles: room.projectileSpatialIndex
                     ? this.filterNearIndexed(viewAnchor, room.projectileSpatialIndex, VIEW_DISTANCE + 400, 45)
                     : this.filterNear(viewAnchor, room.projectiles, VIEW_DISTANCE + 400, 45),
+                combatEvents: (room.combatEvents || [])
+                    .filter((event) => {
+                    const age = now - Number(event?.createdAt || 0);
+                    if (age < 0 || age >= Number(event?.ttl || 2000))
+                        return false;
+                    return this.isNear(viewAnchor, event, VIEW_DISTANCE + 800);
+                })
+                    .slice(-32),
             };
             if (includeViewportItems) {
                 payload.orbs = room.orbSpatialIndex

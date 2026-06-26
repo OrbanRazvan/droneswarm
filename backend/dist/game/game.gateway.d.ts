@@ -16,6 +16,7 @@ export declare class GameGateway {
     private markRoomOccupied;
     private markRoomEmptyIfNeeded;
     private shouldDeleteEmptyRoom;
+    private usesProgressionPvpCombat;
     private getNormalOrbTarget;
     private getNormalEnergyTarget;
     private getNormalRandomPoint;

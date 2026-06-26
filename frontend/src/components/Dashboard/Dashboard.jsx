@@ -491,14 +491,6 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
           <button onClick={() => setActiveTab("hangar")}>Hangar</button>
           {!isGuestUser && <button onClick={() => setActiveTab("shop")}>Shop</button>}
           <button
-            type="button"
-            className={`quality-switch-btn ${graphicsQuality === "low" ? "is-low" : ""}`}
-            onClick={() => setGraphicsQuality((current) => (current === "low" ? "normal" : "low"))}
-            title="Normal Quality: grafica completa. Low Quality: animatii oprite, rezolutie minima, performanta maxima pe telefoane slabe."
-          >
-            {graphicsQuality === "low" ? "Low Quality" : "Normal Quality"}
-          </button>
-          <button
             className="logout-btn"
             onClick={() => {
               localStorage.removeItem("token");
