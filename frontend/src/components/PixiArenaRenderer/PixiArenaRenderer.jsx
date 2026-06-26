@@ -404,17 +404,54 @@ function createRotorSpinContext(colors) {
 
 function createOrbContext(color) {
   const ctx = new PIXI.GraphicsContext();
-  ctx.circle(0, 0, 11).fill({ color, alpha: 0.98 });
-  ctx.circle(-3.5, -4, 3.3).fill({ color: 0xffffff, alpha: 0.55 });
-  ctx.circle(0, 0, 11).stroke({ color: 0xffffff, width: 1.5, alpha: 0.18 });
+  // Premium pickup marker: high contrast, color identity and a clean sci-fi
+  // halo so it remains visible above the aerial map without using blur filters.
+  ctx.circle(0, 0, 22).fill({ color: 0x020b12, alpha: 0.18 });
+  ctx.circle(0, 0, 19.5).stroke({ color, width: 2.2, alpha: 0.14 });
+  ctx.circle(0, 0, 16.5).stroke({ color: 0xffffff, width: 1.1, alpha: 0.16 });
+
+  // Small cardinal accents make the pickup recognizable at distance.
+  ctx.roundRect(-1.3, -22, 2.6, 6.2, 1.2).fill({ color, alpha: 0.54 });
+  ctx.roundRect(-1.3, 15.8, 2.6, 6.2, 1.2).fill({ color, alpha: 0.54 });
+  ctx.roundRect(-22, -1.3, 6.2, 2.6, 1.2).fill({ color, alpha: 0.54 });
+  ctx.roundRect(15.8, -1.3, 6.2, 2.6, 1.2).fill({ color, alpha: 0.54 });
+
+  ctx.circle(0, 0, 14.2).fill({ color: 0x04141e, alpha: 0.94 });
+  ctx.circle(0, 0, 12.1).stroke({ color, width: 2.6, alpha: 0.64 });
+  ctx.circle(0, 0, 9.6).fill({ color, alpha: 1 });
+  ctx.circle(0, 0, 6.1).fill({ color: 0xffffff, alpha: 0.14 });
+  ctx.circle(-3.4, -4.2, 3.4).fill({ color: 0xffffff, alpha: 0.82 });
+  ctx.circle(0, 0, 9.7).stroke({ color: 0xffffff, width: 1.4, alpha: 0.48 });
+
+  // A fine target reticle keeps the glow controlled and professional.
+  ctx.moveTo(-15.2, 0).lineTo(-10.8, 0).stroke({ color: 0xffffff, width: 1.25, alpha: 0.35 });
+  ctx.moveTo(10.8, 0).lineTo(15.2, 0).stroke({ color: 0xffffff, width: 1.25, alpha: 0.35 });
+  ctx.moveTo(0, -15.2).lineTo(0, -10.8).stroke({ color: 0xffffff, width: 1.25, alpha: 0.35 });
+  ctx.moveTo(0, 10.8).lineTo(0, 15.2).stroke({ color: 0xffffff, width: 1.25, alpha: 0.35 });
   return ctx;
 }
 
 function createEnergyContext() {
   const ctx = new PIXI.GraphicsContext();
-  ctx.roundRect(-10, -15, 20, 30, 5).fill({ color: 0x062f20, alpha: 1 });
-  ctx.roundRect(-7, -10, 14, 20, 3).fill({ color: 0x5effa7, alpha: 0.96 });
-  ctx.poly([2, -9, -5, 1, 0, 1, -3, 9, 6, -3, 1, -3]).fill({ color: 0xf4fff8, alpha: 0.96 });
+  // Premium energy beacon: dark outer silhouette + cyan/green power core.
+  ctx.circle(0, 0, 23).fill({ color: 0x020d12, alpha: 0.20 });
+  ctx.circle(0, 0, 20.5).stroke({ color: 0x67ffcb, width: 2.1, alpha: 0.20 });
+  ctx.circle(0, 0, 17.4).stroke({ color: 0xe5fff7, width: 1.0, alpha: 0.14 });
+
+  // Hex-like scanner brackets around the canister.
+  ctx.poly([-12, -12, 0, -19, 12, -12, 12, 12, 0, 19, -12, 12]).stroke({ color: 0x7dffd4, width: 1.6, alpha: 0.48 });
+  ctx.roundRect(-11.5, -17.5, 23, 35, 7).fill({ color: 0x062a31, alpha: 0.98 });
+  ctx.roundRect(-10.3, -16, 20.6, 32, 6).stroke({ color: 0xd5fff0, width: 1.35, alpha: 0.48 });
+  ctx.roundRect(-7.6, -11.4, 15.2, 22.8, 4.4).fill({ color: 0x58ffb0, alpha: 1 });
+  ctx.roundRect(-5.6, -9.2, 11.2, 18.4, 3.0).fill({ color: 0xd1fff0, alpha: 0.20 });
+
+  ctx.poly([2.4, -10.5, -6.2, 0.7, -0.6, 0.7, -4.2, 10.3, 7.2, -3.2, 1.2, -3.2]).fill({ color: 0xf8fffd, alpha: 1 });
+  ctx.poly([1.6, -7.4, -2.9, -0.7, -0.3, -0.7, -2.2, 5.1, 3.8, -2.1, 0.9, -2.1]).fill({ color: 0x5bffd0, alpha: 0.64 });
+
+  // Status LEDs below the power cell.
+  ctx.circle(-5.4, 13.1, 1.4).fill({ color: 0x5fffb6, alpha: 0.88 });
+  ctx.circle(0, 13.1, 1.4).fill({ color: 0xeafff7, alpha: 0.90 });
+  ctx.circle(5.4, 13.1, 1.4).fill({ color: 0x5fffb6, alpha: 0.88 });
   return ctx;
 }
 
@@ -739,9 +776,48 @@ function syncCombatTextLayer({ map, source, resources, parent, bounds, now }) {
   }
 }
 
-function createStaticVisual(context) {
+function createStaticVisual(context, kind = "item", phase = 0) {
   const root = new PIXI.Graphics(context);
-  return { root, context, lastSeenAt: 0 };
+  return {
+    root,
+    context,
+    kind,
+    phase,
+    lastSeenAt: 0,
+  };
+}
+
+function staticPhaseFromKey(key) {
+  let value = 2166136261;
+  const source = String(key || "pickup");
+  for (let index = 0; index < source.length; index += 1) {
+    value ^= source.charCodeAt(index);
+    value = Math.imul(value, 16777619);
+  }
+  return ((value >>> 0) / 4294967295) * Math.PI * 2;
+}
+
+function animateStaticPickups(map, now) {
+  for (const visual of map.values()) {
+    if (!visual?.root?.visible) continue;
+
+    const phase = Number(visual.phase || 0);
+    if (visual.kind === "orb") {
+      const pulse = 1 + Math.sin(now * 0.0062 + phase) * 0.085;
+      visual.root.scale.set(pulse);
+      visual.root.alpha = 0.89 + Math.sin(now * 0.0062 + phase) * 0.11;
+      visual.root.rotation = Math.sin(now * 0.0015 + phase) * 0.025;
+    } else if (visual.kind === "energy") {
+      const pulse = 1 + Math.sin(now * 0.0052 + phase) * 0.065;
+      visual.root.scale.set(pulse);
+      visual.root.alpha = 0.91 + Math.sin(now * 0.0052 + phase) * 0.09;
+      visual.root.rotation = Math.sin(now * 0.0019 + phase) * 0.032;
+    } else {
+      visual.root.scale.set(1);
+      visual.root.alpha = 1;
+      visual.root.rotation = 0;
+    }
+  }
 }
 
 function setWorldTransform(layer, cameraX, cameraY, scale) {
@@ -778,7 +854,7 @@ function upsertStaticLayer({ map, items, prefix, contexts, parent, now, maxItems
     let visual = map.get(key);
 
     if (!visual) {
-      visual = createStaticVisual(context);
+      visual = createStaticVisual(context, prefix, staticPhaseFromKey(key));
       visual.root.eventMode = "none";
       parent.addChild(visual.root);
       map.set(key, visual);
@@ -1168,10 +1244,9 @@ function findPixelLandSpot(mask, cells, random, margin = 10) {
 }
 
 function createPixelTerrainTexture(worldWidth, worldHeight) {
-  // This is intentionally a smooth, high-detail aerial illustration, not a
-  // pixel-art map. It is generated only once for Battle Royale and remains a
-  // decorative canvas texture: no gameplay, collision, AI or loot data changes.
-  const size = isMobileDevice() ? 2048 : 3072;
+  // High-end aerial / satellite-like world art for Battle Royale only.
+  // Decorative only: no gameplay, pathing, bots, loot or zone logic changes.
+  const size = isMobileDevice() ? 2560 : 4096;
   const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
@@ -1179,59 +1254,52 @@ function createPixelTerrainTexture(worldWidth, worldHeight) {
   const ctx = canvas.getContext("2d", { alpha: false });
   ctx.imageSmoothingEnabled = true;
 
-  let randomState = 0x8f5c2a17;
+  let randomState = 0x9d3b7c21;
   const random = () => {
     randomState = (randomState * 1664525 + 1013904223) >>> 0;
     return randomState / 4294967296;
   };
-
   const px = (value) => value * size;
 
+  // Deep ocean base with subtle large-scale tonal variation.
   const ocean = ctx.createLinearGradient(0, 0, size, size);
-  ocean.addColorStop(0, "#0a3149");
-  ocean.addColorStop(0.38, "#0e5874");
-  ocean.addColorStop(0.72, "#11748a");
-  ocean.addColorStop(1, "#0b3d57");
+  ocean.addColorStop(0, "#08283c");
+  ocean.addColorStop(0.28, "#0b4b68");
+  ocean.addColorStop(0.62, "#0f6a84");
+  ocean.addColorStop(1, "#0b354d");
   ctx.fillStyle = ocean;
   ctx.fillRect(0, 0, size, size);
 
-  // Soft depth / current patterns keep the ocean alive without looking tiled.
-  for (let index = 0; index < 150; index += 1) {
+  // Satellite-like water depth / current bands.
+  for (let index = 0; index < 220; index += 1) {
     const x = random() * size;
     const y = random() * size;
-    const radius = px(0.045 + random() * 0.12);
-    const wash = ctx.createRadialGradient(x, y, 0, x, y, radius);
-    wash.addColorStop(0, random() > 0.52 ? "rgba(102, 225, 237, 0.075)" : "rgba(0, 20, 55, 0.055)");
+    const rx = px(0.025 + random() * 0.11);
+    const ry = rx * (0.45 + random() * 0.65);
+    const wash = ctx.createRadialGradient(x, y, 0, x, y, rx);
+    wash.addColorStop(0, random() > 0.48 ? "rgba(117, 211, 225, 0.08)" : "rgba(6, 22, 39, 0.08)");
     wash.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate((random() - 0.5) * Math.PI);
+    ctx.scale(1, ry / rx);
     ctx.fillStyle = wash;
     ctx.beginPath();
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.arc(0, 0, rx, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
   }
 
-  const createIslandPath = (cx, cy, rx, ry, seed, points = 128) => {
+  const createIslandPath = (cx, cy, rx, ry, seed, points = 180) => {
     const list = [];
     for (let index = 0; index < points; index += 1) {
       const angle = (index / points) * Math.PI * 2;
-      const broad = pixelNoise(
-        Math.cos(angle) * 90 + seed,
-        Math.sin(angle) * 90 - seed,
-        18,
-        seed,
-      );
-      const fine = pixelNoise(
-        Math.cos(angle) * 250 + seed * 2,
-        Math.sin(angle) * 250 - seed * 2,
-        33,
-        seed + 17,
-      );
-      const radius = 0.86 + (broad - 0.5) * 0.25 + (fine - 0.5) * 0.08;
-      list.push({
-        x: cx + Math.cos(angle) * rx * radius,
-        y: cy + Math.sin(angle) * ry * radius,
-      });
+      const broad = pixelNoise(Math.cos(angle) * 110 + seed, Math.sin(angle) * 110 - seed, 19, seed);
+      const fine = pixelNoise(Math.cos(angle) * 280 + seed * 2, Math.sin(angle) * 280 - seed * 2, 37, seed + 17);
+      const detail = pixelNoise(Math.cos(angle) * 540 + seed * 3, Math.sin(angle) * 540 - seed * 3, 63, seed + 49);
+      const radius = 0.88 + (broad - 0.5) * 0.24 + (fine - 0.5) * 0.09 + (detail - 0.5) * 0.035;
+      list.push({ x: cx + Math.cos(angle) * rx * radius, y: cy + Math.sin(angle) * ry * radius });
     }
-
     const path = new Path2D();
     const first = list[0];
     const last = list[list.length - 1];
@@ -1244,7 +1312,7 @@ function createPixelTerrainTexture(worldWidth, worldHeight) {
     return path;
   };
 
-  const drawRoad = (points, width = 10) => {
+  const drawRoad = (points, width = 12, bright = false) => {
     ctx.save();
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
@@ -1253,19 +1321,22 @@ function createPixelTerrainTexture(worldWidth, worldHeight) {
       if (index === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });
-    ctx.strokeStyle = "rgba(32, 54, 46, 0.5)";
+    ctx.strokeStyle = "rgba(44, 56, 48, 0.38)";
     ctx.lineWidth = width + 5;
     ctx.stroke();
-    ctx.strokeStyle = "rgba(187, 170, 112, 0.72)";
+    const road = ctx.createLinearGradient(points[0][0], points[0][1], points[points.length - 1][0], points[points.length - 1][1]);
+    road.addColorStop(0, bright ? "rgba(199, 193, 164, 0.86)" : "rgba(173, 166, 142, 0.84)");
+    road.addColorStop(1, bright ? "rgba(149, 145, 124, 0.84)" : "rgba(139, 133, 112, 0.82)");
+    ctx.strokeStyle = road;
     ctx.lineWidth = width;
     ctx.stroke();
-    ctx.strokeStyle = "rgba(244, 227, 168, 0.36)";
-    ctx.lineWidth = Math.max(1, width * 0.18);
+    ctx.strokeStyle = "rgba(255, 246, 214, 0.18)";
+    ctx.lineWidth = Math.max(1.2, width * 0.12);
     ctx.stroke();
     ctx.restore();
   };
 
-  const drawRiver = (points, width = 28) => {
+  const drawRiver = (points, width = 30) => {
     ctx.save();
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
@@ -1274,38 +1345,20 @@ function createPixelTerrainTexture(worldWidth, worldHeight) {
       if (index === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });
-    ctx.strokeStyle = "rgba(5, 55, 72, 0.38)";
-    ctx.lineWidth = width + 16;
+    ctx.strokeStyle = "rgba(8, 42, 56, 0.34)";
+    ctx.lineWidth = width + 18;
     ctx.stroke();
     const river = ctx.createLinearGradient(0, 0, size, size);
-    river.addColorStop(0, "#1c8eaa");
-    river.addColorStop(0.5, "#30b8c7");
-    river.addColorStop(1, "#187893");
+    river.addColorStop(0, "#218eb1");
+    river.addColorStop(0.45, "#47c2d3");
+    river.addColorStop(1, "#1d7697");
     ctx.strokeStyle = river;
     ctx.lineWidth = width;
     ctx.stroke();
-    ctx.strokeStyle = "rgba(210, 253, 255, 0.32)";
-    ctx.lineWidth = Math.max(1, width * 0.16);
+    ctx.strokeStyle = "rgba(210, 253, 255, 0.26)";
+    ctx.lineWidth = Math.max(1, width * 0.12);
     ctx.stroke();
     ctx.restore();
-  };
-
-  const drawForest = (cx, cy, radiusX, radiusY, count = 90) => {
-    for (let index = 0; index < count; index += 1) {
-      const angle = random() * Math.PI * 2;
-      const distance = Math.sqrt(random());
-      const x = cx + Math.cos(angle) * radiusX * distance;
-      const y = cy + Math.sin(angle) * radiusY * distance;
-      const radius = 3 + random() * 10;
-      const tree = ctx.createRadialGradient(x - radius * 0.25, y - radius * 0.32, 0, x, y, radius);
-      tree.addColorStop(0, "rgba(116, 185, 89, 0.82)");
-      tree.addColorStop(0.55, random() > 0.5 ? "rgba(39, 104, 62, 0.84)" : "rgba(30, 88, 58, 0.84)");
-      tree.addColorStop(1, "rgba(17, 55, 42, 0.16)");
-      ctx.fillStyle = tree;
-      ctx.beginPath();
-      ctx.ellipse(x, y, radius * (0.8 + random() * 0.45), radius * (0.75 + random() * 0.45), random() * Math.PI, 0, Math.PI * 2);
-      ctx.fill();
-    }
   };
 
   const drawField = (x, y, width, height, angle, colorA, colorB) => {
@@ -1317,12 +1370,12 @@ function createPixelTerrainTexture(worldWidth, worldHeight) {
     field.addColorStop(1, colorB);
     ctx.fillStyle = field;
     ctx.fillRect(-width * 0.5, -height * 0.5, width, height);
-    ctx.strokeStyle = "rgba(52, 84, 43, 0.34)";
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(-width * 0.5, -height * 0.5, width, height);
-    ctx.strokeStyle = "rgba(255, 245, 196, 0.12)";
+    ctx.strokeStyle = "rgba(57, 78, 46, 0.20)";
     ctx.lineWidth = 1;
-    for (let stripe = -width * 0.42; stripe < width * 0.42; stripe += 10) {
+    ctx.strokeRect(-width * 0.5, -height * 0.5, width, height);
+    ctx.strokeStyle = "rgba(255, 251, 226, 0.08)";
+    ctx.lineWidth = 1;
+    for (let stripe = -width * 0.42; stripe < width * 0.42; stripe += 14) {
       ctx.beginPath();
       ctx.moveTo(stripe, -height * 0.45);
       ctx.lineTo(stripe, height * 0.45);
@@ -1331,89 +1384,135 @@ function createPixelTerrainTexture(worldWidth, worldHeight) {
     ctx.restore();
   };
 
+  const drawForestCluster = (cx, cy, radiusX, radiusY, count = 90) => {
+    for (let index = 0; index < count; index += 1) {
+      const angle = random() * Math.PI * 2;
+      const distance = Math.sqrt(random());
+      const x = cx + Math.cos(angle) * radiusX * distance;
+      const y = cy + Math.sin(angle) * radiusY * distance;
+      const radius = 4 + random() * 12;
+      const tree = ctx.createRadialGradient(x - radius * 0.18, y - radius * 0.25, 0, x, y, radius);
+      tree.addColorStop(0, random() > 0.55 ? "rgba(104, 156, 90, 0.78)" : "rgba(121, 177, 102, 0.76)");
+      tree.addColorStop(0.6, random() > 0.5 ? "rgba(35, 88, 57, 0.86)" : "rgba(41, 100, 63, 0.86)");
+      tree.addColorStop(1, "rgba(18, 49, 39, 0.10)");
+      ctx.fillStyle = tree;
+      ctx.beginPath();
+      ctx.ellipse(x, y, radius * (0.8 + random() * 0.4), radius * (0.78 + random() * 0.36), random() * Math.PI, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  };
+
+  const drawVillage = (cx, cy, spread = 36, count = 10) => {
+    for (let i = 0; i < count; i += 1) {
+      const angle = random() * Math.PI * 2;
+      const distance = 4 + random() * spread;
+      const x = cx + Math.cos(angle) * distance;
+      const y = cy + Math.sin(angle) * distance;
+      const w = 5 + random() * 8;
+      const h = 4 + random() * 6;
+      ctx.fillStyle = random() > 0.56 ? "rgba(152, 111, 81, 0.82)" : "rgba(177, 138, 98, 0.82)";
+      ctx.fillRect(x - w * 0.5, y - h * 0.5, w, h);
+      ctx.fillStyle = "rgba(118, 68, 54, 0.55)";
+      ctx.fillRect(x - w * 0.5, y - h * 0.65, w, h * 0.25);
+      if (random() > 0.45) {
+        ctx.fillStyle = "rgba(96, 140, 76, 0.55)";
+        ctx.fillRect(x + w * 0.45, y - 1, 3, 3);
+      }
+    }
+  };
+
   const drawCity = (cx, cy, scale = 1) => {
-    const radius = 92 * scale;
-    const cityShade = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
-    cityShade.addColorStop(0, "rgba(185, 207, 202, 0.92)");
-    cityShade.addColorStop(0.45, "rgba(112, 143, 143, 0.88)");
-    cityShade.addColorStop(1, "rgba(41, 68, 70, 0)");
+    const radius = 130 * scale;
+    const cityShade = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius * 1.5);
+    cityShade.addColorStop(0, "rgba(195, 209, 205, 0.94)");
+    cityShade.addColorStop(0.5, "rgba(110, 130, 129, 0.88)");
+    cityShade.addColorStop(1, "rgba(42, 57, 60, 0)");
     ctx.fillStyle = cityShade;
     ctx.beginPath();
-    ctx.ellipse(cx, cy, radius * 1.26, radius, 0.25, 0, Math.PI * 2);
+    ctx.ellipse(cx, cy, radius * 1.15, radius * 0.92, 0.2, 0, Math.PI * 2);
     ctx.fill();
 
+    // Dense city fabric.
     ctx.save();
     ctx.translate(cx, cy);
-    ctx.rotate(0.22);
-    for (let row = -7; row <= 7; row += 1) {
-      for (let col = -8; col <= 8; col += 1) {
-        if ((row + col) % 5 === 0) continue;
-        const blockW = 4 + random() * 5;
-        const blockH = 4 + random() * 5;
-        const bx = col * 8 + (row % 2) * 2;
-        const by = row * 7;
-        ctx.fillStyle = random() > 0.5 ? "rgba(211, 220, 205, 0.82)" : "rgba(108, 132, 135, 0.88)";
+    ctx.rotate(0.16);
+    for (let row = -15; row <= 15; row += 1) {
+      for (let col = -18; col <= 18; col += 1) {
+        if ((row + col) % 7 === 0) continue;
+        const blockW = 3 + random() * 5;
+        const blockH = 3 + random() * 5;
+        const bx = col * 6 + (row % 2) * 1.5;
+        const by = row * 5.2;
+        ctx.fillStyle = random() > 0.55 ? "rgba(203, 214, 208, 0.86)" : random() > 0.5 ? "rgba(150, 168, 169, 0.88)" : "rgba(101, 122, 123, 0.9)";
         ctx.fillRect(bx - blockW * 0.5, by - blockH * 0.5, blockW, blockH);
       }
     }
-    ctx.strokeStyle = "rgba(72, 91, 90, 0.86)";
-    ctx.lineWidth = 2;
-    for (let lane = -5; lane <= 5; lane += 2) {
+    ctx.strokeStyle = "rgba(84, 95, 94, 0.72)";
+    ctx.lineWidth = 1.8;
+    for (let lane = -11; lane <= 11; lane += 2) {
       ctx.beginPath();
-      ctx.moveTo(-64, lane * 9);
-      ctx.lineTo(64, lane * 9);
+      ctx.moveTo(-110, lane * 6);
+      ctx.lineTo(110, lane * 6);
+      ctx.stroke();
+    }
+    for (let lane = -9; lane <= 9; lane += 3) {
+      ctx.beginPath();
+      ctx.moveTo(lane * 10, -84);
+      ctx.lineTo(lane * 10, 84);
       ctx.stroke();
     }
     ctx.restore();
   };
 
   const islands = [
-    { path: createIslandPath(px(0.48), px(0.52), px(0.40), px(0.45), 811), cx: px(0.48), cy: px(0.52), rx: px(0.40), ry: px(0.45) },
-    { path: createIslandPath(px(0.18), px(0.23), px(0.17), px(0.15), 917, 86), cx: px(0.18), cy: px(0.23), rx: px(0.17), ry: px(0.15) },
-    { path: createIslandPath(px(0.82), px(0.69), px(0.16), px(0.21), 1031, 92), cx: px(0.82), cy: px(0.69), rx: px(0.16), ry: px(0.21) },
-    { path: createIslandPath(px(0.46), px(0.87), px(0.18), px(0.12), 1201, 80), cx: px(0.46), cy: px(0.87), rx: px(0.18), ry: px(0.12) },
+    { path: createIslandPath(px(0.49), px(0.52), px(0.40), px(0.45), 811), cx: px(0.49), cy: px(0.52), rx: px(0.40), ry: px(0.45) },
+    { path: createIslandPath(px(0.18), px(0.22), px(0.16), px(0.14), 917, 120), cx: px(0.18), cy: px(0.22), rx: px(0.16), ry: px(0.14) },
+    { path: createIslandPath(px(0.82), px(0.70), px(0.15), px(0.20), 1031, 124), cx: px(0.82), cy: px(0.70), rx: px(0.15), ry: px(0.20) },
+    { path: createIslandPath(px(0.46), px(0.87), px(0.17), px(0.11), 1201, 110), cx: px(0.46), cy: px(0.87), rx: px(0.17), ry: px(0.11) },
   ];
 
   islands.forEach((island, index) => {
+    // Shelf / beach shadow.
     ctx.save();
-    ctx.shadowColor = "rgba(0, 17, 30, 0.45)";
-    ctx.shadowBlur = 28;
+    ctx.shadowColor = "rgba(4, 19, 28, 0.34)";
+    ctx.shadowBlur = 30;
     ctx.shadowOffsetY = 10;
-    ctx.fillStyle = "#1d5e61";
+    ctx.fillStyle = "#215f67";
     ctx.fill(island.path);
     ctx.restore();
 
+    // Shallow water rim.
     ctx.save();
-    ctx.lineJoin = "round";
-    ctx.strokeStyle = "rgba(158, 239, 238, 0.5)";
+    ctx.strokeStyle = "rgba(154, 238, 231, 0.42)";
     ctx.lineWidth = 28;
     ctx.stroke(island.path);
-    ctx.strokeStyle = "rgba(232, 211, 145, 0.95)";
-    ctx.lineWidth = 17;
+    ctx.strokeStyle = "rgba(237, 216, 156, 0.90)";
+    ctx.lineWidth = 16;
     ctx.stroke(island.path);
 
     const land = ctx.createRadialGradient(
-      island.cx - island.rx * 0.28,
-      island.cy - island.ry * 0.32,
-      island.rx * 0.05,
+      island.cx - island.rx * 0.24,
+      island.cy - island.ry * 0.28,
+      island.rx * 0.04,
       island.cx,
       island.cy,
-      Math.max(island.rx, island.ry) * 1.06,
+      Math.max(island.rx, island.ry) * 1.08,
     );
-    land.addColorStop(0, index === 0 ? "#b7d76a" : "#a8ce71");
-    land.addColorStop(0.42, index === 0 ? "#70aa59" : "#6ca857");
-    land.addColorStop(1, "#356f4e");
+    land.addColorStop(0, index === 0 ? "#d5d98a" : "#cad783");
+    land.addColorStop(0.28, index === 0 ? "#8dc06f" : "#86ba6d");
+    land.addColorStop(0.70, index === 0 ? "#659354" : "#628f56");
+    land.addColorStop(1, "#3f6d49");
     ctx.fillStyle = land;
     ctx.fill(island.path);
     ctx.clip(island.path);
 
-    // Gentle elevation and grass / dirt variation.
-    for (let patch = 0; patch < 130; patch += 1) {
+    // Gentle terrain shading / elevation.
+    for (let patch = 0; patch < 220; patch += 1) {
       const x = island.cx + (random() - 0.5) * island.rx * 1.9;
       const y = island.cy + (random() - 0.5) * island.ry * 1.9;
-      const r = 18 + random() * 110;
+      const r = 20 + random() * 125;
       const tint = ctx.createRadialGradient(x, y, 0, x, y, r);
-      tint.addColorStop(0, random() > 0.54 ? "rgba(215, 234, 139, 0.10)" : "rgba(23, 79, 50, 0.10)");
+      tint.addColorStop(0, random() > 0.54 ? "rgba(231, 233, 173, 0.08)" : "rgba(39, 77, 52, 0.08)");
       tint.addColorStop(1, "rgba(0, 0, 0, 0)");
       ctx.fillStyle = tint;
       ctx.beginPath();
@@ -1421,61 +1520,92 @@ function createPixelTerrainTexture(worldWidth, worldHeight) {
       ctx.fill();
     }
 
-    for (let field = 0; field < (index === 0 ? 48 : 16); field += 1) {
-      const x = island.cx + (random() - 0.5) * island.rx * 1.45;
-      const y = island.cy + (random() - 0.5) * island.ry * 1.45;
+    // Agricultural patterns.
+    for (let field = 0; field < (index === 0 ? 74 : 26); field += 1) {
       drawField(
-        x,
-        y,
-        22 + random() * 44,
-        16 + random() * 34,
-        (random() - 0.5) * 0.7,
-        random() > 0.5 ? "rgba(186, 181, 84, 0.42)" : "rgba(124, 169, 83, 0.42)",
-        random() > 0.5 ? "rgba(147, 151, 69, 0.35)" : "rgba(97, 137, 68, 0.36)",
+        island.cx + (random() - 0.5) * island.rx * 1.42,
+        island.cy + (random() - 0.5) * island.ry * 1.38,
+        28 + random() * 76,
+        18 + random() * 54,
+        (random() - 0.5) * 0.9,
+        random() > 0.5 ? "rgba(178, 176, 86, 0.34)" : "rgba(114, 157, 81, 0.32)",
+        random() > 0.5 ? "rgba(131, 136, 70, 0.24)" : "rgba(92, 126, 67, 0.24)",
       );
     }
 
-    const forests = index === 0 ? 16 : 6;
+    // Forests.
+    const forests = index === 0 ? 20 : 8;
     for (let forest = 0; forest < forests; forest += 1) {
-      drawForest(
-        island.cx + (random() - 0.5) * island.rx * 1.3,
-        island.cy + (random() - 0.5) * island.ry * 1.25,
-        30 + random() * 85,
-        22 + random() * 58,
-        38 + Math.floor(random() * 58),
+      drawForestCluster(
+        island.cx + (random() - 0.5) * island.rx * 1.25,
+        island.cy + (random() - 0.5) * island.ry * 1.2,
+        36 + random() * 110,
+        28 + random() * 78,
+        42 + Math.floor(random() * 68),
       );
     }
 
     ctx.restore();
   });
 
-  // Wide rivers / lakes above the terrain pass. Their bank shadows create depth.
-  drawRiver([ [px(0.20), px(0.10)], [px(0.23), px(0.22)], [px(0.20), px(0.34)], [px(0.25), px(0.46)], [px(0.22), px(0.60)], [px(0.28), px(0.78)] ], 30);
-  drawRiver([ [px(0.03), px(0.54)], [px(0.16), px(0.50)], [px(0.29), px(0.52)], [px(0.42), px(0.47)], [px(0.57), px(0.50)], [px(0.76), px(0.47)], [px(0.99), px(0.52)] ], 24);
-  drawRiver([ [px(0.53), px(0.05)], [px(0.50), px(0.17)], [px(0.55), px(0.29)], [px(0.52), px(0.41)], [px(0.58), px(0.55)], [px(0.56), px(0.70)] ], 20);
+  // Rivers / channels.
+  drawRiver([[px(0.19), px(0.10)], [px(0.23), px(0.22)], [px(0.20), px(0.33)], [px(0.25), px(0.45)], [px(0.22), px(0.60)], [px(0.29), px(0.78)]], 32);
+  drawRiver([[px(0.03), px(0.54)], [px(0.16), px(0.50)], [px(0.29), px(0.52)], [px(0.42), px(0.47)], [px(0.57), px(0.50)], [px(0.76), px(0.47)], [px(0.99), px(0.52)]], 24);
+  drawRiver([[px(0.53), px(0.05)], [px(0.50), px(0.17)], [px(0.55), px(0.28)], [px(0.52), px(0.41)], [px(0.58), px(0.55)], [px(0.56), px(0.70)]], 22);
 
-  const city = [px(0.64), px(0.28)];
-  drawCity(city[0], city[1], 1.22);
-  drawCity(px(0.37), px(0.70), 0.66);
-  drawCity(px(0.79), px(0.66), 0.58);
+  // Cities and towns.
+  const capital = [px(0.64), px(0.28)];
+  drawCity(capital[0], capital[1], 1.2);
+  drawCity(px(0.37), px(0.70), 0.64);
+  drawCity(px(0.79), px(0.66), 0.56);
+  drawVillage(px(0.26), px(0.30), 28, 12);
+  drawVillage(px(0.53), px(0.64), 32, 14);
+  drawVillage(px(0.17), px(0.63), 22, 9);
+  drawVillage(px(0.67), px(0.79), 26, 10);
+  drawVillage(px(0.47), px(0.86), 18, 8);
 
-  drawRoad([city, [px(0.54), px(0.35)], [px(0.43), px(0.46)], [px(0.31), px(0.53)]], 8);
-  drawRoad([city, [px(0.72), px(0.39)], [px(0.79), px(0.52)], [px(0.82), px(0.66)]], 7);
-  drawRoad([city, [px(0.58), px(0.48)], [px(0.48), px(0.58)], [px(0.37), px(0.70)]], 8);
+  // Road network.
+  drawRoad([capital, [px(0.54), px(0.35)], [px(0.43), px(0.46)], [px(0.31), px(0.53)]], 8, true);
+  drawRoad([capital, [px(0.72), px(0.39)], [px(0.79), px(0.52)], [px(0.82), px(0.66)]], 7, true);
+  drawRoad([capital, [px(0.58), px(0.48)], [px(0.48), px(0.58)], [px(0.37), px(0.70)]], 8, true);
   drawRoad([[px(0.37), px(0.70)], [px(0.43), px(0.78)], [px(0.47), px(0.87)]], 6);
-  drawRoad([[px(0.28), px(0.31)], [px(0.37), px(0.28)], [px(0.48), px(0.25)], city], 6);
+  drawRoad([[px(0.28), px(0.31)], [px(0.37), px(0.28)], [px(0.48), px(0.25)], capital], 6);
+  drawRoad([[px(0.26), px(0.30)], [px(0.31), px(0.34)], [px(0.36), px(0.42)]], 4);
+  drawRoad([[px(0.53), px(0.64)], [px(0.48), px(0.60)], [px(0.44), px(0.58)]], 4);
+  drawRoad([[px(0.17), px(0.63)], [px(0.22), px(0.58)], [px(0.28), px(0.55)]], 4);
+  drawRoad([[px(0.67), px(0.79)], [px(0.70), px(0.73)], [px(0.74), px(0.69)]], 4);
 
-  // Fine atmospheric haze at the edge of the world. It gives the map a more
-  // premium aerial-camera look while preserving readability of drones and loot.
-  const vignette = ctx.createRadialGradient(px(0.5), px(0.5), px(0.18), px(0.5), px(0.5), px(0.78));
+  // Fine cloud haze and shadowing to push the image away from a cartoon look.
+  for (let index = 0; index < 42; index += 1) {
+    const x = random() * size;
+    const y = random() * size;
+    const r = px(0.03 + random() * 0.065);
+    const cloudShadow = ctx.createRadialGradient(x, y, 0, x, y, r);
+    cloudShadow.addColorStop(0, "rgba(14, 24, 34, 0.06)");
+    cloudShadow.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = cloudShadow;
+    ctx.beginPath();
+    ctx.ellipse(x + r * 0.22, y + r * 0.18, r * 1.1, r * 0.58, random() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+
+    const cloud = ctx.createRadialGradient(x, y, 0, x, y, r);
+    cloud.addColorStop(0, "rgba(255, 255, 255, 0.12)");
+    cloud.addColorStop(0.55, "rgba(255, 255, 255, 0.06)");
+    cloud.addColorStop(1, "rgba(255, 255, 255, 0)");
+    ctx.fillStyle = cloud;
+    ctx.beginPath();
+    ctx.ellipse(x, y, r, r * 0.52, random() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const vignette = ctx.createRadialGradient(px(0.5), px(0.5), px(0.16), px(0.5), px(0.5), px(0.80));
   vignette.addColorStop(0, "rgba(0, 0, 0, 0)");
-  vignette.addColorStop(0.72, "rgba(3, 24, 34, 0.08)");
-  vignette.addColorStop(1, "rgba(3, 15, 25, 0.32)");
+  vignette.addColorStop(0.76, "rgba(3, 22, 30, 0.05)");
+  vignette.addColorStop(1, "rgba(2, 12, 18, 0.22)");
   ctx.fillStyle = vignette;
   ctx.fillRect(0, 0, size, size);
 
   const texture = PIXI.Texture.from(canvas);
-  // Linear sampling removes the chunky pixel-art look from the earlier version.
   if (texture?.source) texture.source.scaleMode = "linear";
   if (texture?.baseTexture) texture.baseTexture.scaleMode = PIXI.SCALE_MODES?.LINEAR ?? "linear";
 
@@ -1483,7 +1613,7 @@ function createPixelTerrainTexture(worldWidth, worldHeight) {
   sprite.position.set(0, 0);
   sprite.width = Math.max(1, Number(worldWidth || DEFAULT_WORLD_WIDTH));
   sprite.height = Math.max(1, Number(worldHeight || DEFAULT_WORLD_HEIGHT));
-  sprite.alpha = 0.96;
+  sprite.alpha = 0.98;
   sprite.eventMode = "none";
   return sprite;
 }
@@ -1704,6 +1834,10 @@ function PixiArenaRenderer({
         );
         setWorldTransform(world, camera.x, camera.y, camera.scale);
         const bounds = getBounds(camera.x, camera.y, camera.scale, width, height, 360);
+
+        // Transform-only pulse animation for loot. This does not touch gameplay
+        // state and costs only a few scale/alpha updates for visible pickups.
+        animateStaticPickups(staticMap, now);
 
         const zoneRadius = Number(data.safeZoneRadius || 0);
         const shouldShowZone = Boolean(data.showZone && zoneRadius > 0 && zoneRadius < Math.max(Number(data.worldWidth || 0), Number(data.worldHeight || 0)));
