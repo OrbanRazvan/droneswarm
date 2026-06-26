@@ -55,7 +55,8 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 
 // Multiplayer modern sync
 // Client-side prediction + server reconciliation + remote snapshot buffer.
-const INPUT_SEND_INTERVAL_MS = 20;
+const INPUT_SEND_INTERVAL_MS = 33;
+const INPUT_HEARTBEAT_MS = 100;
 const SNAPSHOT_INTERPOLATION_DELAY_MS = 90;
 const SNAPSHOT_BUFFER_TTL_MS = 600;
 const MAX_PENDING_INPUTS = 90;
@@ -533,46 +534,47 @@ function predictUnitFromInput(unit, input, dt, worldWidth, worldHeight, zoneRadi
 }
 
 
-// Server snapshots ajung intotdeauna putin in urma pozitiei locale: un tick
-// de server + transport + intervalul de broadcast. Nu corectam clientul spre
-// acel trecut la fiecare pachet, deoarece exact asta producea mersul inainte
-// apoi inapoi (rubber-band) chiar si intr-o camera cu un singur player.
-const LOCAL_SNAPSHOT_LEAD_SECONDS = 0.11;
-const LOCAL_RECONCILE_DEADZONE = 38;
-const LOCAL_RECONCILE_MAX_STEP = 7;
+// -----------------------------------------------------------------------------
+// Local-player prediction policy
+// -----------------------------------------------------------------------------
+// The local drone is rendered from the client's 60 Hz prediction. A server
+// snapshot is necessarily older (server tick + websocket transport + snapshot
+// cadence). Pulling the drone toward every received snapshot is what produces
+// the classic forward -> short backward "rubber-band" motion.
+//
+// While a movement key / joystick is held, preserve the local x/y completely.
+// The server remains authoritative for combat, energy, death and the state
+// seen by the other players. Only after movement has stopped AND the server has
+// also reported a stopped drone do we gently settle any small visual drift.
+const LOCAL_RELEASE_GRACE_MS = 190;
+const LOCAL_IDLE_SETTLE_ALPHA = 0.16;
+const LOCAL_IDLE_SETTLE_DEADZONE = 1.25;
+const LOCAL_HARD_RESYNC_DISTANCE = 900;
 
-function reconcileHeldInputUnit(local, server) {
+function reconcileHeldInputUnit(local, server, now = performance.now(), lastLocalMoveAt = 0) {
   if (!server) return local;
   if (!local || local.alive === false || server.alive === false) {
     return { ...(local || {}), ...server };
   }
 
-  const serverMoving = Boolean(server.isMoving) && Number.isFinite(Number(server.moveX)) && Number.isFinite(Number(server.moveY));
-  const lead = serverMoving ? LOCAL_SNAPSHOT_LEAD_SECONDS : 0;
-  const targetX = Number(server.x || 0) + Number(server.moveX || 0) * CLIENT_SPEED * lead;
-  const targetY = Number(server.y || 0) + Number(server.moveY || 0) * CLIENT_SPEED * lead;
-  const dx = targetX - Number(local.x || 0);
-  const dy = targetY - Number(local.y || 0);
+  const locallyPredicted = Boolean(local.isMoving) || now - Number(lastLocalMoveAt || 0) < LOCAL_RELEASE_GRACE_MS;
+  const serverStillMoving = Boolean(server.isMoving);
+  const dx = Number(server.x || 0) - Number(local.x || 0);
+  const dy = Number(server.y || 0) - Number(local.y || 0);
   const distance = Math.hypot(dx, dy);
-  const locallyMoving = Boolean(local.isMoving);
 
-  let x = local.x;
-  let y = local.y;
+  let x = Number(local.x || 0);
+  let y = Number(local.y || 0);
 
-  if (distance >= SELF_HARD_SNAP_DISTANCE) {
-    // Teleport, respawn sau desincronizare reala: snap este necesar.
-    x = server.x;
-    y = server.y;
-  } else if (!locallyMoving) {
-    // La oprire folosim serverul direct; nu pastram drift fals dupa release.
-    x = server.x;
-    y = server.y;
-  } else if (distance > LOCAL_RECONCILE_DEADZONE) {
-    // Corectie mica si plafonata. In interiorul dead-zone-ului nu atingem
-    // pozitia locala, deci snapshot-urile vechi nu mai trag drona inapoi.
-    const step = Math.min(LOCAL_RECONCILE_MAX_STEP, distance - LOCAL_RECONCILE_DEADZONE);
-    x = Number(local.x || 0) + (dx / distance) * step;
-    y = Number(local.y || 0) + (dy / distance) * step;
+  if (distance >= LOCAL_HARD_RESYNC_DISTANCE) {
+    // Respawn, teleport, server correction after an authoritative collision.
+    x = Number(server.x || 0);
+    y = Number(server.y || 0);
+  } else if (!locallyPredicted && !serverStillMoving && distance > LOCAL_IDLE_SETTLE_DEADZONE) {
+    // Never snap on key/joystick release. Blend the final resting position over
+    // a few frames, after the server has confirmed that it also stopped.
+    x += dx * LOCAL_IDLE_SETTLE_ALPHA;
+    y += dy * LOCAL_IDLE_SETTLE_ALPHA;
   }
 
   return {
@@ -580,10 +582,10 @@ function reconcileHeldInputUnit(local, server) {
     ...server,
     x,
     y,
-    moveX: locallyMoving ? local.moveX : server.moveX,
-    moveY: locallyMoving ? local.moveY : server.moveY,
-    moveAngle: locallyMoving ? local.moveAngle : server.moveAngle,
-    isMoving: locallyMoving || Boolean(server.isMoving && !local.isMoving),
+    moveX: locallyPredicted ? local.moveX : server.moveX,
+    moveY: locallyPredicted ? local.moveY : server.moveY,
+    moveAngle: locallyPredicted ? local.moveAngle : server.moveAngle,
+    isMoving: locallyPredicted ? Boolean(local.isMoving) : Boolean(server.isMoving),
     serverX: server.x,
     serverY: server.y,
   };
@@ -693,6 +695,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const sendInputRef = useRef(() => {});
   const inputSeqRef = useRef(0);
   const lastInputSentAtRef = useRef(performance.now());
+  const lastLocalMovementAtRef = useRef(performance.now());
+  const lastInputSignatureRef = useRef("");
   const pendingInputsRef = useRef([]);
   const remoteSnapshotBufferRef = useRef(new Map());
   const lastConfirmedHpRef = useRef(null);
@@ -891,7 +895,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         pendingInputsRef.current.length = 0;
 
         const local = predictedYouRef.current;
-        const reconciledYou = reconcileHeldInputUnit(local, state.you);
+        const reconciledYou = reconcileHeldInputUnit(local, state.you, now, lastLocalMovementAtRef.current);
         const previousHp = lastConfirmedHpRef.current;
         lastConfirmedHpRef.current = state.you.hp;
 
@@ -978,23 +982,23 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     socket.on("zone-pvp:state", applyState);
     socket.on("zone-pvp:error", (message) => setConnectionError(typeof message === "string" ? message : "Eroare Zone PvP."));
 
-    const sendInputNow = () => {
+    const sendInputNow = (force = false) => {
       if (!socket.connected) return;
 
       const now = performance.now();
+      const elapsed = now - lastInputSentAtRef.current;
+      if (!force && elapsed < INPUT_SEND_INTERVAL_MS) return;
+
       const you = predictedYouRef.current || worldRef.current.you;
       const mouse = mouseRef.current;
       const mouseWorldX = you ? you.x + (mouse.x - window.innerWidth / 2) : 0;
       const mouseWorldY = you ? you.y + (mouse.y - window.innerHeight / 2) : 0;
       const mobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
-      const dt = Math.min(50, Math.max(1, now - lastInputSentAtRef.current));
-      lastInputSentAtRef.current = now;
-
       const battleLocked = isBattlePrepareLocked(worldRef.current);
 
       const input = {
         seq: inputSeqRef.current + 1,
-        dt,
+        dt: Math.min(50, Math.max(1, elapsed)),
         clientSentAt: now,
         w: Boolean(keysRef.current.w || keysRef.current.arrowup || (mobileMove.active && mobileMove.y < -0.22)),
         a: Boolean(keysRef.current.a || keysRef.current.arrowleft || (mobileMove.active && mobileMove.x < -0.22)),
@@ -1009,11 +1013,23 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         mouseY: mouseWorldY,
       };
 
-      inputSeqRef.current = input.seq;
+      const signature = [
+        input.w, input.a, input.s, input.d, input.mobileMove,
+        Math.round(input.moveX * 100), Math.round(input.moveY * 100),
+        input.attacking, input.shield,
+        Math.round(input.mouseX / 8), Math.round(input.mouseY / 8),
+      ].join("|");
 
-      // Serverul aplica permanent ultimul input primit. Nu pastram o coada
-      // locala pentru replay, deoarece aceasta producea rollback la snapshot.
-      socket.volatile.emit("zone-pvp:input", input);
+      if (!force && signature === lastInputSignatureRef.current && elapsed < INPUT_HEARTBEAT_MS) return;
+
+      inputSeqRef.current = input.seq;
+      lastInputSentAtRef.current = now;
+      lastInputSignatureRef.current = signature;
+
+      // Retained movement state must be reliable. A 30 Hz tiny WebSocket packet
+      // is inexpensive, and prevents stale server movement after one volatile
+      // packet is dropped by the browser/socket transport.
+      socket.emit("zone-pvp:input", input);
     };
 
     sendInputRef.current = sendInputNow;
@@ -1070,6 +1086,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           mouseX: current.x + (mouseRef.current.x - window.innerWidth / 2),
           mouseY: current.y + (mouseRef.current.y - window.innerHeight / 2),
         };
+
+        if (getMoveVectorFromInput(input).moving) {
+          lastLocalMovementAtRef.current = now;
+        }
 
         predictedYouRef.current = predictUnitFromInput(
           current,
