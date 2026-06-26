@@ -42,8 +42,8 @@ const NORMAL_LOCAL_ENERGY_ADD_LIMIT = 3;
 const NORMAL_LOCAL_ENERGY_RADIUS = 1900;
 const NORMAL_LOCAL_ENERGY_MIN_DISTANCE = 360;
 const NORMAL_LOCAL_ENERGY_MAX_DISTANCE = 1650;
-const NORMAL_VISIBLE_ORB_LIMIT = 240;
-const NORMAL_VISIBLE_ENERGY_LIMIT = 110;
+const NORMAL_VISIBLE_ORB_LIMIT = 160;
+const NORMAL_VISIBLE_ENERGY_LIMIT = 60;
 const NORMAL_BASE_MOVE_SPEED_MULTIPLIER = 1.08;
 const NORMAL_BASE_ATTACK_DRONE_SPEED_MULTIPLIER = 1.12;
 const NORMAL_KILL_MOVE_SPEED_STEP = 0.15;
@@ -66,7 +66,8 @@ const ZONE_PVP_ZONE_DAMAGE = 10;
 const ZONE_PVP_ZONE_DAMAGE_INTERVAL = 1000;
 const ZONE_PVP_VISIBLE_PLAYERS_LIMIT = 60;
 const COLLISION_GRID_CELL_SIZE = 600;
-const NORMAL_STATE_INTERVAL_MS = 25;
+const NORMAL_STATE_INTERVAL_MS = 33;
+const NORMAL_STATE_INTERVAL_SOLO_MS = 50;
 const NORMAL_STATE_INTERVAL_CROWDED_MS = 33;
 const NORMAL_STATE_INTERVAL_HEAVY_MS = 50;
 const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
@@ -83,6 +84,7 @@ const PVP_CROWDED_STATE_THRESHOLD = 12;
 const PVP_HEAVY_STATE_THRESHOLD = 28;
 const ITEM_SPATIAL_CELL_SIZE = 1000;
 const ITEM_ZONE_PRUNE_INTERVAL_MS = 500;
+const STATIC_ITEM_SPATIAL_INDEX_INTERVAL_MS = 90;
 const NORMAL_HIGH_POPULATION_THRESHOLD = 16;
 const NORMAL_CROWDED_ORB_TARGET = 24;
 const NORMAL_CROWDED_ORB_ADD_LIMIT = 12;
@@ -277,6 +279,7 @@ let GameGateway = class GameGateway {
         room.normalOrbRespawnCollectorId = new Map();
         room.normalOrbRespawnGeneration = new Map();
         room.orbs = Array.from({ length: grid.target }, (_, slot) => this.createNormalOrbAtGridSlot(room, slot, 0));
+        room.itemSpatialDirty = true;
     }
     ensureNormalOrbRespawnMaps(room) {
         if (!(room?.normalOrbRespawnAt instanceof Map)) {
@@ -401,6 +404,8 @@ let GameGateway = class GameGateway {
         for (let index = 0; index < toAdd; index += 1) {
             room.energyCells.push(this.createNormalEnergyCellNear(player.x, player.y));
         }
+        if (toAdd > 0)
+            room.itemSpatialDirty = true;
         return toAdd;
     }
     createNormalCore() {
@@ -984,11 +989,13 @@ let GameGateway = class GameGateway {
                 this.updateProjectiles(room, deltaFrames, now);
                 this.maintainWorldItems(room, zoneRadius, now);
                 this.cleanupCombatEvents(room, now);
-                const broadcastInterval = room.players.size >= PVP_HEAVY_STATE_THRESHOLD
-                    ? NORMAL_STATE_INTERVAL_HEAVY_MS
-                    : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
-                        ? NORMAL_STATE_INTERVAL_CROWDED_MS
-                        : NORMAL_STATE_INTERVAL_MS;
+                const broadcastInterval = room.players.size <= 1
+                    ? NORMAL_STATE_INTERVAL_SOLO_MS
+                    : room.players.size >= PVP_HEAVY_STATE_THRESHOLD
+                        ? NORMAL_STATE_INTERVAL_HEAVY_MS
+                        : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
+                            ? NORMAL_STATE_INTERVAL_CROWDED_MS
+                            : NORMAL_STATE_INTERVAL_MS;
                 if (!room.lastBroadcastAt ||
                     now - room.lastBroadcastAt >= broadcastInterval) {
                     room.lastBroadcastAt = now;
@@ -1741,6 +1748,22 @@ let GameGateway = class GameGateway {
             you: this.serializePlayer(player),
         });
     }
+    emitWorldItemDelta(room, payload, now = Date.now()) {
+        if (!room?.id)
+            return;
+        const prefix = this.getRoomEventPrefix(room);
+        const removedOrbIds = Array.isArray(payload?.removedOrbIds) ? payload.removedOrbIds : [];
+        const removedEnergyIds = Array.isArray(payload?.removedEnergyIds) ? payload.removedEnergyIds : [];
+        const removedCoreIds = Array.isArray(payload?.removedCoreIds) ? payload.removedCoreIds : [];
+        if (!removedOrbIds.length && !removedEnergyIds.length && !removedCoreIds.length)
+            return;
+        this.server.to(room.id).compress(false).emit(`${prefix}:world-delta`, {
+            serverTime: now,
+            removedOrbIds,
+            removedEnergyIds,
+            removedCoreIds,
+        });
+    }
     collectOrbs(room, zoneRadius) {
         const collectedIds = new Set();
         const normalRespawnEntries = [];
@@ -1788,6 +1811,7 @@ let GameGateway = class GameGateway {
         }
         if (collectedIds.size > 0) {
             room.orbs = room.orbs.filter((orb) => !collectedIds.has(orb.id));
+            room.itemSpatialDirty = true;
             if (room.normalMode) {
                 const respawnNow = Date.now();
                 for (const entry of normalRespawnEntries) {
@@ -1795,6 +1819,9 @@ let GameGateway = class GameGateway {
                 }
                 this.ensureNormalOrbDistribution(room, respawnNow);
             }
+            this.emitWorldItemDelta(room, {
+                removedOrbIds: [...collectedIds],
+            });
         }
     }
     collectEnergy(room, zoneRadius) {
@@ -1838,12 +1865,16 @@ let GameGateway = class GameGateway {
         }
         if (collectedIds.size > 0) {
             room.energyCells = room.energyCells.filter((cell) => !collectedIds.has(cell.id));
+            room.itemSpatialDirty = true;
             if (room.normalMode) {
                 const missing = Math.max(0, this.getNormalEnergyTarget(room) - room.energyCells.length);
                 for (let index = 0; index < missing; index += 1) {
                     room.energyCells.push(this.createNormalEnergyCell());
                 }
             }
+            this.emitWorldItemDelta(room, {
+                removedEnergyIds: [...collectedIds],
+            });
         }
     }
     collectCores(room, zoneRadius) {
@@ -1882,6 +1913,10 @@ let GameGateway = class GameGateway {
         }
         if (collectedIds.size > 0) {
             room.cores = room.cores.filter((core) => !collectedIds.has(core.id));
+            room.itemSpatialDirty = true;
+            this.emitWorldItemDelta(room, {
+                removedCoreIds: [...collectedIds],
+            });
         }
     }
     canUseCore(player, core) {
@@ -1993,6 +2028,11 @@ let GameGateway = class GameGateway {
         }
     }
     maintainWorldItems(room, zoneRadius, now) {
+        const itemsBefore = {
+            orbs: room.orbs.length,
+            energy: room.energyCells.length,
+            cores: room.cores.length,
+        };
         if (!room.normalMode &&
             now - (room.lastItemZonePruneAt || 0) >= ITEM_ZONE_PRUNE_INTERVAL_MS) {
             room.lastItemZonePruneAt = now;
@@ -2048,7 +2088,12 @@ let GameGateway = class GameGateway {
             room.lastLocalItemAt = now;
             this.ensureLocalItemsAroundPlayers(room, zoneRadius);
         }
-        this.refreshRoomSpatialIndexes(room);
+        if (itemsBefore.orbs !== room.orbs.length ||
+            itemsBefore.energy !== room.energyCells.length ||
+            itemsBefore.cores !== room.cores.length) {
+            room.itemSpatialDirty = true;
+        }
+        this.refreshRoomSpatialIndexes(room, now);
     }
     updateWinCondition(room, now) {
         if (room.status !== "playing")
@@ -3270,10 +3315,19 @@ let GameGateway = class GameGateway {
         }
         return result;
     }
-    refreshRoomSpatialIndexes(room) {
-        room.orbSpatialIndex = this.buildSpatialIndex(room.orbs);
-        room.energySpatialIndex = this.buildSpatialIndex(room.energyCells);
-        room.coreSpatialIndex = this.buildSpatialIndex(room.cores);
+    refreshRoomSpatialIndexes(room, now = Date.now(), forceStatic = false) {
+        const staticIndexExpired = !room.orbSpatialIndex ||
+            !room.energySpatialIndex ||
+            !room.coreSpatialIndex ||
+            !room.lastStaticSpatialIndexAt ||
+            now - room.lastStaticSpatialIndexAt >= STATIC_ITEM_SPATIAL_INDEX_INTERVAL_MS;
+        if (forceStatic || room.itemSpatialDirty || staticIndexExpired) {
+            room.orbSpatialIndex = this.buildSpatialIndex(room.orbs);
+            room.energySpatialIndex = this.buildSpatialIndex(room.energyCells);
+            room.coreSpatialIndex = this.buildSpatialIndex(room.cores);
+            room.lastStaticSpatialIndexAt = now;
+            room.itemSpatialDirty = false;
+        }
         room.projectileSpatialIndex = this.buildSpatialIndex(room.projectiles);
     }
     filterNearIndexed(player, index, distance, limit) {

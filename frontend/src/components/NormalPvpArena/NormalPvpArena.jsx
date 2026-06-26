@@ -1666,6 +1666,37 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
     };
 
+    // Removed-item deltas are broadcast to every player in the room. This makes
+    // an opponent's pickup disappear immediately instead of waiting for the
+    // next throttled viewport snapshot. Tombstones reject an older volatile
+    // snapshot that may arrive after the reliable delta.
+    const applyWorldItemDelta = (event = {}) => {
+      const now = performance.now();
+      for (const id of event.removedOrbIds || []) {
+        hiddenOrbIdsRef.current.set(id, now);
+        stableOrbMapRef.current.delete(id);
+        stableMinimapOrbMapRef.current.delete(id);
+      }
+      for (const id of event.removedEnergyIds || []) {
+        hiddenEnergyIdsRef.current.set(id, now);
+        stableEnergyMapRef.current.delete(id);
+        stableMinimapEnergyMapRef.current.delete(id);
+      }
+      for (const id of event.removedCoreIds || []) {
+        hiddenCoreIdsRef.current.set(id, now);
+        stableCoreMapRef.current.delete(id);
+      }
+
+      worldRef.current = {
+        ...worldRef.current,
+        orbs: [...stableOrbMapRef.current.values()].filter((orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id)),
+        minimapOrbs: [...stableMinimapOrbMapRef.current.values()],
+        energyCells: [...stableEnergyMapRef.current.values()].filter((cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id)),
+        minimapEnergyCells: [...stableMinimapEnergyMapRef.current.values()],
+        cores: (worldRef.current.cores || []).filter((core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id)),
+      };
+    };
+
     // Sent reliably by the server at the exact death tick. This prevents a
     // one-snapshot delay before the camera begins following the killer.
     const applyEliminated = (event) => {
@@ -1707,11 +1738,27 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     const applyPrivateCombatEvent = (event) => {
       const viewerId = String(worldRef.current.you?.id || socket.id || "");
       if (!event?.id || !viewerId) return;
-      const normalizedEvent = {
+      let normalizedEvent = {
         ...event,
         viewerId: String(event.viewerId || viewerId),
       };
       if (normalizedEvent.viewerId !== viewerId) return;
+
+      // The server position inside a reliable pickup event can be a few input
+      // frames behind the locally predicted drone. Anchor energy text on the
+      // live local transform so `ENERGY +25` rises beside the drone, not behind it.
+      const visualAnchor = predictedYouRef.current || worldRef.current.you;
+      if (
+        visualAnchor &&
+        normalizedEvent.kind === "heal" &&
+        /^ENERGY\s*\+/.test(String(normalizedEvent.text || ""))
+      ) {
+        normalizedEvent = {
+          ...normalizedEvent,
+          x: Number(visualAnchor.x || normalizedEvent.x || 0),
+          y: Number(visualAnchor.y || normalizedEvent.y || 0) - 34,
+        };
+      }
 
       combatEventMapRef.current = mergePrivateCombatEvents(
         combatEventMapRef.current,
@@ -1749,6 +1796,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     socket.on("normal-pvp:combat", applyPrivateCombatEvent);
     socket.on("normal-pvp:eliminated", applyEliminated);
     socket.on("normal-pvp:collect", applyCollectSync);
+    socket.on("normal-pvp:world-delta", applyWorldItemDelta);
     socket.on("normal-pvp:error", (message) =>
       setConnectionError(
         typeof message === "string" ? message : "Eroare Normal PvP.",
@@ -1872,6 +1920,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       window.clearInterval(hudTimer);
       socket.off("connect", handleConnect);
       socket.off("normal-pvp:combat", applyPrivateCombatEvent);
+      socket.off("normal-pvp:world-delta", applyWorldItemDelta);
       socket.emit("normal-pvp:leave");
       socket.disconnect();
       socketRef.current = null;
@@ -1957,50 +2006,11 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
         const predicted = predictedYouRef.current;
 
-        if (data.status === "playing" && predicted?.alive !== false) {
-          const collectedOrbs = locallyCollectItems(
-            stableOrbMapRef,
-            hiddenOrbIdsRef,
-            predicted,
-            LOCAL_ORB_COLLECT_DISTANCE,
-            now,
-          );
-          const collectedEnergy = locallyCollectItems(
-            stableEnergyMapRef,
-            hiddenEnergyIdsRef,
-            predicted,
-            LOCAL_ENERGY_COLLECT_DISTANCE,
-            now,
-          );
-          const collectedCores = locallyCollectItems(
-            stableCoreMapRef,
-            hiddenCoreIdsRef,
-            predicted,
-            LOCAL_CORE_COLLECT_DISTANCE,
-            now,
-          );
-
-          // Keep the hot render loop allocation-free when nothing was collected.
-          // Item arrays are rebuilt only on a real visual collection event.
-          worldRef.current.you =
-            predictedYouRef.current || worldRef.current.you;
-          if (collectedOrbs > 0 || collectedEnergy > 0 || collectedCores > 0) {
-            worldRef.current = {
-              ...worldRef.current,
-              you: predictedYouRef.current || worldRef.current.you,
-              orbs: [...stableOrbMapRef.current.values()].filter(
-                (orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id),
-              ),
-              energyCells: [...stableEnergyMapRef.current.values()].filter(
-                (cell) =>
-                  !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id),
-              ),
-              cores: (worldRef.current.cores || []).filter(
-                (core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id),
-              ),
-            };
-          }
-        }
+        // Pickups are deliberately confirmed by the server's reliable
+        // `normal-pvp:collect` event. Hiding a stale cached cell locally caused
+        // the old "appears / disappears / no counter" behavior when prediction
+        // was a few frames ahead of the authoritative server position.
+        worldRef.current.you = predictedYouRef.current || worldRef.current.you;
 
         const wantsToAttack = Boolean(keysRef.current.mouseDown);
         const localCooldown = getLocalFireCooldown(predicted, now);
@@ -2247,7 +2257,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         coreColorMap: coreColorMapRef.current,
         otherPlayerSize: 112,
         otherPlayerQuality: 0,
-        staticItemBudget: isMobilePerformance ? 180 : 280,
+        staticItemBudget: isMobilePerformance ? 130 : 170,
       };
 
       if (
@@ -2848,7 +2858,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         coreTypes={CORE_TYPES}
         otherPlayerSize={112}
         otherPlayerQuality={0}
-        staticItemBudget={isMobileControls ? 180 : 280}
+        staticItemBudget={isMobileControls ? 130 : 170}
         liveDataRef={pixiLiveRef}
         forceLowQuality={graphicsQuality === "low" || isMobileControls}
         worldWidth={worldWidth}

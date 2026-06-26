@@ -86,6 +86,7 @@ export declare class GameGateway {
     distancePointToSegment(px: any, py: any, ax: any, ay: any, bx: any, by: any): number;
     getRoomEventPrefix(room: any): "normal-pvp" | "zone-pvp" | "battle-royale-online" | "pvp";
     emitCollectSync(room: any, player: any, payload: any): void;
+    emitWorldItemDelta(room: any, payload: any, now?: number): void;
     collectOrbs(room: any, zoneRadius: any): void;
     collectEnergy(room: any, zoneRadius: any): void;
     collectCores(room: any, zoneRadius: any): void;
@@ -220,7 +221,7 @@ export declare class GameGateway {
     getSpatialCellKey(x: any, y: any, cellSize?: number): string;
     buildSpatialIndex(items?: any[], cellSize?: number): Map<string, any[]>;
     querySpatialIndex(index: any, x: any, y: any, radius: any, cellSize?: number): any[];
-    refreshRoomSpatialIndexes(room: any): void;
+    refreshRoomSpatialIndexes(room: any, now?: number, forceStatic?: boolean): void;
     filterNearIndexed(player: any, index: any, distance: any, limit: any): any[];
     filterNear(player: any, items: any, distance: any, limit: any): any[];
     getAlivePlayers(room: any): any[];

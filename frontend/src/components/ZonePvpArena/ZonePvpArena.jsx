@@ -1008,6 +1008,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const serverClockOffsetRef = useRef(null);
   const lastMovementSequenceRef = useRef(0);
   const lastConfirmedHpRef = useRef(null);
+  const lastCollectionSeqRef = useRef(0);
   const localBattlePrepareUntilRef = useRef(0);
   const localBattleBeginFlashUntilRef = useRef(0);
   const battlePrepareWasVisibleRef = useRef(false);
@@ -1223,26 +1224,32 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       stableOrbMapRef.current = mergeStableItems(stableOrbMapRef.current, state.orbs || [], now, ORB_STABLE_TTL);
       stableEnergyMapRef.current = mergeStableItems(stableEnergyMapRef.current, state.energyCells || [], now, ORB_STABLE_TTL);
 
-      stableMinimapOrbMapRef.current = mergeStableItems(
-        stableMinimapOrbMapRef.current,
-        state.minimapOrbs?.length ? state.minimapOrbs : state.orbs || [],
-        now,
-        MINIMAP_STABLE_TTL
-      );
+      if (state.minimapOrbs !== undefined) {
+        stableMinimapOrbMapRef.current = mergeStableItems(
+          stableMinimapOrbMapRef.current,
+          state.minimapOrbs || [],
+          now,
+          MINIMAP_STABLE_TTL
+        );
+      }
 
-      stableMinimapEnergyMapRef.current = mergeStableItems(
-        stableMinimapEnergyMapRef.current,
-        state.minimapEnergyCells?.length ? state.minimapEnergyCells : state.energyCells || [],
-        now,
-        MINIMAP_STABLE_TTL
-      );
+      if (state.minimapEnergyCells !== undefined) {
+        stableMinimapEnergyMapRef.current = mergeStableItems(
+          stableMinimapEnergyMapRef.current,
+          state.minimapEnergyCells || [],
+          now,
+          MINIMAP_STABLE_TTL
+        );
+      }
 
-      stableCoreMapRef.current = mergeStableItems(
-        stableCoreMapRef.current,
-        state.minimapCores?.length ? state.minimapCores : state.cores || [],
-        now,
-        MINIMAP_STABLE_TTL
-      );
+      if (state.minimapCores !== undefined) {
+        stableCoreMapRef.current = mergeStableItems(
+          stableCoreMapRef.current,
+          state.minimapCores || [],
+          now,
+          MINIMAP_STABLE_TTL
+        );
+      }
 
       worldRef.current = {
         ...worldRef.current,
@@ -1298,6 +1305,16 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         // corectie cu dead-zone fata de pozitia serverului extrapolata usor.
         pendingInputsRef.current.length = 0;
 
+        const incomingCollectionSeq = Number(state.you.collectionSeq || 0);
+        const localCollectionSeq = Number(lastCollectionSeqRef.current || 0);
+        const keepFreshCollectStats = localCollectionSeq > incomingCollectionSeq;
+        const collectStatsSource = keepFreshCollectStats
+          ? predictedYouRef.current || state.you
+          : state.you;
+        if (!keepFreshCollectStats && incomingCollectionSeq > 0) {
+          lastCollectionSeqRef.current = Math.max(lastCollectionSeqRef.current || 0, incomingCollectionSeq);
+        }
+
         const local = predictedYouRef.current;
         const reconciledYou = reconcileHeldInputUnit(local, state.you, now, lastLocalMovementAtRef.current);
         const previousHp = lastConfirmedHpRef.current;
@@ -1308,10 +1325,12 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           // HP/energy/drones sunt autoritare si se actualizeaza imediat.
           hp: state.you.hp,
           maxHp: state.you.maxHp,
-          energy: state.you.energy,
-          drones: state.you.drones,
-          progress: state.you.progress,
-          nextDroneAt: state.you.nextDroneAt,
+          energy: collectStatsSource.energy,
+          drones: collectStatsSource.drones,
+          progress: collectStatsSource.progress,
+          nextDroneAt: collectStatsSource.nextDroneAt,
+          totalCollected: collectStatsSource.totalCollected,
+          collectionSeq: Math.max(incomingCollectionSeq, localCollectionSeq),
           alive: state.you.alive,
           lastProcessedInputSeq,
           damageFlashUntil:
@@ -1384,6 +1403,71 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       setConnectionError("Nu ma pot conecta la serverul PvP. Verifica Render/WebSocket.");
     });
 
+    // Reliable item-removal deltas keep both players' loot view in lockstep.
+    // A stale volatile snapshot is rejected by the hidden-id tombstone.
+    const applyWorldItemDelta = (event = {}) => {
+      const now = performance.now();
+      for (const id of event.removedOrbIds || []) {
+        hiddenOrbIdsRef.current.set(id, now);
+        stableOrbMapRef.current.delete(id);
+        stableMinimapOrbMapRef.current.delete(id);
+      }
+      for (const id of event.removedEnergyIds || []) {
+        hiddenEnergyIdsRef.current.set(id, now);
+        stableEnergyMapRef.current.delete(id);
+        stableMinimapEnergyMapRef.current.delete(id);
+      }
+      for (const id of event.removedCoreIds || []) {
+        hiddenCoreIdsRef.current.set(id, now);
+        stableCoreMapRef.current.delete(id);
+      }
+
+      worldRef.current = {
+        ...worldRef.current,
+        orbs: [...stableOrbMapRef.current.values()].filter((orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id)),
+        minimapOrbs: [...stableMinimapOrbMapRef.current.values()],
+        energyCells: [...stableEnergyMapRef.current.values()].filter((cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id)),
+        minimapEnergyCells: [...stableMinimapEnergyMapRef.current.values()],
+        cores: (worldRef.current.cores || []).filter((core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id)),
+      };
+    };
+
+    // Own collection is authoritative and reliable. It updates the HUD at the
+    // same moment the server removes the item, while preserving local movement.
+    const applyCollectSync = (event = {}) => {
+      const now = performance.now();
+      const collectionSeq = Number(event.collectionSeq || event.you?.collectionSeq || 0);
+      if (collectionSeq > 0) {
+        lastCollectionSeqRef.current = Math.max(lastCollectionSeqRef.current || 0, collectionSeq);
+      }
+      applyWorldItemDelta({
+        removedOrbIds: event.collectedOrbIds || [],
+        removedEnergyIds: event.collectedEnergyIds || [],
+        removedCoreIds: event.collectedCoreIds || [],
+      });
+
+      if (!event.you) return;
+      const previous = predictedYouRef.current || worldRef.current.you || event.you;
+      predictedYouRef.current = {
+        ...previous,
+        hp: event.you.hp,
+        maxHp: event.you.maxHp,
+        energy: event.you.energy,
+        drones: event.you.drones,
+        progress: event.you.progress,
+        nextDroneAt: event.you.nextDroneAt,
+        totalCollected: event.you.totalCollected,
+        kills: event.you.kills,
+        alive: event.you.alive,
+        collectionSeq: event.you.collectionSeq || collectionSeq,
+        lastProcessedInputSeq: event.you.lastProcessedInputSeq ?? previous.lastProcessedInputSeq,
+        serverX: event.you.x,
+        serverY: event.you.y,
+      };
+      worldRef.current = { ...worldRef.current, you: predictedYouRef.current };
+      setHudData({ ...worldRef.current, you: predictedYouRef.current, fps: fpsRef.current.value });
+    };
+
     // Reliable elimination event: lock the spectator camera onto the killer
     // immediately instead of waiting for the next volatile world snapshot.
     const applyEliminated = (event) => {
@@ -1455,11 +1539,24 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     const applyPrivateCombatEvent = (event) => {
       const viewerId = String(worldRef.current.you?.id || socket.id || "");
       if (!event?.id || !viewerId) return;
-      const normalizedEvent = {
+      let normalizedEvent = {
         ...event,
         viewerId: String(event.viewerId || viewerId),
       };
       if (normalizedEvent.viewerId !== viewerId) return;
+
+      const visualAnchor = predictedYouRef.current || worldRef.current.you;
+      if (
+        visualAnchor &&
+        normalizedEvent.kind === "heal" &&
+        /^ENERGY\s*\+/.test(String(normalizedEvent.text || ""))
+      ) {
+        normalizedEvent = {
+          ...normalizedEvent,
+          x: Number(visualAnchor.x || normalizedEvent.x || 0),
+          y: Number(visualAnchor.y || normalizedEvent.y || 0) - 34,
+        };
+      }
 
       combatEventMapRef.current = mergePrivateCombatEvents(
         combatEventMapRef.current,
@@ -1490,6 +1587,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     socket.on("zone-pvp:state", applyState);
     socket.on("zone-pvp:movement", applyMovementFrame);
     socket.on("zone-pvp:combat", applyPrivateCombatEvent);
+    socket.on("zone-pvp:collect", applyCollectSync);
+    socket.on("zone-pvp:world-delta", applyWorldItemDelta);
     socket.on("zone-pvp:eliminated", applyEliminated);
     socket.on("zone-pvp:error", (message) => setConnectionError(typeof message === "string" ? message : "Eroare Zone PvP."));
 
@@ -1569,6 +1668,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       socket.off("connect", handleConnect);
       socket.off("zone-pvp:movement", applyMovementFrame);
       socket.off("zone-pvp:combat", applyPrivateCombatEvent);
+      socket.off("zone-pvp:collect", applyCollectSync);
+      socket.off("zone-pvp:world-delta", applyWorldItemDelta);
       socket.emit("zone-pvp:leave");
       socket.disconnect();
       socketRef.current = null;
@@ -1627,37 +1728,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
         const predicted = predictedYouRef.current;
 
-        if (data.status === "playing" && predicted?.alive !== false) {
-          const collectedOrbs = locallyCollectItems(stableOrbMapRef, hiddenOrbIdsRef, predicted, LOCAL_ORB_COLLECT_DISTANCE, now);
-          const collectedEnergy = locallyCollectItems(stableEnergyMapRef, hiddenEnergyIdsRef, predicted, LOCAL_ENERGY_COLLECT_DISTANCE, now);
-          locallyCollectItems(stableCoreMapRef, hiddenCoreIdsRef, predicted, LOCAL_CORE_COLLECT_DISTANCE, now);
-
-          if (collectedOrbs > 0 || collectedEnergy > 0) {
-            predictedYouRef.current = applyOptimisticEnergyCollection(
-              applyOptimisticOrbCollection(predictedYouRef.current, collectedOrbs),
-              collectedEnergy
-            );
-          }
-
-          // Hot rAF path: do not allocate a new world object and three arrays every
-          // frame. Only rebuild collections after a real local pickup.
-          worldRef.current.you = predictedYouRef.current || worldRef.current.you;
-
-          if (collectedOrbs > 0 || collectedEnergy > 0) {
-            worldRef.current = {
-              ...worldRef.current,
-              you: predictedYouRef.current || worldRef.current.you,
-              orbs: [...stableOrbMapRef.current.values()].filter((orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id)),
-              energyCells: [...stableEnergyMapRef.current.values()].filter((cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id)),
-              cores: (worldRef.current.cores || []).filter((core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id)),
-            };
-            setHudData({
-              ...worldRef.current,
-              you: predictedYouRef.current || worldRef.current.you,
-              fps: fpsRef.current.value,
-            });
-          }
-        }
+        // Server-side collection uses the exact swept path and emits a reliable
+        // collect event. Avoid client-only removal: a cached item can otherwise
+        // vanish visually even when the server has not yet validated the pickup.
+        worldRef.current.you = predictedYouRef.current || worldRef.current.you;
 
         const wantsToAttack = Boolean(keysRef.current.mouseDown);
         const localCooldown = getLocalFireCooldown(predicted, now);

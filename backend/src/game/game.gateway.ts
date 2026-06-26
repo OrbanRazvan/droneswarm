@@ -52,8 +52,8 @@ const NORMAL_LOCAL_ENERGY_MAX_DISTANCE = 1650;
 
 // Normal PvP has a denser nearby-loot stream than the other modes. These only
 // affect what is replicated around the player; the real world remains server-authoritative.
-const NORMAL_VISIBLE_ORB_LIMIT = 240;
-const NORMAL_VISIBLE_ENERGY_LIMIT = 110;
+const NORMAL_VISIBLE_ORB_LIMIT = 160;
+const NORMAL_VISIBLE_ENERGY_LIMIT = 60;
 
 // Normal PvP movement / projectile pacing.
 const NORMAL_BASE_MOVE_SPEED_MULTIPLIER = 1.08;
@@ -93,7 +93,8 @@ const COLLISION_GRID_CELL_SIZE = 600;
 
 // Network / replication tuning. Simulation remains 60 Hz, but clients receive
 // compact snapshots at a rate that scales down in crowded rooms.
-const NORMAL_STATE_INTERVAL_MS = 25; // 40 Hz in small PvP rooms
+const NORMAL_STATE_INTERVAL_MS = 33; // 30 Hz in small PvP rooms
+const NORMAL_STATE_INTERVAL_SOLO_MS = 50; // local prediction stays 60 Hz; solo snapshots can be leaner
 const NORMAL_STATE_INTERVAL_CROWDED_MS = 33; // 30 Hz at 12+ players
 const NORMAL_STATE_INTERVAL_HEAVY_MS = 50; // 20 Hz at 28+ players
 const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
@@ -114,6 +115,9 @@ const PVP_CROWDED_STATE_THRESHOLD = 12;
 const PVP_HEAVY_STATE_THRESHOLD = 28;
 const ITEM_SPATIAL_CELL_SIZE = 1000;
 const ITEM_ZONE_PRUNE_INTERVAL_MS = 500;
+// Loot is static most of the time. Rebuilding three spatial maps every 16 ms
+// creates needless CPU/GC pressure on Render and makes solo Normal PvP feel slow.
+const STATIC_ITEM_SPATIAL_INDEX_INTERVAL_MS = 90;
 const NORMAL_HIGH_POPULATION_THRESHOLD = 16;
 const NORMAL_CROWDED_ORB_TARGET = 24;
 const NORMAL_CROWDED_ORB_ADD_LIMIT = 12;
@@ -400,6 +404,7 @@ export class GameGateway {
     room.orbs = Array.from({ length: grid.target }, (_, slot) =>
       this.createNormalOrbAtGridSlot(room, slot, 0),
     );
+    room.itemSpatialDirty = true;
   }
 
   private ensureNormalOrbRespawnMaps(room: any) {
@@ -567,6 +572,7 @@ export class GameGateway {
       room.energyCells.push(this.createNormalEnergyCellNear(player.x, player.y));
     }
 
+    if (toAdd > 0) room.itemSpatialDirty = true;
     return toAdd;
   }
 
@@ -1309,11 +1315,13 @@ export class GameGateway {
         this.cleanupCombatEvents(room, now);
 
         const broadcastInterval =
-          room.players.size >= PVP_HEAVY_STATE_THRESHOLD
-            ? NORMAL_STATE_INTERVAL_HEAVY_MS
-            : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
-              ? NORMAL_STATE_INTERVAL_CROWDED_MS
-              : NORMAL_STATE_INTERVAL_MS;
+          room.players.size <= 1
+            ? NORMAL_STATE_INTERVAL_SOLO_MS
+            : room.players.size >= PVP_HEAVY_STATE_THRESHOLD
+              ? NORMAL_STATE_INTERVAL_HEAVY_MS
+              : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
+                ? NORMAL_STATE_INTERVAL_CROWDED_MS
+                : NORMAL_STATE_INTERVAL_MS;
 
         if (
           !room.lastBroadcastAt ||
@@ -2235,6 +2243,26 @@ export class GameGateway {
     });
   }
 
+  // A viewport snapshot is deliberately throttled. Without this tiny reliable
+  // delta, an observer can keep seeing loot for up to one item-sync interval
+  // after another drone collected it. The event carries ids only, so it is safe
+  // to broadcast to the room and is far cheaper than forcing a full snapshot.
+  emitWorldItemDelta(room, payload, now = Date.now()) {
+    if (!room?.id) return;
+    const prefix = this.getRoomEventPrefix(room);
+    const removedOrbIds = Array.isArray(payload?.removedOrbIds) ? payload.removedOrbIds : [];
+    const removedEnergyIds = Array.isArray(payload?.removedEnergyIds) ? payload.removedEnergyIds : [];
+    const removedCoreIds = Array.isArray(payload?.removedCoreIds) ? payload.removedCoreIds : [];
+    if (!removedOrbIds.length && !removedEnergyIds.length && !removedCoreIds.length) return;
+
+    this.server.to(room.id).compress(false).emit(`${prefix}:world-delta`, {
+      serverTime: now,
+      removedOrbIds,
+      removedEnergyIds,
+      removedCoreIds,
+    });
+  }
+
   collectOrbs(room, zoneRadius) {
     const collectedIds = new Set<string>();
     const normalRespawnEntries: Array<{ orb: any; collector: any }> = [];
@@ -2306,6 +2334,7 @@ export class GameGateway {
 
     if (collectedIds.size > 0) {
       room.orbs = room.orbs.filter((orb) => !collectedIds.has(orb.id));
+      room.itemSpatialDirty = true;
 
       if (room.normalMode) {
         // Preserve even map-wide distribution, but do not restore a collected
@@ -2316,6 +2345,10 @@ export class GameGateway {
         }
         this.ensureNormalOrbDistribution(room, respawnNow);
       }
+
+      this.emitWorldItemDelta(room, {
+        removedOrbIds: [...collectedIds],
+      });
     }
   }
   collectEnergy(room, zoneRadius) {
@@ -2391,6 +2424,7 @@ export class GameGateway {
       room.energyCells = room.energyCells.filter(
         (cell) => !collectedIds.has(cell.id),
       );
+      room.itemSpatialDirty = true;
 
       if (room.normalMode) {
         const missing = Math.max(
@@ -2401,6 +2435,10 @@ export class GameGateway {
           room.energyCells.push(this.createNormalEnergyCell());
         }
       }
+
+      this.emitWorldItemDelta(room, {
+        removedEnergyIds: [...collectedIds],
+      });
     }
   }
 
@@ -2459,6 +2497,10 @@ export class GameGateway {
 
     if (collectedIds.size > 0) {
       room.cores = room.cores.filter((core) => !collectedIds.has(core.id));
+      room.itemSpatialDirty = true;
+      this.emitWorldItemDelta(room, {
+        removedCoreIds: [...collectedIds],
+      });
     }
   }
 
@@ -2569,6 +2611,12 @@ export class GameGateway {
     }
   }
   maintainWorldItems(room, zoneRadius, now) {
+    const itemsBefore = {
+      orbs: room.orbs.length,
+      energy: room.energyCells.length,
+      cores: room.cores.length,
+    };
+
     // Normal PvP has a static, oversized play area. Rechecking every item
     // every 16 ms is pure overhead. Shrinking-zone modes prune at a bounded rate.
     if (
@@ -2645,9 +2693,17 @@ export class GameGateway {
       this.ensureLocalItemsAroundPlayers(room, zoneRadius);
     }
 
-    // Rebuilt once per simulation frame and reused by collection + all
-    // recipient-specific snapshots. This removes repeated full scans.
-    this.refreshRoomSpatialIndexes(room);
+    if (
+      itemsBefore.orbs !== room.orbs.length ||
+      itemsBefore.energy !== room.energyCells.length ||
+      itemsBefore.cores !== room.cores.length
+    ) {
+      room.itemSpatialDirty = true;
+    }
+
+    // Static loot is indexed only after a change / short bounded interval.
+    // This avoids rebuilding hundreds of cells 60 times per second in solo Normal PvP.
+    this.refreshRoomSpatialIndexes(room, now);
   }
   updateWinCondition(room, now) {
     if (room.status !== "playing") return;
@@ -4279,10 +4335,23 @@ export class GameGateway {
     return result;
   }
 
-  refreshRoomSpatialIndexes(room) {
-    room.orbSpatialIndex = this.buildSpatialIndex(room.orbs);
-    room.energySpatialIndex = this.buildSpatialIndex(room.energyCells);
-    room.coreSpatialIndex = this.buildSpatialIndex(room.cores);
+  refreshRoomSpatialIndexes(room, now = Date.now(), forceStatic = false) {
+    const staticIndexExpired =
+      !room.orbSpatialIndex ||
+      !room.energySpatialIndex ||
+      !room.coreSpatialIndex ||
+      !room.lastStaticSpatialIndexAt ||
+      now - room.lastStaticSpatialIndexAt >= STATIC_ITEM_SPATIAL_INDEX_INTERVAL_MS;
+
+    if (forceStatic || room.itemSpatialDirty || staticIndexExpired) {
+      room.orbSpatialIndex = this.buildSpatialIndex(room.orbs);
+      room.energySpatialIndex = this.buildSpatialIndex(room.energyCells);
+      room.coreSpatialIndex = this.buildSpatialIndex(room.cores);
+      room.lastStaticSpatialIndexAt = now;
+      room.itemSpatialDirty = false;
+    }
+
+    // Projectiles move every frame, so only this small index stays per-tick.
     room.projectileSpatialIndex = this.buildSpatialIndex(room.projectiles);
   }
 
