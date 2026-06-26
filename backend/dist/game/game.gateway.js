@@ -713,17 +713,22 @@ let GameGateway = class GameGateway {
             let dx = 0;
             let dy = 0;
             const input = player.input || {};
-            if (input.w)
+            const inputFresh = !player.lastInputReceivedAt || now - player.lastInputReceivedAt <= 750;
+            if (!inputFresh) {
+                player.input = {};
+            }
+            const activeInput = inputFresh ? input : {};
+            if (activeInput.w)
                 dy -= 1;
-            if (input.s)
+            if (activeInput.s)
                 dy += 1;
-            if (input.a)
+            if (activeInput.a)
                 dx -= 1;
-            if (input.d)
+            if (activeInput.d)
                 dx += 1;
-            if (input.mobileMove) {
-                dx += Number(input.moveX || 0);
-                dy += Number(input.moveY || 0);
+            if (activeInput.mobileMove) {
+                dx += Number(activeInput.moveX || 0);
+                dy += Number(activeInput.moveY || 0);
             }
             const isMovingInput = dx !== 0 || dy !== 0;
             if (isMovingInput &&
@@ -741,7 +746,7 @@ let GameGateway = class GameGateway {
             }
             player.shieldActive = Boolean(player.shieldUntil && player.shieldUntil > now);
             if (!battleLocked &&
-                player.input.shield &&
+                activeInput.shield &&
                 (player.drones || 0) > 0 &&
                 player.energy >= 20 &&
                 !player.shieldActive &&
@@ -775,7 +780,7 @@ let GameGateway = class GameGateway {
                 player.moveY = 0;
                 player.isMoving = false;
             }
-            if (!battleLocked && input.attacking) {
+            if (!battleLocked && activeInput.attacking) {
                 this.tryFireProjectile(room, player, now);
             }
             if (Number(input.seq || 0) > 0) {
@@ -2207,6 +2212,7 @@ let GameGateway = class GameGateway {
             const playerCandidates = this.querySpatialIndex(playerIndex, viewAnchor.x, viewAnchor.y, player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE);
             const visiblePlayers = this.filterNear(viewAnchor, playerCandidates.filter((other) => other.id !== player.id && (player.alive !== false || other.alive !== false)), player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE, ZONE_PVP_VISIBLE_PLAYERS_LIMIT).map((other) => this.serializePlayer(other));
             const payload = {
+                serverNow: now,
                 status: room.status,
                 countdown: zonePvpCountdown,
                 coreDropCountdown,

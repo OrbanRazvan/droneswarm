@@ -856,13 +856,21 @@ export class GameGateway {
       let dx = 0;
       let dy = 0;
       const input = player.input || {};
-      if (input.w) dy -= 1;
-      if (input.s) dy += 1;
-      if (input.a) dx -= 1;
-      if (input.d) dx += 1;
-      if (input.mobileMove) {
-        dx += Number(input.moveX || 0);
-        dy += Number(input.moveY || 0);
+      // Nu continuam sa deplasam drona la infinit daca telefonul a intrat in
+      // background sau ultimul pachet de input s-a pierdut. Clientul activ
+      // trimite heartbeat mult mai des decat acest timeout.
+      const inputFresh = !player.lastInputReceivedAt || now - player.lastInputReceivedAt <= 750;
+      if (!inputFresh) {
+        player.input = {};
+      }
+      const activeInput = inputFresh ? input : {};
+      if (activeInput.w) dy -= 1;
+      if (activeInput.s) dy += 1;
+      if (activeInput.a) dx -= 1;
+      if (activeInput.d) dx += 1;
+      if (activeInput.mobileMove) {
+        dx += Number(activeInput.moveX || 0);
+        dy += Number(activeInput.moveY || 0);
       }
       const isMovingInput = dx !== 0 || dy !== 0;
       if (
@@ -885,7 +893,7 @@ export class GameGateway {
       );
       if (
         !battleLocked &&
-        player.input.shield &&
+        activeInput.shield &&
         (player.drones || 0) > 0 &&
         player.energy >= 20 &&
         !player.shieldActive &&
@@ -930,7 +938,7 @@ export class GameGateway {
         player.moveY = 0;
         player.isMoving = false;
       }
-      if (!battleLocked && input.attacking) {
+      if (!battleLocked && activeInput.attacking) {
         this.tryFireProjectile(room, player, now);
       }
       if (Number(input.seq || 0) > 0) {
@@ -2805,6 +2813,7 @@ export class GameGateway {
       ).map((other) => this.serializePlayer(other));
 
       const payload: any = {
+        serverNow: now,
         status: room.status,
         countdown: zonePvpCountdown,
         coreDropCountdown,

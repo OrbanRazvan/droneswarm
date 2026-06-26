@@ -80,7 +80,7 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 // Client-side prediction + server reconciliation + remote snapshot buffer.
 // 30 Hz input is enough because the server simulates continuously using the
 // latest input. It cuts mobile/network pressure roughly in half vs 60 Hz.
-const INPUT_SEND_INTERVAL_MS = 33;
+const INPUT_SEND_INTERVAL_MS = 20;
 const INPUT_HEARTBEAT_MS = 250;
 const SNAPSHOT_INTERPOLATION_DELAY_MS = 110;
 const SNAPSHOT_BUFFER_TTL_MS = 700;
@@ -874,6 +874,63 @@ function predictUnitFromInput(
   };
 }
 
+
+// Server snapshots ajung intotdeauna putin in urma pozitiei locale: un tick
+// de server + transport + intervalul de broadcast. Nu corectam clientul spre
+// acel trecut la fiecare pachet, deoarece exact asta producea mersul inainte
+// apoi inapoi (rubber-band) chiar si intr-o camera cu un singur player.
+const LOCAL_SNAPSHOT_LEAD_SECONDS = 0.11;
+const LOCAL_RECONCILE_DEADZONE = 38;
+const LOCAL_RECONCILE_MAX_STEP = 7;
+
+function reconcileHeldInputUnit(local, server) {
+  if (!server) return local;
+  if (!local || local.alive === false || server.alive === false) {
+    return { ...(local || {}), ...server };
+  }
+
+  const serverMoving = Boolean(server.isMoving) && Number.isFinite(Number(server.moveX)) && Number.isFinite(Number(server.moveY));
+  const lead = serverMoving ? LOCAL_SNAPSHOT_LEAD_SECONDS : 0;
+  const targetX = Number(server.x || 0) + Number(server.moveX || 0) * CLIENT_SPEED * lead;
+  const targetY = Number(server.y || 0) + Number(server.moveY || 0) * CLIENT_SPEED * lead;
+  const dx = targetX - Number(local.x || 0);
+  const dy = targetY - Number(local.y || 0);
+  const distance = Math.hypot(dx, dy);
+  const locallyMoving = Boolean(local.isMoving);
+
+  let x = local.x;
+  let y = local.y;
+
+  if (distance >= SELF_HARD_SNAP_DISTANCE) {
+    // Teleport, respawn sau desincronizare reala: snap este necesar.
+    x = server.x;
+    y = server.y;
+  } else if (!locallyMoving) {
+    // La oprire folosim serverul direct; nu pastram drift fals dupa release.
+    x = server.x;
+    y = server.y;
+  } else if (distance > LOCAL_RECONCILE_DEADZONE) {
+    // Corectie mica si plafonata. In interiorul dead-zone-ului nu atingem
+    // pozitia locala, deci snapshot-urile vechi nu mai trag drona inapoi.
+    const step = Math.min(LOCAL_RECONCILE_MAX_STEP, distance - LOCAL_RECONCILE_DEADZONE);
+    x = Number(local.x || 0) + (dx / distance) * step;
+    y = Number(local.y || 0) + (dy / distance) * step;
+  }
+
+  return {
+    ...local,
+    ...server,
+    x,
+    y,
+    moveX: locallyMoving ? local.moveX : server.moveX,
+    moveY: locallyMoving ? local.moveY : server.moveY,
+    moveAngle: locallyMoving ? local.moveAngle : server.moveAngle,
+    isMoving: locallyMoving || Boolean(server.isMoving && !local.isMoving),
+    serverX: server.x,
+    serverY: server.y,
+  };
+}
+
 function interpolateSnapshotBuffer(buffer = [], renderTime) {
   if (!buffer.length) return null;
   if (buffer.length === 1) return buffer[0];
@@ -977,6 +1034,9 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const attackPointerRef = useRef(null);
   const shieldPointerRef = useRef(null);
   const mobileAimDirRef = useRef({ x: 1, y: 0 });
+  const mobileAimLineRef = useRef(null);
+  const mobileAimCircleRef = useRef(null);
+  const mobileAimArrowRef = useRef(null);
   const joystickKnobRef = useRef(null);
   const mobileJoystickActiveRef = useRef(false);
   const mobilePerformanceRef = useRef(isRealMobileDevice());
@@ -1187,56 +1247,11 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
         const local = predictedYouRef.current;
         const server = state.you;
-        let correctedX = server.x;
-        let correctedY = server.y;
-
-        // IMPORTANT: Normal PvP foloseste input "held" pe server, nu comenzi
-        // discrete. Din cauza asta replay-ul inputurilor dupa fiecare snapshot
-        // introducea rollback la fiecare 33ms. Pastram predictia locala si o
-        // apropiem gradual de pozitia autoritara a serverului.
-        if (local && server.alive !== false && local.alive !== false) {
-          const dx = Number(server.x || 0) - Number(local.x || 0);
-          const dy = Number(server.y || 0) - Number(local.y || 0);
-          const distance = Math.hypot(dx, dy);
-          const isLocallyMoving = Boolean(local.isMoving);
-
-          if (distance <= SELF_SNAP_DISTANCE) {
-            correctedX = server.x;
-            correctedY = server.y;
-          } else if (distance >= SELF_HARD_SNAP_DISTANCE) {
-            // Teleport / respawn / desync real: aici snap-ul este corect.
-            correctedX = server.x;
-            correctedY = server.y;
-          } else {
-            const amount = isLocallyMoving
-              ? SELF_CORRECTION_MOVING
-              : SELF_CORRECTION_IDLE;
-            const maxStep = SELF_MAX_CORRECTION_SPEED * 0.034;
-            const desiredStep = distance * amount;
-            const step = Math.min(desiredStep, maxStep);
-
-            correctedX = local.x + (dx / distance) * step;
-            correctedY = local.y + (dy / distance) * step;
-
-            // Cand nu mai apesi nimic, se opreste imediat orice drift mic.
-            if (!isLocallyMoving && distance <= SELF_IDLE_FREEZE_DISTANCE) {
-              correctedX = server.x;
-              correctedY = server.y;
-            }
-          }
-        }
+        const reconciled = reconcileHeldInputUnit(local, server);
 
         predictedYouRef.current = {
-          ...(local || {}),
-          ...server,
-          x: correctedX,
-          y: correctedY,
-          // Pastreaza directia predita in timp ce te misti; serverul ramane
-          // sursa de adevar pentru HP, energie, scor si status.
-          moveX: local?.isMoving ? local.moveX : server.moveX,
-          moveY: local?.isMoving ? local.moveY : server.moveY,
-          moveAngle: local?.isMoving ? local.moveAngle : server.moveAngle,
-          isMoving: local?.isMoving ?? server.isMoving,
+          ...reconciled,
+          // Serverul ramane autoritar pentru combat, resurse si status.
           hp: server.hp,
           maxHp: server.maxHp,
           alive: server.alive,
@@ -1246,8 +1261,6 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           nextDroneAt: collectStatsSource.nextDroneAt,
           totalCollected: collectStatsSource.totalCollected,
           collectionSeq: Math.max(incomingCollectionSeq, localCollectionSeq),
-          serverX: server.x,
-          serverY: server.y,
           lastProcessedInputSeq,
           damageFlashUntil:
             previousHp !== null && server.hp < previousHp
@@ -2147,7 +2160,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       };
     }
 
-    sendInputRef.current();
+    sendInputRef.current(true);
   };
 
   const onJoystickPointerDown = (event) => {
@@ -2162,6 +2175,27 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const onJoystickPointerMove = (event) => {
     if (joystickPointerRef.current !== event.pointerId) return;
     updateJoystickFromPointer(event);
+  };
+
+  const syncMobileAimOverlay = () => {
+    const line = mobileAimLineRef.current;
+    const circle = mobileAimCircleRef.current;
+    const arrow = mobileAimArrowRef.current;
+    if (!line || !circle || !arrow || typeof window === "undefined") return;
+
+    const x = Number(mouseRef.current?.x || window.innerWidth / 2);
+    const y = Number(mouseRef.current?.y || window.innerHeight / 2);
+    const cx = window.innerWidth / 2;
+    const cy = window.innerHeight / 2;
+    const angle = (Math.atan2(y - cy, x - cx) * 180) / Math.PI;
+
+    line.setAttribute("x1", String(cx));
+    line.setAttribute("y1", String(cy));
+    line.setAttribute("x2", String(x));
+    line.setAttribute("y2", String(y));
+    circle.setAttribute("cx", String(x));
+    circle.setAttribute("cy", String(y));
+    arrow.setAttribute("transform", `translate(${x}, ${y}) rotate(${angle})`);
   };
 
   const updateMobileAimFromPointer = (event) => {
@@ -2195,6 +2229,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     );
     mouseRef.current.x = window.innerWidth / 2 + dirX * aimDistance;
     mouseRef.current.y = window.innerHeight / 2 + dirY * aimDistance;
+    window.requestAnimationFrame(syncMobileAimOverlay);
   };
 
   const onAttackPointerDown = (event) => {
@@ -2207,7 +2242,8 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     keysRef.current.mouseDown = false;
     updateMobileAimFromAttackButton(event);
     setMobileAttackActive(true);
-    sendInputRef.current();
+    window.requestAnimationFrame(syncMobileAimOverlay);
+    sendInputRef.current(true);
   };
 
   const onAttackPointerMove = (event) => {
@@ -2235,11 +2271,11 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     setMobileAttackActive(false);
 
     keysRef.current.mouseDown = true;
-    sendInputRef.current();
+    sendInputRef.current(true);
 
     window.setTimeout(() => {
       keysRef.current.mouseDown = false;
-      sendInputRef.current();
+      sendInputRef.current(true);
     }, 90);
   };
 
@@ -2251,7 +2287,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     }
     keysRef.current.rightMouseDown = true;
     setMobileShieldActive(true);
-    sendInputRef.current();
+    sendInputRef.current(true);
   };
 
   const stopMobileShield = (event) => {
@@ -2267,7 +2303,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     shieldPointerRef.current = null;
     keysRef.current.rightMouseDown = false;
     setMobileShieldActive(false);
-    sendInputRef.current();
+    sendInputRef.current(true);
   };
 
   const you = renderData.you;
@@ -2471,10 +2507,23 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         showZone={false}
       />
 
-      {you && !isDead && !isMobileControls && (
-        <svg className="aim-svg" aria-hidden="true">
+      {isMobileControls && (
+        <style>{`
+          .normal-pvp-dom-arena .aim-svg.mobile-aim-svg,
+          .zone-pvp-dom-arena .aim-svg.mobile-aim-svg {
+            display: block !important;
+            pointer-events: none !important;
+            touch-action: none !important;
+            z-index: 64 !important;
+          }
+        `}</style>
+      )}
+
+      {you && !isDead && (!isMobileControls || mobileAttackActive) && (
+        <svg className={`aim-svg ${isMobileControls ? "mobile-aim-svg" : ""}`} aria-hidden="true">
           <line
             className="aim-svg-line"
+            ref={mobileAimLineRef}
             x1={viewport.width / 2}
             y1={viewport.height / 2}
             x2={mouseRef.current.x}
@@ -2482,12 +2531,14 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           />
           <circle
             className="aim-svg-circle"
+            ref={mobileAimCircleRef}
             cx={mouseRef.current.x}
             cy={mouseRef.current.y}
             r="34"
           />
           <g
             className="aim-svg-arrow"
+            ref={mobileAimArrowRef}
             transform={`translate(${mouseRef.current.x}, ${mouseRef.current.y}) rotate(${(Math.atan2(mouseRef.current.y - viewport.height / 2, mouseRef.current.x - viewport.width / 2) * 180) / Math.PI})`}
           >
             <path d="M -15 -11 L 18 0 L -15 11 L -7 0 Z" />
