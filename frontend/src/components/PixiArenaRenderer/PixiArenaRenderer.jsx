@@ -158,29 +158,41 @@ function isMobileDevice() {
   return /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent || "");
 }
 
-function getRendererConfig(forceLowQuality) {
+function getRendererDeviceProfile(forceLowQuality = false) {
   const mobile = isMobileDevice();
   const dpr = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
-  const deviceMemory = typeof navigator !== "undefined" ? Number(navigator.deviceMemory || 0) : 0;
+  const deviceMemory = typeof navigator !== "undefined" && typeof navigator.deviceMemory === "number"
+    ? Number(navigator.deviceMemory)
+    : null;
   const cores = typeof navigator !== "undefined" ? Number(navigator.hardwareConcurrency || 4) : 4;
-  const weakMobile = mobile && (cores <= 4 || (deviceMemory > 0 && deviceMemory <= 4));
+  const weakMobile = mobile && (cores <= 4 || (deviceMemory !== null && deviceMemory <= 4));
+  const weakDesktop = !mobile && (
+    cores <= 4 || (deviceMemory !== null && deviceMemory <= 8)
+  );
+  const lowSpecDesktop = Boolean(weakDesktop || forceLowQuality);
 
-  // Dynamic resolution only reduces the number of pixels the GPU shades; the
-  // simulation/ticker stays native rAF to avoid the old 30 FPS stair-step bug.
-  // Multiplayer prioritizes stable frame time over extra mobile pixels.
-  // At 60 players, a 1x back buffer is far more reliable on Android GPUs.
-  const resolution = forceLowQuality || mobile
-    ? 1
-    : Math.min(1.5, dpr);
+  return { mobile, dpr, deviceMemory, cores, weakMobile, weakDesktop, lowSpecDesktop };
+}
+
+function getRendererConfig(forceLowQuality) {
+  const device = getRendererDeviceProfile(forceLowQuality);
+  const lowSpec = device.weakMobile || device.lowSpecDesktop;
+
+  // A 2016 laptop GPU gains much more from 1x resolution + no MSAA than from
+  // lowering the simulation. The player stays high-quality; only distant
+  // bots, static loot and projectile pools are capped.
+  const resolution = lowSpec ? 1 : Math.min(1.5, device.dpr);
 
   return {
-    mobile,
-    weakMobile,
+    ...device,
     resolution,
-    antialias: !(forceLowQuality || mobile || weakMobile),
-    maxStaticItems: forceLowQuality || mobile || weakMobile ? 105 : 180,
-    maxPlayers: forceLowQuality || weakMobile ? 42 : MAX_RENDERED_PLAYERS,
-    maxProjectiles: forceLowQuality || mobile || weakMobile ? 44 : MAX_RENDERED_PROJECTILES,
+    antialias: !lowSpec,
+    maxStaticItems: lowSpec ? 84 : 180,
+    maxPlayers: device.lowSpecDesktop ? 24 : forceLowQuality || device.weakMobile ? 32 : MAX_RENDERED_PLAYERS,
+    maxSimplePlayers: device.lowSpecDesktop ? 36 : device.weakMobile ? 24 : 60,
+    maxProjectiles: lowSpec ? 28 : MAX_RENDERED_PROJECTILES,
+    staticSyncInterval: device.lowSpecDesktop ? 180 : device.mobile ? 150 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: device.lowSpecDesktop ? 2 : 1,
   };
 }
 
@@ -1265,9 +1277,13 @@ function findPixelLandSpot(mask, cells, random, margin = 10) {
 function createPixelTerrainTexture(worldWidth, worldHeight) {
   // Premium deep-space backdrop for Battle Royale only.
   // Decorative only: gameplay, bots, collisions, loot and movement are untouched.
-  const mobile = isMobileDevice();
-  const size = mobile ? 2048 : 3072;
-  const cacheKey = `battle-royale-space-premium:${mobile ? "mobile" : "desktop"}:${size}`;
+  const device = getRendererDeviceProfile(false);
+  const mobile = device.mobile;
+  // The terrain is one decorative sprite. 1536px is visually sufficient at
+  // the Battle Royale camera height and avoids a large GPU texture on GTX
+  // 1050-era laptops.
+  const size = mobile ? 2048 : device.weakDesktop ? 1536 : 3072;
+  const cacheKey = `battle-royale-space-premium:${mobile ? "mobile" : device.weakDesktop ? "desktop-low" : "desktop"}:${size}`;
   let texture = WORLD_TERRAIN_TEXTURE_CACHE.get(cacheKey);
 
   // A previous Pixi application may have been unmounted after changing modes.
@@ -1795,6 +1811,7 @@ function PixiArenaRenderer({
       canvas?.addEventListener?.("webglcontextrestored", onContextRestored, false);
 
       let lastStaticSync = 0;
+      let staticAnimationFrame = 0;
       let lastZoneRadius = null;
       let lastZoneVisible = false;
 
@@ -1842,9 +1859,13 @@ function PixiArenaRenderer({
         setWorldTransform(world, camera.x, camera.y, camera.scale);
         const bounds = getBounds(camera.x, camera.y, camera.scale, width, height, 360);
 
-        // Transform-only pulse animation for loot. This does not touch gameplay
-        // state and costs only a few scale/alpha updates for visible pickups.
-        animateStaticPickups(staticMap, now);
+        // Transform-only pickup pulses. On a weak desktop they run every other
+        // rendered frame, which keeps the look but removes dozens of needless
+        // property writes per second.
+        staticAnimationFrame += 1;
+        if (staticAnimationFrame % config.animateStaticEvery === 0) {
+          animateStaticPickups(staticMap, now);
+        }
 
         const zoneRadius = Number(data.safeZoneRadius || 0);
         const shouldShowZone = Boolean(data.showZone && zoneRadius > 0 && zoneRadius < Math.max(Number(data.worldWidth || 0), Number(data.worldHeight || 0)));
@@ -1858,7 +1879,7 @@ function PixiArenaRenderer({
           }
         }
 
-        const staticSyncInterval = config.mobile ? 150 : STATIC_SYNC_INTERVAL_MS;
+        const staticSyncInterval = config.staticSyncInterval;
         if (now - lastStaticSync >= staticSyncInterval) {
           lastStaticSync = now;
           // Normal PvP can request a denser loot budget without changing
@@ -1944,7 +1965,7 @@ function PixiArenaRenderer({
           resources,
           parent: entitiesLayer,
           bounds,
-          max: config.weakMobile ? 24 : 60,
+          max: config.maxSimplePlayers,
           now,
         });
         syncProjectilePool({

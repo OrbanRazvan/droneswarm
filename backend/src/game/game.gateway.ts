@@ -25,14 +25,23 @@ const NORMAL_VISIBLE_PLAYERS_LIMIT = 60;
 const NORMAL_ORB_BASE_TARGET = 600;
 const NORMAL_ORB_PER_ALIVE_PLAYER = 50;
 const NORMAL_ORB_MAX_TARGET = 1000;
-const NORMAL_ENERGY_BASE_TARGET = 50;
-const NORMAL_ENERGY_PER_ALIVE_PLAYER = 4;
-const NORMAL_ENERGY_MAX_TARGET = 110;
+const NORMAL_ENERGY_BASE_TARGET = 80;
+const NORMAL_ENERGY_PER_ALIVE_PLAYER = 5;
+const NORMAL_ENERGY_MAX_TARGET = 180;
+
+// A Normal PvP player should always have a few real, server-authoritative
+// energy cells in the playable camera area. These are not client-only props:
+// they are normal world items and are collected/validated on the backend.
+const NORMAL_LOCAL_ENERGY_TARGET = 3;
+const NORMAL_LOCAL_ENERGY_ADD_LIMIT = 3;
+const NORMAL_LOCAL_ENERGY_RADIUS = 1900;
+const NORMAL_LOCAL_ENERGY_MIN_DISTANCE = 360;
+const NORMAL_LOCAL_ENERGY_MAX_DISTANCE = 1650;
 
 // Normal PvP has a denser nearby-loot stream than the other modes. These only
 // affect what is replicated around the player; the real world remains server-authoritative.
 const NORMAL_VISIBLE_ORB_LIMIT = 240;
-const NORMAL_VISIBLE_ENERGY_LIMIT = 80;
+const NORMAL_VISIBLE_ENERGY_LIMIT = 110;
 
 // Normal PvP movement / projectile pacing.
 const NORMAL_BASE_MOVE_SPEED_MULTIPLIER = 1.08;
@@ -316,6 +325,48 @@ export class GameGateway {
     return { id: crypto.randomUUID(), x: point.x, y: point.y };
   }
 
+  private createNormalEnergyCellNear(nearX: number, nearY: number) {
+    // Normal PvP uses a 14k map (not the default 15k map), therefore this
+    // deliberately does not call createEnergyCell/randomSafePoint. It keeps
+    // every generated cell inside the real Normal PvP world.
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const angle = Math.random() * Math.PI * 2;
+      const distance =
+        NORMAL_LOCAL_ENERGY_MIN_DISTANCE +
+        Math.random() *
+          (NORMAL_LOCAL_ENERGY_MAX_DISTANCE - NORMAL_LOCAL_ENERGY_MIN_DISTANCE);
+      const x = nearX + Math.cos(angle) * distance;
+      const y = nearY + Math.sin(angle) * distance;
+
+      if (
+        x >= PLAYER_RADIUS &&
+        x <= NORMAL_WORLD_WIDTH - PLAYER_RADIUS &&
+        y >= PLAYER_RADIUS &&
+        y <= NORMAL_WORLD_HEIGHT - PLAYER_RADIUS
+      ) {
+        return { id: crypto.randomUUID(), x, y };
+      }
+    }
+
+    return this.createNormalEnergyCell();
+  }
+
+  private ensureNormalEnergyCellsNearPlayer(room: any, player: any) {
+    if (!room?.normalMode || !player?.alive) return 0;
+
+    const nearbyEnergy = room.energyCells.filter((cell) =>
+      this.isNear(player, cell, NORMAL_LOCAL_ENERGY_RADIUS),
+    ).length;
+    const missing = Math.max(0, NORMAL_LOCAL_ENERGY_TARGET - nearbyEnergy);
+    const toAdd = Math.min(missing, NORMAL_LOCAL_ENERGY_ADD_LIMIT);
+
+    for (let index = 0; index < toAdd; index += 1) {
+      room.energyCells.push(this.createNormalEnergyCellNear(player.x, player.y));
+    }
+
+    return toAdd;
+  }
+
   private createNormalCore() {
     const point = this.getNormalRandomPoint(420);
     return {
@@ -489,6 +540,13 @@ export class GameGateway {
     const orbLimit = NORMAL_VISIBLE_ORB_LIMIT;
     const energyLimit = NORMAL_VISIBLE_ENERGY_LIMIT;
     const viewRadius = VIEW_DISTANCE;
+
+    // Make the first reliable join packet contain visible energy immediately.
+    // Without this, a sparse random 14k world could leave a new player with no
+    // cell in view until a later item replication tick.
+    if (this.ensureNormalEnergyCellsNearPlayer(room, player) > 0) {
+      this.refreshRoomSpatialIndexes(room);
+    }
 
     // "joined" is reliable, unlike the high-frequency volatile state snapshots.
     // This guarantees that a guest receives its own drone and initial nearby
@@ -3601,9 +3659,16 @@ export class GameGateway {
   ensureLocalItemsAroundPlayers(room, zoneRadius) {
     const alive = this.getAlivePlayers(room);
 
-    // Every Normal PvP pickup already respawns randomly. Avoid creating
-    // near-player clusters that would turn the compact map into a farm lane.
-    if (room?.normalMode) return;
+    // Normal PvP now keeps a small, controlled number of real energy cells
+    // in each player's nearby area. Orbs remain random/dense as before.
+    // This prevents the "no energy cells anywhere" state on a 14k map while
+    // keeping energy much rarer than orbs.
+    if (room?.normalMode) {
+      for (const player of alive) {
+        this.ensureNormalEnergyCellsNearPlayer(room, player);
+      }
+      return;
+    }
 
     for (const player of alive) {
       const nearbyOrbs = room.orbs.filter((orb) =>

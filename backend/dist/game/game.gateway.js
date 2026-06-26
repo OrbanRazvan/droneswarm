@@ -28,11 +28,16 @@ const NORMAL_VISIBLE_PLAYERS_LIMIT = 60;
 const NORMAL_ORB_BASE_TARGET = 600;
 const NORMAL_ORB_PER_ALIVE_PLAYER = 50;
 const NORMAL_ORB_MAX_TARGET = 1000;
-const NORMAL_ENERGY_BASE_TARGET = 50;
-const NORMAL_ENERGY_PER_ALIVE_PLAYER = 4;
-const NORMAL_ENERGY_MAX_TARGET = 110;
+const NORMAL_ENERGY_BASE_TARGET = 80;
+const NORMAL_ENERGY_PER_ALIVE_PLAYER = 5;
+const NORMAL_ENERGY_MAX_TARGET = 180;
+const NORMAL_LOCAL_ENERGY_TARGET = 3;
+const NORMAL_LOCAL_ENERGY_ADD_LIMIT = 3;
+const NORMAL_LOCAL_ENERGY_RADIUS = 1900;
+const NORMAL_LOCAL_ENERGY_MIN_DISTANCE = 360;
+const NORMAL_LOCAL_ENERGY_MAX_DISTANCE = 1650;
 const NORMAL_VISIBLE_ORB_LIMIT = 240;
-const NORMAL_VISIBLE_ENERGY_LIMIT = 80;
+const NORMAL_VISIBLE_ENERGY_LIMIT = 110;
 const NORMAL_BASE_MOVE_SPEED_MULTIPLIER = 1.08;
 const NORMAL_BASE_ATTACK_DRONE_SPEED_MULTIPLIER = 1.12;
 const NORMAL_KILL_MOVE_SPEED_STEP = 0.15;
@@ -233,6 +238,34 @@ let GameGateway = class GameGateway {
         const point = this.getNormalRandomPoint(160);
         return { id: crypto.randomUUID(), x: point.x, y: point.y };
     }
+    createNormalEnergyCellNear(nearX, nearY) {
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+            const angle = Math.random() * Math.PI * 2;
+            const distance = NORMAL_LOCAL_ENERGY_MIN_DISTANCE +
+                Math.random() *
+                    (NORMAL_LOCAL_ENERGY_MAX_DISTANCE - NORMAL_LOCAL_ENERGY_MIN_DISTANCE);
+            const x = nearX + Math.cos(angle) * distance;
+            const y = nearY + Math.sin(angle) * distance;
+            if (x >= PLAYER_RADIUS &&
+                x <= NORMAL_WORLD_WIDTH - PLAYER_RADIUS &&
+                y >= PLAYER_RADIUS &&
+                y <= NORMAL_WORLD_HEIGHT - PLAYER_RADIUS) {
+                return { id: crypto.randomUUID(), x, y };
+            }
+        }
+        return this.createNormalEnergyCell();
+    }
+    ensureNormalEnergyCellsNearPlayer(room, player) {
+        if (!room?.normalMode || !player?.alive)
+            return 0;
+        const nearbyEnergy = room.energyCells.filter((cell) => this.isNear(player, cell, NORMAL_LOCAL_ENERGY_RADIUS)).length;
+        const missing = Math.max(0, NORMAL_LOCAL_ENERGY_TARGET - nearbyEnergy);
+        const toAdd = Math.min(missing, NORMAL_LOCAL_ENERGY_ADD_LIMIT);
+        for (let index = 0; index < toAdd; index += 1) {
+            room.energyCells.push(this.createNormalEnergyCellNear(player.x, player.y));
+        }
+        return toAdd;
+    }
     createNormalCore() {
         const point = this.getNormalRandomPoint(420);
         return {
@@ -376,6 +409,9 @@ let GameGateway = class GameGateway {
         const orbLimit = NORMAL_VISIBLE_ORB_LIMIT;
         const energyLimit = NORMAL_VISIBLE_ENERGY_LIMIT;
         const viewRadius = VIEW_DISTANCE;
+        if (this.ensureNormalEnergyCellsNearPlayer(room, player) > 0) {
+            this.refreshRoomSpatialIndexes(room);
+        }
         const nearbyOrbs = room.orbSpatialIndex
             ? this.filterNearIndexed(player, room.orbSpatialIndex, viewRadius, orbLimit)
             : this.filterNear(player, room.orbs, viewRadius, orbLimit);
@@ -2772,8 +2808,12 @@ let GameGateway = class GameGateway {
     }
     ensureLocalItemsAroundPlayers(room, zoneRadius) {
         const alive = this.getAlivePlayers(room);
-        if (room?.normalMode)
+        if (room?.normalMode) {
+            for (const player of alive) {
+                this.ensureNormalEnergyCellsNearPlayer(room, player);
+            }
             return;
+        }
         for (const player of alive) {
             const nearbyOrbs = room.orbs.filter((orb) => this.isNear(player, orb, 1800)).length;
             const nearbyEnergy = room.energyCells.filter((cell) => this.isNear(player, cell, 1800)).length;

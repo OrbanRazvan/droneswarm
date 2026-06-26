@@ -22,6 +22,8 @@ export declare class GameGateway {
     private getNormalRandomPoint;
     private createNormalOrb;
     private createNormalEnergyCell;
+    private createNormalEnergyCellNear;
+    private ensureNormalEnergyCellsNearPlayer;
     private createNormalCore;
     private pushCombatEvent;
     private cleanupCombatEvents;
