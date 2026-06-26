@@ -20,6 +20,11 @@ export declare class GameGateway {
     private getNormalOrbTarget;
     private getNormalEnergyTarget;
     private getNormalRandomPoint;
+    private getNormalOrbGrid;
+    private normalOrbJitter;
+    private createNormalOrbAtGridSlot;
+    private rebuildNormalOrbDistribution;
+    private ensureNormalOrbDistribution;
     private createNormalOrb;
     private createNormalEnergyCell;
     private createNormalEnergyCellNear;

@@ -936,7 +936,15 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
   visual.root.visible = true;
   visual.root.position.set(Number(unit.x || 0), Number(unit.y || 0));
   visual.root.alpha = unit.alive === false ? 0.34 : 1;
-  visual.root.scale.set(compact ? 0.76 : isPlayer ? 1.04 : 1);
+
+  // Every full drone uses the exact same world-space body scale. Previously,
+  // weak-mobile rendering marked remote players/bots as compact (0.76), while
+  // the local drone stayed at 1.04. On iPhone that made every other drone look
+  // visibly smaller even though their gameplay hitboxes were identical.
+  // Compact now only remains a pool/rendering quality hint; it never changes
+  // the physical-looking size of a full drone.
+  const unifiedDroneScale = 1.04;
+  visual.root.scale.set(unifiedDroneScale);
 
   const movementX = Number(unit.moveX || 0);
   const movementY = Number(unit.moveY || 0);
@@ -973,11 +981,15 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
     subtleStretch * (1 - bankAmount * 0.022),
   );
 
-  const rotorSpeed = hasMovement ? 0.037 : 0.016;
+  // Rotor animation stays deliberately identical while stationary or moving.
+  // Movement already has banking/hover feedback; accelerating propeller spin
+  // made remote drones look visually different and added needless motion.
+  const rotorSpeed = 0.016;
+  const rotorAlpha = 0.48;
   visual.rotorSpins.forEach((rotor, index) => {
     const direction = index % 2 === 0 ? 1 : -1;
     rotor.rotation = direction * now * rotorSpeed + index * Math.PI * 0.5;
-    rotor.alpha = hasMovement ? 0.7 : 0.48;
+    rotor.alpha = rotorAlpha;
   });
 
   const shieldActive = Boolean(unit.shieldActive || unit.isShieldActive || Number(unit.shieldUntil || 0) > Date.now());
@@ -990,7 +1002,8 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
   if (shieldVisible) {
     const shieldPulsePhase = (now % 920) / 920;
     const shieldBreath = 1 + Math.sin(now * 0.0105) * 0.028;
-    const shieldSize = (isPlayer ? 137 : 130) * shieldBreath;
+    // Shield diameter follows the same full-drone scale for everyone.
+    const shieldSize = 137 * shieldBreath;
     const shieldAlpha = visual.shieldMix;
 
     visual.shieldShell.scale.set(shieldSize * (0.95 + shieldAlpha * 0.05));

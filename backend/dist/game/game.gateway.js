@@ -25,9 +25,11 @@ const NORMAL_WORLD_WIDTH = 14000;
 const NORMAL_WORLD_HEIGHT = 14000;
 const NORMAL_ROOM_ZONE_RADIUS = 100000;
 const NORMAL_VISIBLE_PLAYERS_LIMIT = 60;
-const NORMAL_ORB_BASE_TARGET = 600;
-const NORMAL_ORB_PER_ALIVE_PLAYER = 50;
-const NORMAL_ORB_MAX_TARGET = 1000;
+const NORMAL_ORB_BASE_TARGET = 420;
+const NORMAL_ORB_PER_ALIVE_PLAYER = 22;
+const NORMAL_ORB_MAX_TARGET = 650;
+const NORMAL_ORB_DISTRIBUTION_VERSION = 2;
+const NORMAL_ORB_GRID_MARGIN = 260;
 const NORMAL_ENERGY_BASE_TARGET = 80;
 const NORMAL_ENERGY_PER_ALIVE_PLAYER = 5;
 const NORMAL_ENERGY_MAX_TARGET = 180;
@@ -225,7 +227,90 @@ let GameGateway = class GameGateway {
             y: this.clamp(margin + Math.random() * Math.max(1, NORMAL_WORLD_HEIGHT - margin * 2), PLAYER_RADIUS, NORMAL_WORLD_HEIGHT - PLAYER_RADIUS),
         };
     }
-    createNormalOrb() {
+    getNormalOrbGrid(room, target = this.getNormalOrbTarget(room)) {
+        const safeTarget = Math.max(1, Math.min(NORMAL_ORB_MAX_TARGET, Math.round(target)));
+        const columns = Math.max(1, Math.ceil(Math.sqrt(safeTarget)));
+        const rows = Math.max(1, Math.ceil(safeTarget / columns));
+        return { target: safeTarget, columns, rows };
+    }
+    normalOrbJitter(slot, salt) {
+        const raw = Math.sin((slot + 1) * 12.9898 + salt * 78.233) * 43758.5453;
+        return raw - Math.floor(raw);
+    }
+    createNormalOrbAtGridSlot(room, slot) {
+        const grid = room?.normalOrbGrid || this.getNormalOrbGrid(room);
+        const margin = NORMAL_ORB_GRID_MARGIN;
+        const usableWidth = Math.max(1, NORMAL_WORLD_WIDTH - margin * 2);
+        const usableHeight = Math.max(1, NORMAL_WORLD_HEIGHT - margin * 2);
+        const cellCount = grid.columns * grid.rows;
+        const cellIndex = Math.min(cellCount - 1, Math.floor((slot * cellCount) / Math.max(1, grid.target)));
+        const column = cellIndex % grid.columns;
+        const row = Math.floor(cellIndex / grid.columns);
+        const cellWidth = usableWidth / grid.columns;
+        const cellHeight = usableHeight / grid.rows;
+        const jitterX = 0.22 + this.normalOrbJitter(slot, 1) * 0.56;
+        const jitterY = 0.22 + this.normalOrbJitter(slot, 2) * 0.56;
+        const x = this.clamp(margin + (column + jitterX) * cellWidth, PLAYER_RADIUS, NORMAL_WORLD_WIDTH - PLAYER_RADIUS);
+        const y = this.clamp(margin + (row + jitterY) * cellHeight, PLAYER_RADIUS, NORMAL_WORLD_HEIGHT - PLAYER_RADIUS);
+        return {
+            id: crypto.randomUUID(),
+            x,
+            y,
+            color: COLORS[slot % COLORS.length],
+            normalOrbSlot: slot,
+        };
+    }
+    rebuildNormalOrbDistribution(room, target = this.getNormalOrbTarget(room)) {
+        const grid = this.getNormalOrbGrid(room, target);
+        room.normalOrbGrid = grid;
+        room.normalOrbDistributionVersion = NORMAL_ORB_DISTRIBUTION_VERSION;
+        room.orbs = Array.from({ length: grid.target }, (_, slot) => this.createNormalOrbAtGridSlot(room, slot));
+    }
+    ensureNormalOrbDistribution(room) {
+        if (!room?.normalMode)
+            return;
+        const target = this.getNormalOrbTarget(room);
+        const grid = room.normalOrbGrid;
+        const invalidSlots = room.orbs.some((orb) => !Number.isInteger(orb?.normalOrbSlot) ||
+            orb.normalOrbSlot < 0 ||
+            orb.normalOrbSlot >= target);
+        const needsRebuild = room.normalOrbDistributionVersion !== NORMAL_ORB_DISTRIBUTION_VERSION ||
+            !grid ||
+            Number(grid.target || 0) !== target ||
+            room.orbs.length > target ||
+            invalidSlots;
+        if (needsRebuild) {
+            this.rebuildNormalOrbDistribution(room, target);
+            return;
+        }
+        const occupiedSlots = new Set();
+        for (const orb of room.orbs) {
+            if (Number.isInteger(orb?.normalOrbSlot))
+                occupiedSlots.add(orb.normalOrbSlot);
+        }
+        if (occupiedSlots.size !== room.orbs.length) {
+            this.rebuildNormalOrbDistribution(room, target);
+            return;
+        }
+        for (let slot = 0; slot < target; slot += 1) {
+            if (!occupiedSlots.has(slot)) {
+                room.orbs.push(this.createNormalOrbAtGridSlot(room, slot));
+            }
+        }
+    }
+    createNormalOrb(room) {
+        if (room?.normalMode && room?.normalOrbGrid) {
+            const occupiedSlots = new Set();
+            for (const orb of room.orbs || []) {
+                if (Number.isInteger(orb?.normalOrbSlot))
+                    occupiedSlots.add(orb.normalOrbSlot);
+            }
+            for (let slot = 0; slot < room.normalOrbGrid.target; slot += 1) {
+                if (!occupiedSlots.has(slot)) {
+                    return this.createNormalOrbAtGridSlot(room, slot);
+                }
+            }
+        }
         const point = this.getNormalRandomPoint(120);
         return {
             id: crypto.randomUUID(),
@@ -1633,10 +1718,7 @@ let GameGateway = class GameGateway {
         if (collectedIds.size > 0) {
             room.orbs = room.orbs.filter((orb) => !collectedIds.has(orb.id));
             if (room.normalMode) {
-                const missing = Math.max(0, this.getNormalOrbTarget(room) - room.orbs.length);
-                for (let index = 0; index < missing; index += 1) {
-                    room.orbs.push(this.createNormalOrb());
-                }
+                this.ensureNormalOrbDistribution(room);
             }
         }
     }
@@ -1845,10 +1927,11 @@ let GameGateway = class GameGateway {
         }
         const orbTarget = this.getNormalOrbTarget(room);
         const energyTarget = this.getNormalEnergyTarget(room);
-        while (room.orbs.length < orbTarget) {
-            room.orbs.push(room.normalMode
-                ? this.createNormalOrb()
-                : this.createOrb(zoneRadius));
+        if (room.normalMode) {
+            this.ensureNormalOrbDistribution(room);
+        }
+        while (!room.normalMode && room.orbs.length < orbTarget) {
+            room.orbs.push(this.createOrb(zoneRadius));
         }
         while (room.energyCells.length < energyTarget) {
             room.energyCells.push(room.normalMode
@@ -2096,7 +2179,9 @@ let GameGateway = class GameGateway {
             id: `normal-${crypto.randomUUID()}`,
             status: "playing",
             players: new Map(),
-            orbs: Array.from({ length: NORMAL_ORB_BASE_TARGET }, () => this.createNormalOrb()),
+            orbs: [],
+            normalOrbGrid: null,
+            normalOrbDistributionVersion: 0,
             energyCells: Array.from({ length: NORMAL_ENERGY_BASE_TARGET }, () => this.createNormalEnergyCell()),
             cores: [],
             pendingCores: [],
@@ -2118,6 +2203,7 @@ let GameGateway = class GameGateway {
             collisionCooldowns: new Map(),
             normalMode: true,
         };
+        this.rebuildNormalOrbDistribution(room, NORMAL_ORB_BASE_TARGET);
         this.normalRooms.set(room.id, room);
         return room;
     }

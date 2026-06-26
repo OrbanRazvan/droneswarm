@@ -22,9 +22,14 @@ const NORMAL_VISIBLE_PLAYERS_LIMIT = 60;
 // 14k x 14k Normal PvP loot pacing. Orb density scales with active players;
 // energy is intentionally much rarer and every consumed item respawns at a
 // new random point in the arena.
-const NORMAL_ORB_BASE_TARGET = 600;
-const NORMAL_ORB_PER_ALIVE_PLAYER = 50;
-const NORMAL_ORB_MAX_TARGET = 1000;
+// Normal PvP orb economy is intentionally world-distributed, not player-local.
+// One orb can exist in each deterministic grid cell, so desktop and mobile
+// see the same server-authoritative map without "orb piles" around players.
+const NORMAL_ORB_BASE_TARGET = 420;
+const NORMAL_ORB_PER_ALIVE_PLAYER = 22;
+const NORMAL_ORB_MAX_TARGET = 650;
+const NORMAL_ORB_DISTRIBUTION_VERSION = 2;
+const NORMAL_ORB_GRID_MARGIN = 260;
 const NORMAL_ENERGY_BASE_TARGET = 80;
 const NORMAL_ENERGY_PER_ALIVE_PLAYER = 5;
 const NORMAL_ENERGY_MAX_TARGET = 180;
@@ -310,7 +315,128 @@ export class GameGateway {
     };
   }
 
-  private createNormalOrb() {
+  private getNormalOrbGrid(room: any, target = this.getNormalOrbTarget(room)) {
+    const safeTarget = Math.max(1, Math.min(NORMAL_ORB_MAX_TARGET, Math.round(target)));
+    const columns = Math.max(1, Math.ceil(Math.sqrt(safeTarget)));
+    const rows = Math.max(1, Math.ceil(safeTarget / columns));
+
+    return { target: safeTarget, columns, rows };
+  }
+
+  private normalOrbJitter(slot: number, salt: number) {
+    // Deterministic pseudo-random value in [0, 1). Stable across packets,
+    // but each grid cell gets a different natural-looking offset.
+    const raw = Math.sin((slot + 1) * 12.9898 + salt * 78.233) * 43758.5453;
+    return raw - Math.floor(raw);
+  }
+
+  private createNormalOrbAtGridSlot(room: any, slot: number) {
+    const grid = room?.normalOrbGrid || this.getNormalOrbGrid(room);
+    const margin = NORMAL_ORB_GRID_MARGIN;
+    const usableWidth = Math.max(1, NORMAL_WORLD_WIDTH - margin * 2);
+    const usableHeight = Math.max(1, NORMAL_WORLD_HEIGHT - margin * 2);
+    // Spread logical slots across the entire rectangular grid. When the target
+    // does not fill the final row exactly, this avoids leaving one side of the
+    // map sparse and keeps the population even from edge to edge.
+    const cellCount = grid.columns * grid.rows;
+    const cellIndex = Math.min(
+      cellCount - 1,
+      Math.floor((slot * cellCount) / Math.max(1, grid.target)),
+    );
+    const column = cellIndex % grid.columns;
+    const row = Math.floor(cellIndex / grid.columns);
+    const cellWidth = usableWidth / grid.columns;
+    const cellHeight = usableHeight / grid.rows;
+
+    // Keep the orb visibly inside its own cell. This prevents cluster spawn
+    // around any player while avoiding a sterile perfectly-aligned grid.
+    const jitterX = 0.22 + this.normalOrbJitter(slot, 1) * 0.56;
+    const jitterY = 0.22 + this.normalOrbJitter(slot, 2) * 0.56;
+    const x = this.clamp(
+      margin + (column + jitterX) * cellWidth,
+      PLAYER_RADIUS,
+      NORMAL_WORLD_WIDTH - PLAYER_RADIUS,
+    );
+    const y = this.clamp(
+      margin + (row + jitterY) * cellHeight,
+      PLAYER_RADIUS,
+      NORMAL_WORLD_HEIGHT - PLAYER_RADIUS,
+    );
+
+    return {
+      id: crypto.randomUUID(),
+      x,
+      y,
+      color: COLORS[slot % COLORS.length],
+      normalOrbSlot: slot,
+    };
+  }
+
+  private rebuildNormalOrbDistribution(room: any, target = this.getNormalOrbTarget(room)) {
+    const grid = this.getNormalOrbGrid(room, target);
+    room.normalOrbGrid = grid;
+    room.normalOrbDistributionVersion = NORMAL_ORB_DISTRIBUTION_VERSION;
+    room.orbs = Array.from({ length: grid.target }, (_, slot) =>
+      this.createNormalOrbAtGridSlot(room, slot),
+    );
+  }
+
+  private ensureNormalOrbDistribution(room: any) {
+    if (!room?.normalMode) return;
+
+    const target = this.getNormalOrbTarget(room);
+    const grid = room.normalOrbGrid;
+    const invalidSlots = room.orbs.some(
+      (orb) =>
+        !Number.isInteger(orb?.normalOrbSlot) ||
+        orb.normalOrbSlot < 0 ||
+        orb.normalOrbSlot >= target,
+    );
+    const needsRebuild =
+      room.normalOrbDistributionVersion !== NORMAL_ORB_DISTRIBUTION_VERSION ||
+      !grid ||
+      Number(grid.target || 0) !== target ||
+      room.orbs.length > target ||
+      invalidSlots;
+
+    if (needsRebuild) {
+      this.rebuildNormalOrbDistribution(room, target);
+      return;
+    }
+
+    const occupiedSlots = new Set<number>();
+    for (const orb of room.orbs) {
+      if (Number.isInteger(orb?.normalOrbSlot)) occupiedSlots.add(orb.normalOrbSlot);
+    }
+
+    // Duplicate slot ids mean two orbs occupy the same logical cell. Rebuild
+    // only then; a missing slot is normal after collection and gets restored
+    // below without moving all other orbs.
+    if (occupiedSlots.size !== room.orbs.length) {
+      this.rebuildNormalOrbDistribution(room, target);
+      return;
+    }
+
+    for (let slot = 0; slot < target; slot += 1) {
+      if (!occupiedSlots.has(slot)) {
+        room.orbs.push(this.createNormalOrbAtGridSlot(room, slot));
+      }
+    }
+  }
+
+  private createNormalOrb(room?: any) {
+    if (room?.normalMode && room?.normalOrbGrid) {
+      const occupiedSlots = new Set<number>();
+      for (const orb of room.orbs || []) {
+        if (Number.isInteger(orb?.normalOrbSlot)) occupiedSlots.add(orb.normalOrbSlot);
+      }
+      for (let slot = 0; slot < room.normalOrbGrid.target; slot += 1) {
+        if (!occupiedSlots.has(slot)) {
+          return this.createNormalOrbAtGridSlot(room, slot);
+        }
+      }
+    }
+
     const point = this.getNormalRandomPoint(120);
     return {
       id: crypto.randomUUID(),
@@ -2073,10 +2199,9 @@ export class GameGateway {
       room.orbs = room.orbs.filter((orb) => !collectedIds.has(orb.id));
 
       if (room.normalMode) {
-        const missing = Math.max(0, this.getNormalOrbTarget(room) - room.orbs.length);
-        for (let index = 0; index < missing; index += 1) {
-          room.orbs.push(this.createNormalOrb());
-        }
+        // Restore the exact empty grid slots instead of spawning replacements
+        // around the collector or at unconstrained random coordinates.
+        this.ensureNormalOrbDistribution(room);
       }
     }
   }
@@ -2352,12 +2477,12 @@ export class GameGateway {
     const orbTarget = this.getNormalOrbTarget(room);
     const energyTarget = this.getNormalEnergyTarget(room);
 
-    while (room.orbs.length < orbTarget) {
-      room.orbs.push(
-        room.normalMode
-          ? this.createNormalOrb()
-          : this.createOrb(zoneRadius),
-      );
+    if (room.normalMode) {
+      this.ensureNormalOrbDistribution(room);
+    }
+
+    while (!room.normalMode && room.orbs.length < orbTarget) {
+      room.orbs.push(this.createOrb(zoneRadius));
     }
 
     while (room.energyCells.length < energyTarget) {
@@ -2664,9 +2789,9 @@ export class GameGateway {
       id: `normal-${crypto.randomUUID()}`,
       status: "playing",
       players: new Map(),
-      orbs: Array.from({ length: NORMAL_ORB_BASE_TARGET }, () =>
-        this.createNormalOrb(),
-      ),
+      orbs: [],
+      normalOrbGrid: null,
+      normalOrbDistributionVersion: 0,
       energyCells: Array.from({ length: NORMAL_ENERGY_BASE_TARGET }, () =>
         this.createNormalEnergyCell(),
       ),
@@ -2691,6 +2816,7 @@ export class GameGateway {
       normalMode: true,
     };
 
+    this.rebuildNormalOrbDistribution(room, NORMAL_ORB_BASE_TARGET);
     this.normalRooms.set(room.id, room);
     return room;
   }
