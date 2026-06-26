@@ -20,12 +20,19 @@ const CLIENT_SPEED = GAME_FRAME_SPEED * 60;
 
 // Delta-time smoothing. Valorile sunt "pe secunda", nu pe frame.
 // Asta inseamna ca jocul se simte la fel la 45 FPS, 60 FPS sau 144 FPS.
-const SELF_CORRECTION_MOVING = 0.22;
-const SELF_CORRECTION_IDLE = 0;
-const SELF_SNAP_DISTANCE = 0.25;
-const SELF_HARD_SNAP_DISTANCE = 420;
-const SELF_MAX_CORRECTION_SPEED = 1400; // px/sec - viteza maxima cu care predictia se "trage" spre server
-const SELF_IDLE_FREEZE_DISTANCE = 360;
+// Pozitia locala NU se reseteaza la fiecare snapshot. Serverul ramane
+// autoritar, dar corectiile mici sunt aplicate gradual pentru a elimina
+// "rubber-band" / mersul in trepte cand jucatorul este singur.
+const SELF_CORRECTION_MOVING = 0.11;
+const SELF_CORRECTION_IDLE = 0.42;
+const SELF_SNAP_DISTANCE = 0.5;
+const SELF_HARD_SNAP_DISTANCE = 520;
+const SELF_MAX_CORRECTION_SPEED = 900; // px/sec, limita unei corectii locale
+const SELF_IDLE_FREEZE_DISTANCE = 1.5;
+
+// React tine numai HUD/minimap. Randarea jocului ramane in rAF + Pixi.
+const REACT_RENDER_SYNC_INTERVAL_MS = 100;
+const HUD_SYNC_INTERVAL_MS = 125;
 
 const REMOTE_SMOOTHING = 24;
 const REMOTE_PREDICTION = 1.0;
@@ -60,7 +67,6 @@ const INPUT_SEND_INTERVAL_MS = 33;
 const INPUT_HEARTBEAT_MS = 250;
 const SNAPSHOT_INTERPOLATION_DELAY_MS = 110;
 const SNAPSHOT_BUFFER_TTL_MS = 700;
-const MAX_PENDING_INPUTS = 45;
 
 const MAX_VISIBLE_REMOTE_PLAYERS = 24;
 
@@ -941,13 +947,10 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     }, {}),
   );
   const worldElementRef = useRef(null);
-  const zoneElementRef = useRef(null);
-  const zoneSmokeElementRef = useRef(null);
   const sendInputRef = useRef(() => {});
   const inputSeqRef = useRef(0);
   const lastInputSentAtRef = useRef(performance.now());
   const lastInputSignatureRef = useRef("");
-  const pendingInputsRef = useRef([]);
   const remoteSnapshotBufferRef = useRef(new Map());
   const lastConfirmedHpRef = useRef(null);
   const lastCollectionSeqRef = useRef(0);
@@ -1146,47 +1149,12 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           state.you.lastProcessedInputSeq ?? state.lastProcessedInputSeq ?? 0,
         );
 
-        if (
-          Number.isFinite(lastProcessedInputSeq) &&
-          lastProcessedInputSeq > 0
-        ) {
-          pendingInputsRef.current = pendingInputsRef.current.filter(
-            (input) => input.seq > lastProcessedInputSeq,
-          );
-        }
-
-        let reconciledYou = { ...state.you };
-        const worldWidth =
-          state.worldWidth ||
-          worldRef.current.worldWidth ||
-          WORLD_WIDTH_FALLBACK;
-        const worldHeight =
-          state.worldHeight ||
-          worldRef.current.worldHeight ||
-          WORLD_HEIGHT_FALLBACK;
-        const zoneRadius =
-          state.safeZoneRadius ||
-          worldRef.current.safeZoneRadius ||
-          ZONE_RADIUS_FALLBACK;
-
-        for (const pending of pendingInputsRef.current) {
-          reconciledYou = predictUnitFromInput(
-            reconciledYou,
-            pending,
-            Number(pending.dt || 16) / 1000,
-            worldWidth,
-            worldHeight,
-            zoneRadius,
-          );
-        }
-
         const previousHp = lastConfirmedHpRef.current;
         lastConfirmedHpRef.current = state.you.hp;
 
         const incomingCollectionSeq = Number(state.you.collectionSeq || 0);
         const localCollectionSeq = Number(lastCollectionSeqRef.current || 0);
-        const keepLocalCollectStats =
-          localCollectionSeq > incomingCollectionSeq;
+        const keepLocalCollectStats = localCollectionSeq > incomingCollectionSeq;
         const collectStatsSource = keepLocalCollectStats
           ? predictedYouRef.current || state.you
           : state.you;
@@ -1198,30 +1166,74 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           );
         }
 
-        predictedYouRef.current = {
-          ...(predictedYouRef.current || {}),
-          ...reconciledYou,
-          // HP este autoritar de la server si se aplica imediat.
-          hp: state.you.hp,
-          maxHp: state.you.maxHp,
-          alive: state.you.alive,
+        const local = predictedYouRef.current;
+        const server = state.you;
+        let correctedX = server.x;
+        let correctedY = server.y;
 
-          // Orb/energy/drone stats se iau din ultimul collect confirmat.
-          // Asta opreste flicker-ul de tip 4/5 -> 5/5 -> 4/5 si pastreaza logica 5/15/25/35/50.
+        // IMPORTANT: Normal PvP foloseste input "held" pe server, nu comenzi
+        // discrete. Din cauza asta replay-ul inputurilor dupa fiecare snapshot
+        // introducea rollback la fiecare 33ms. Pastram predictia locala si o
+        // apropiem gradual de pozitia autoritara a serverului.
+        if (local && server.alive !== false && local.alive !== false) {
+          const dx = Number(server.x || 0) - Number(local.x || 0);
+          const dy = Number(server.y || 0) - Number(local.y || 0);
+          const distance = Math.hypot(dx, dy);
+          const isLocallyMoving = Boolean(local.isMoving);
+
+          if (distance <= SELF_SNAP_DISTANCE) {
+            correctedX = server.x;
+            correctedY = server.y;
+          } else if (distance >= SELF_HARD_SNAP_DISTANCE) {
+            // Teleport / respawn / desync real: aici snap-ul este corect.
+            correctedX = server.x;
+            correctedY = server.y;
+          } else {
+            const amount = isLocallyMoving
+              ? SELF_CORRECTION_MOVING
+              : SELF_CORRECTION_IDLE;
+            const maxStep = SELF_MAX_CORRECTION_SPEED * 0.034;
+            const desiredStep = distance * amount;
+            const step = Math.min(desiredStep, maxStep);
+
+            correctedX = local.x + (dx / distance) * step;
+            correctedY = local.y + (dy / distance) * step;
+
+            // Cand nu mai apesi nimic, se opreste imediat orice drift mic.
+            if (!isLocallyMoving && distance <= SELF_IDLE_FREEZE_DISTANCE) {
+              correctedX = server.x;
+              correctedY = server.y;
+            }
+          }
+        }
+
+        predictedYouRef.current = {
+          ...(local || {}),
+          ...server,
+          x: correctedX,
+          y: correctedY,
+          // Pastreaza directia predita in timp ce te misti; serverul ramane
+          // sursa de adevar pentru HP, energie, scor si status.
+          moveX: local?.isMoving ? local.moveX : server.moveX,
+          moveY: local?.isMoving ? local.moveY : server.moveY,
+          moveAngle: local?.isMoving ? local.moveAngle : server.moveAngle,
+          isMoving: local?.isMoving ?? server.isMoving,
+          hp: server.hp,
+          maxHp: server.maxHp,
+          alive: server.alive,
           energy: collectStatsSource.energy,
           drones: collectStatsSource.drones,
           progress: collectStatsSource.progress,
           nextDroneAt: collectStatsSource.nextDroneAt,
           totalCollected: collectStatsSource.totalCollected,
           collectionSeq: Math.max(incomingCollectionSeq, localCollectionSeq),
-
-          serverX: state.you.x,
-          serverY: state.you.y,
+          serverX: server.x,
+          serverY: server.y,
           lastProcessedInputSeq,
           damageFlashUntil:
-            previousHp !== null && state.you.hp < previousHp
+            previousHp !== null && server.hp < previousHp
               ? now + 220
-              : predictedYouRef.current?.damageFlashUntil || 0,
+              : local?.damageFlashUntil || 0,
         };
 
         worldRef.current.you = predictedYouRef.current;
@@ -1478,16 +1490,6 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       lastInputSentAtRef.current = now;
       lastInputSignatureRef.current = inputSignature;
 
-      if (worldRef.current.status === "playing" && you?.alive !== false) {
-        pendingInputsRef.current.push(input);
-        if (pendingInputsRef.current.length > MAX_PENDING_INPUTS) {
-          pendingInputsRef.current.splice(
-            0,
-            pendingInputsRef.current.length - MAX_PENDING_INPUTS,
-          );
-        }
-      }
-
       // Input packets are replaceable. Dropping an outdated one under pressure
       // is preferable to queueing it behind newer movement commands.
       socket.volatile.emit("normal-pvp:input", input);
@@ -1504,7 +1506,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         you: predictedYouRef.current || data.you,
         fps: fpsRef.current.value,
       });
-    }, 66);
+    }, HUD_SYNC_INTERVAL_MS);
 
     return () => {
       window.clearInterval(inputTimer);
@@ -1806,20 +1808,6 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldElementRef.current.style.transform = `translate3d(${liveCameraX}px, ${liveCameraY}px, 0) scale(${liveCameraScale})`;
       }
 
-      // Cercul zonei si fumul verde sunt tinute la diametrul initial.
-      // La fiecare frame modificam DOAR transform: scale(...), fara width/height.
-      // Asta evita reflow/layout si ramane foarte ieftin pe mobil.
-      const zoneScale = Math.max(0.01, zoneRadius / ZONE_RADIUS_FALLBACK);
-      const zoneTransform = `translate(-50%, -50%) scale(${zoneScale})`;
-
-      if (zoneElementRef.current) {
-        zoneElementRef.current.style.transform = zoneTransform;
-      }
-
-      if (zoneSmokeElementRef.current) {
-        zoneSmokeElementRef.current.style.transform = zoneTransform;
-      }
-
       const liveBounds = getViewportBounds(
         liveCameraX,
         liveCameraY,
@@ -1885,7 +1873,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         otherPlayerQuality: 0,
       };
 
-      if (now - lastRenderSyncRef.current >= 66) {
+      if (now - lastRenderSyncRef.current >= REACT_RENDER_SYNC_INTERVAL_MS) {
         lastRenderSyncRef.current = now;
         setRenderData({
           ...data,
@@ -2432,27 +2420,6 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           transform: `translate3d(${cameraX}px, ${cameraY}px, 0) scale(${cameraScale})`,
         }}
       >
-        <div
-          ref={zoneSmokeElementRef}
-          className="normal-pvp-danger-smoke"
-          style={{
-            left: worldWidth / 2,
-            top: worldHeight / 2,
-            width: ZONE_RADIUS_FALLBACK * 2,
-            height: ZONE_RADIUS_FALLBACK * 2,
-          }}
-        />
-
-        <div
-          ref={zoneElementRef}
-          className="normal-pvp-battle-zone"
-          style={{
-            left: worldWidth / 2,
-            top: worldHeight / 2,
-            width: ZONE_RADIUS_FALLBACK * 2,
-            height: ZONE_RADIUS_FALLBACK * 2,
-          }}
-        />
       </div>
 
       <PixiArenaRenderer
