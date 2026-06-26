@@ -74,6 +74,7 @@ const COMBAT_EVENT_MAX_RENDERED = 32;
 // sampling. It is visual-only: no collision, spawn, loot or game-rule code
 // reads this layer.
 const PIXEL_TERRAIN_THEME = "battle-royale-pixel-terrain";
+const WORLD_TERRAIN_TEXTURE_CACHE = new Map();
 const PIXEL_TERRAIN_TEXTURE_SIZE = 1536;
 const PIXEL_TERRAIN_CELL_SIZE = 3;
 
@@ -1159,10 +1160,11 @@ function createResources(coreTypes = []) {
 
 function drawBackground(graphics, width, height) {
   graphics.clear();
-  // This is visible only outside the actual world. The Battle Royale terrain
-  // itself lives inside the transformed world container, so it follows the
-  // camera across the full 14k x 14k map.
-  graphics.rect(0, 0, width, height).fill({ color: 0x02070d, alpha: 1 });
+  // This is visible only outside the actual world. Use a darker, cozy tone so
+  // the temporary frame before the terrain attaches feels intentional instead
+  // of flashing from a mismatched background.
+  graphics.rect(0, 0, width, height).fill({ color: 0x040b12, alpha: 1 });
+  graphics.rect(0, 0, width, height).stroke({ color: 0x0b1925, width: 2, alpha: 0.18 });
 }
 
 function pixelHash(x, y, seed = 1337) {
@@ -1246,368 +1248,364 @@ function findPixelLandSpot(mask, cells, random, margin = 10) {
 function createPixelTerrainTexture(worldWidth, worldHeight) {
   // High-end aerial / satellite-like world art for Battle Royale only.
   // Decorative only: no gameplay, pathing, bots, loot or zone logic changes.
-  const size = isMobileDevice() ? 2560 : 4096;
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
+  const mobile = isMobileDevice();
+  const size = mobile ? 2048 : 3072;
+  const cacheKey = `hq-ultra-dark-aerial:${mobile ? "mobile" : "desktop"}:${size}`;
+  let texture = WORLD_TERRAIN_TEXTURE_CACHE.get(cacheKey);
 
-  const ctx = canvas.getContext("2d", { alpha: false });
-  ctx.imageSmoothingEnabled = true;
+  if (!texture) {
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
 
-  let randomState = 0x9d3b7c21;
-  const random = () => {
-    randomState = (randomState * 1664525 + 1013904223) >>> 0;
-    return randomState / 4294967296;
-  };
-  const px = (value) => value * size;
+    const ctx = canvas.getContext("2d", { alpha: false });
+    ctx.imageSmoothingEnabled = true;
 
-  // Deep ocean base with subtle large-scale tonal variation.
-  const ocean = ctx.createLinearGradient(0, 0, size, size);
-  ocean.addColorStop(0, "#08283c");
-  ocean.addColorStop(0.28, "#0b4b68");
-  ocean.addColorStop(0.62, "#0f6a84");
-  ocean.addColorStop(1, "#0b354d");
-  ctx.fillStyle = ocean;
-  ctx.fillRect(0, 0, size, size);
+    let randomState = 0x9d3b7c21;
+    const random = () => {
+      randomState = (randomState * 1664525 + 1013904223) >>> 0;
+      return randomState / 4294967296;
+    };
+    const px = (value) => value * size;
 
-  // Satellite-like water depth / current bands.
-  for (let index = 0; index < 220; index += 1) {
-    const x = random() * size;
-    const y = random() * size;
-    const rx = px(0.025 + random() * 0.11);
-    const ry = rx * (0.45 + random() * 0.65);
-    const wash = ctx.createRadialGradient(x, y, 0, x, y, rx);
-    wash.addColorStop(0, random() > 0.48 ? "rgba(117, 211, 225, 0.08)" : "rgba(6, 22, 39, 0.08)");
-    wash.addColorStop(1, "rgba(0, 0, 0, 0)");
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate((random() - 0.5) * Math.PI);
-    ctx.scale(1, ry / rx);
-    ctx.fillStyle = wash;
-    ctx.beginPath();
-    ctx.arc(0, 0, rx, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
+    // Darker, cozier ocean base.
+    const ocean = ctx.createLinearGradient(0, 0, size, size);
+    ocean.addColorStop(0, "#04131e");
+    ocean.addColorStop(0.28, "#082332");
+    ocean.addColorStop(0.62, "#0a384b");
+    ocean.addColorStop(1, "#061a28");
+    ctx.fillStyle = ocean;
+    ctx.fillRect(0, 0, size, size);
 
-  const createIslandPath = (cx, cy, rx, ry, seed, points = 180) => {
-    const list = [];
-    for (let index = 0; index < points; index += 1) {
-      const angle = (index / points) * Math.PI * 2;
-      const broad = pixelNoise(Math.cos(angle) * 110 + seed, Math.sin(angle) * 110 - seed, 19, seed);
-      const fine = pixelNoise(Math.cos(angle) * 280 + seed * 2, Math.sin(angle) * 280 - seed * 2, 37, seed + 17);
-      const detail = pixelNoise(Math.cos(angle) * 540 + seed * 3, Math.sin(angle) * 540 - seed * 3, 63, seed + 49);
-      const radius = 0.88 + (broad - 0.5) * 0.24 + (fine - 0.5) * 0.09 + (detail - 0.5) * 0.035;
-      list.push({ x: cx + Math.cos(angle) * rx * radius, y: cy + Math.sin(angle) * ry * radius });
-    }
-    const path = new Path2D();
-    const first = list[0];
-    const last = list[list.length - 1];
-    path.moveTo((last.x + first.x) * 0.5, (last.y + first.y) * 0.5);
-    list.forEach((point, index) => {
-      const next = list[(index + 1) % list.length];
-      path.quadraticCurveTo(point.x, point.y, (point.x + next.x) * 0.5, (point.y + next.y) * 0.5);
-    });
-    path.closePath();
-    return path;
-  };
-
-  const drawRoad = (points, width = 12, bright = false) => {
-    ctx.save();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    points.forEach(([x, y], index) => {
-      if (index === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.strokeStyle = "rgba(44, 56, 48, 0.38)";
-    ctx.lineWidth = width + 5;
-    ctx.stroke();
-    const road = ctx.createLinearGradient(points[0][0], points[0][1], points[points.length - 1][0], points[points.length - 1][1]);
-    road.addColorStop(0, bright ? "rgba(199, 193, 164, 0.86)" : "rgba(173, 166, 142, 0.84)");
-    road.addColorStop(1, bright ? "rgba(149, 145, 124, 0.84)" : "rgba(139, 133, 112, 0.82)");
-    ctx.strokeStyle = road;
-    ctx.lineWidth = width;
-    ctx.stroke();
-    ctx.strokeStyle = "rgba(255, 246, 214, 0.18)";
-    ctx.lineWidth = Math.max(1.2, width * 0.12);
-    ctx.stroke();
-    ctx.restore();
-  };
-
-  const drawRiver = (points, width = 30) => {
-    ctx.save();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    points.forEach(([x, y], index) => {
-      if (index === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.strokeStyle = "rgba(8, 42, 56, 0.34)";
-    ctx.lineWidth = width + 18;
-    ctx.stroke();
-    const river = ctx.createLinearGradient(0, 0, size, size);
-    river.addColorStop(0, "#218eb1");
-    river.addColorStop(0.45, "#47c2d3");
-    river.addColorStop(1, "#1d7697");
-    ctx.strokeStyle = river;
-    ctx.lineWidth = width;
-    ctx.stroke();
-    ctx.strokeStyle = "rgba(210, 253, 255, 0.26)";
-    ctx.lineWidth = Math.max(1, width * 0.12);
-    ctx.stroke();
-    ctx.restore();
-  };
-
-  const drawField = (x, y, width, height, angle, colorA, colorB) => {
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(angle);
-    const field = ctx.createLinearGradient(-width * 0.5, -height * 0.5, width * 0.5, height * 0.5);
-    field.addColorStop(0, colorA);
-    field.addColorStop(1, colorB);
-    ctx.fillStyle = field;
-    ctx.fillRect(-width * 0.5, -height * 0.5, width, height);
-    ctx.strokeStyle = "rgba(57, 78, 46, 0.20)";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(-width * 0.5, -height * 0.5, width, height);
-    ctx.strokeStyle = "rgba(255, 251, 226, 0.08)";
-    ctx.lineWidth = 1;
-    for (let stripe = -width * 0.42; stripe < width * 0.42; stripe += 14) {
+    for (let index = 0; index < 160; index += 1) {
+      const x = random() * size;
+      const y = random() * size;
+      const rx = px(0.025 + random() * 0.11);
+      const ry = rx * (0.45 + random() * 0.65);
+      const wash = ctx.createRadialGradient(x, y, 0, x, y, rx);
+      wash.addColorStop(0, random() > 0.48 ? "rgba(53, 118, 131, 0.05)" : "rgba(3, 10, 18, 0.08)");
+      wash.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate((random() - 0.5) * Math.PI);
+      ctx.scale(1, ry / rx);
+      ctx.fillStyle = wash;
       ctx.beginPath();
-      ctx.moveTo(stripe, -height * 0.45);
-      ctx.lineTo(stripe, height * 0.45);
+      ctx.arc(0, 0, rx, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    const createIslandPath = (cx, cy, rx, ry, seed, points = 160) => {
+      const list = [];
+      for (let index = 0; index < points; index += 1) {
+        const angle = (index / points) * Math.PI * 2;
+        const broad = pixelNoise(Math.cos(angle) * 110 + seed, Math.sin(angle) * 110 - seed, 19, seed);
+        const fine = pixelNoise(Math.cos(angle) * 280 + seed * 2, Math.sin(angle) * 280 - seed * 2, 37, seed + 17);
+        const detail = pixelNoise(Math.cos(angle) * 540 + seed * 3, Math.sin(angle) * 540 - seed * 3, 63, seed + 49);
+        const radius = 0.88 + (broad - 0.5) * 0.24 + (fine - 0.5) * 0.09 + (detail - 0.5) * 0.035;
+        list.push({ x: cx + Math.cos(angle) * rx * radius, y: cy + Math.sin(angle) * ry * radius });
+      }
+      const path = new Path2D();
+      const first = list[0];
+      const last = list[list.length - 1];
+      path.moveTo((last.x + first.x) * 0.5, (last.y + first.y) * 0.5);
+      list.forEach((point, index) => {
+        const next = list[(index + 1) % list.length];
+        path.quadraticCurveTo(point.x, point.y, (point.x + next.x) * 0.5, (point.y + next.y) * 0.5);
+      });
+      path.closePath();
+      return path;
+    };
+
+    const drawRoad = (points, width = 10, bright = false) => {
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      points.forEach(([x, y], index) => {
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = "rgba(18, 24, 21, 0.38)";
+      ctx.lineWidth = width + 5;
       ctx.stroke();
-    }
-    ctx.restore();
-  };
+      const road = ctx.createLinearGradient(points[0][0], points[0][1], points[points.length - 1][0], points[points.length - 1][1]);
+      road.addColorStop(0, bright ? "rgba(126, 124, 110, 0.72)" : "rgba(108, 106, 96, 0.70)");
+      road.addColorStop(1, bright ? "rgba(88, 87, 80, 0.68)" : "rgba(79, 78, 72, 0.66)");
+      ctx.strokeStyle = road;
+      ctx.lineWidth = width;
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(214, 206, 179, 0.08)";
+      ctx.lineWidth = Math.max(1.2, width * 0.12);
+      ctx.stroke();
+      ctx.restore();
+    };
 
-  const drawForestCluster = (cx, cy, radiusX, radiusY, count = 90) => {
-    for (let index = 0; index < count; index += 1) {
-      const angle = random() * Math.PI * 2;
-      const distance = Math.sqrt(random());
-      const x = cx + Math.cos(angle) * radiusX * distance;
-      const y = cy + Math.sin(angle) * radiusY * distance;
-      const radius = 4 + random() * 12;
-      const tree = ctx.createRadialGradient(x - radius * 0.18, y - radius * 0.25, 0, x, y, radius);
-      tree.addColorStop(0, random() > 0.55 ? "rgba(104, 156, 90, 0.78)" : "rgba(121, 177, 102, 0.76)");
-      tree.addColorStop(0.6, random() > 0.5 ? "rgba(35, 88, 57, 0.86)" : "rgba(41, 100, 63, 0.86)");
-      tree.addColorStop(1, "rgba(18, 49, 39, 0.10)");
-      ctx.fillStyle = tree;
+    const drawRiver = (points, width = 24) => {
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
       ctx.beginPath();
-      ctx.ellipse(x, y, radius * (0.8 + random() * 0.4), radius * (0.78 + random() * 0.36), random() * Math.PI, 0, Math.PI * 2);
+      points.forEach(([x, y], index) => {
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = "rgba(5, 24, 33, 0.38)";
+      ctx.lineWidth = width + 18;
+      ctx.stroke();
+      const river = ctx.createLinearGradient(0, 0, size, size);
+      river.addColorStop(0, "#15546c");
+      river.addColorStop(0.45, "#1f7489");
+      river.addColorStop(1, "#104759");
+      ctx.strokeStyle = river;
+      ctx.lineWidth = width;
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(173, 218, 222, 0.12)";
+      ctx.lineWidth = Math.max(1, width * 0.10);
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    const drawField = (x, y, width, height, angle, colorA, colorB) => {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      const field = ctx.createLinearGradient(-width * 0.5, -height * 0.5, width * 0.5, height * 0.5);
+      field.addColorStop(0, colorA);
+      field.addColorStop(1, colorB);
+      ctx.fillStyle = field;
+      ctx.fillRect(-width * 0.5, -height * 0.5, width, height);
+      ctx.strokeStyle = "rgba(32, 42, 28, 0.18)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(-width * 0.5, -height * 0.5, width, height);
+      ctx.strokeStyle = "rgba(223, 219, 198, 0.04)";
+      ctx.lineWidth = 1;
+      for (let stripe = -width * 0.42; stripe < width * 0.42; stripe += 14) {
+        ctx.beginPath();
+        ctx.moveTo(stripe, -height * 0.45);
+        ctx.lineTo(stripe, height * 0.45);
+        ctx.stroke();
+      }
+      ctx.restore();
+    };
+
+    const drawForestCluster = (cx, cy, radiusX, radiusY, count = 70) => {
+      for (let index = 0; index < count; index += 1) {
+        const angle = random() * Math.PI * 2;
+        const distance = Math.sqrt(random());
+        const x = cx + Math.cos(angle) * radiusX * distance;
+        const y = cy + Math.sin(angle) * radiusY * distance;
+        const radius = 3 + random() * 8;
+        const tree = ctx.createRadialGradient(x - radius * 0.18, y - radius * 0.25, 0, x, y, radius);
+        tree.addColorStop(0, random() > 0.55 ? "rgba(63, 95, 58, 0.68)" : "rgba(69, 105, 63, 0.66)");
+        tree.addColorStop(0.6, random() > 0.5 ? "rgba(21, 49, 35, 0.82)" : "rgba(24, 56, 39, 0.82)");
+        tree.addColorStop(1, "rgba(13, 36, 29, 0.10)");
+        ctx.fillStyle = tree;
+        ctx.beginPath();
+        ctx.ellipse(x, y, radius * (0.8 + random() * 0.4), radius * (0.78 + random() * 0.36), random() * Math.PI, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    };
+
+    const drawVillage = (cx, cy, spread = 30, count = 8) => {
+      for (let i = 0; i < count; i += 1) {
+        const angle = random() * Math.PI * 2;
+        const distance = 4 + random() * spread;
+        const x = cx + Math.cos(angle) * distance;
+        const y = cy + Math.sin(angle) * distance;
+        const w = 4 + random() * 6;
+        const h = 3 + random() * 4.5;
+        ctx.fillStyle = random() > 0.56 ? "rgba(94, 69, 50, 0.72)" : "rgba(109, 84, 60, 0.72)";
+        ctx.fillRect(x - w * 0.5, y - h * 0.5, w, h);
+        ctx.fillStyle = "rgba(60, 35, 29, 0.42)";
+        ctx.fillRect(x - w * 0.5, y - h * 0.65, w, h * 0.25);
+      }
+    };
+
+    const drawCity = (cx, cy, scale = 1) => {
+      const radius = 96 * scale;
+      const cityShade = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius * 1.5);
+      cityShade.addColorStop(0, "rgba(121, 131, 130, 0.82)");
+      cityShade.addColorStop(0.5, "rgba(65, 79, 79, 0.78)");
+      cityShade.addColorStop(1, "rgba(42, 57, 60, 0)");
+      ctx.fillStyle = cityShade;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, radius * 1.15, radius * 0.92, 0.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(0.16);
+      for (let row = -11; row <= 11; row += 1) {
+        for (let col = -14; col <= 14; col += 1) {
+          if ((row + col) % 7 === 0) continue;
+          const blockW = 2 + random() * 4;
+          const blockH = 2 + random() * 4;
+          const bx = col * 5.2 + (row % 2) * 1.2;
+          const by = row * 4.6;
+          ctx.fillStyle = random() > 0.55 ? "rgba(126, 134, 132, 0.72)" : random() > 0.5 ? "rgba(91, 103, 103, 0.72)" : "rgba(58, 70, 72, 0.80)";
+          ctx.fillRect(bx - blockW * 0.5, by - blockH * 0.5, blockW, blockH);
+        }
+      }
+      ctx.strokeStyle = "rgba(48, 57, 57, 0.58)";
+      ctx.lineWidth = 1.25;
+      for (let lane = -10; lane <= 10; lane += 2) {
+        ctx.beginPath();
+        ctx.moveTo(-82, lane * 5.2);
+        ctx.lineTo(82, lane * 5.2);
+        ctx.stroke();
+      }
+      for (let lane = -8; lane <= 8; lane += 3) {
+        ctx.beginPath();
+        ctx.moveTo(lane * 8.5, -62);
+        ctx.lineTo(lane * 8.5, 62);
+        ctx.stroke();
+      }
+      ctx.restore();
+    };
+
+    const islands = [
+      { path: createIslandPath(px(0.49), px(0.52), px(0.40), px(0.45), 811), cx: px(0.49), cy: px(0.52), rx: px(0.40), ry: px(0.45) },
+      { path: createIslandPath(px(0.18), px(0.22), px(0.16), px(0.14), 917, 118), cx: px(0.18), cy: px(0.22), rx: px(0.16), ry: px(0.14) },
+      { path: createIslandPath(px(0.82), px(0.70), px(0.15), px(0.20), 1031, 122), cx: px(0.82), cy: px(0.70), rx: px(0.15), ry: px(0.20) },
+      { path: createIslandPath(px(0.46), px(0.87), px(0.17), px(0.11), 1201, 108), cx: px(0.46), cy: px(0.87), rx: px(0.17), ry: px(0.11) },
+    ];
+
+    islands.forEach((island, index) => {
+      ctx.save();
+      ctx.shadowColor = "rgba(4, 19, 28, 0.26)";
+      ctx.shadowBlur = 24;
+      ctx.shadowOffsetY = 8;
+      ctx.fillStyle = "#12333c";
+      ctx.fill(island.path);
+      ctx.restore();
+
+      ctx.save();
+      ctx.strokeStyle = "rgba(67, 132, 128, 0.26)";
+      ctx.lineWidth = 24;
+      ctx.stroke(island.path);
+      ctx.strokeStyle = "rgba(147, 133, 94, 0.68)";
+      ctx.lineWidth = 14;
+      ctx.stroke(island.path);
+
+      const land = ctx.createRadialGradient(
+        island.cx - island.rx * 0.24,
+        island.cy - island.ry * 0.28,
+        island.rx * 0.04,
+        island.cx,
+        island.cy,
+        Math.max(island.rx, island.ry) * 1.08,
+      );
+      land.addColorStop(0, index === 0 ? "#8f9961" : "#87925d");
+      land.addColorStop(0.28, index === 0 ? "#56724a" : "#526d48");
+      land.addColorStop(0.70, index === 0 ? "#39533b" : "#37503a");
+      land.addColorStop(1, "#22382d");
+      ctx.fillStyle = land;
+      ctx.fill(island.path);
+      ctx.clip(island.path);
+
+      for (let patch = 0; patch < 150; patch += 1) {
+        const x = island.cx + (random() - 0.5) * island.rx * 1.9;
+        const y = island.cy + (random() - 0.5) * island.ry * 1.9;
+        const r = 20 + random() * 115;
+        const tint = ctx.createRadialGradient(x, y, 0, x, y, r);
+        tint.addColorStop(0, random() > 0.54 ? "rgba(128, 136, 95, 0.04)" : "rgba(20, 39, 28, 0.08)");
+        tint.addColorStop(1, "rgba(0, 0, 0, 0)");
+        ctx.fillStyle = tint;
+        ctx.beginPath();
+        ctx.ellipse(x, y, r, r * (0.55 + random() * 0.35), random() * Math.PI, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      for (let field = 0; field < (index === 0 ? 54 : 20); field += 1) {
+        drawField(
+          island.cx + (random() - 0.5) * island.rx * 1.42,
+          island.cy + (random() - 0.5) * island.ry * 1.38,
+          20 + random() * 52,
+          12 + random() * 36,
+          (random() - 0.5) * 0.9,
+          random() > 0.5 ? "rgba(95, 95, 50, 0.22)" : "rgba(57, 82, 45, 0.22)",
+          random() > 0.5 ? "rgba(72, 74, 41, 0.16)" : "rgba(46, 65, 36, 0.16)",
+        );
+      }
+
+      const forests = index === 0 ? 14 : 5;
+      for (let forest = 0; forest < forests; forest += 1) {
+        drawForestCluster(
+          island.cx + (random() - 0.5) * island.rx * 1.25,
+          island.cy + (random() - 0.5) * island.ry * 1.2,
+          28 + random() * 76,
+          22 + random() * 58,
+          28 + Math.floor(random() * 36),
+        );
+      }
+
+      ctx.restore();
+    });
+
+    drawRiver([[px(0.19), px(0.10)], [px(0.23), px(0.22)], [px(0.20), px(0.33)], [px(0.25), px(0.45)], [px(0.22), px(0.60)], [px(0.29), px(0.78)]], 24);
+    drawRiver([[px(0.03), px(0.54)], [px(0.16), px(0.50)], [px(0.29), px(0.52)], [px(0.42), px(0.47)], [px(0.57), px(0.50)], [px(0.76), px(0.47)], [px(0.99), px(0.52)]], 18);
+    drawRiver([[px(0.53), px(0.05)], [px(0.50), px(0.17)], [px(0.55), px(0.28)], [px(0.52), px(0.41)], [px(0.58), px(0.55)], [px(0.56), px(0.70)]], 16);
+
+    const capital = [px(0.64), px(0.28)];
+    drawCity(capital[0], capital[1], 0.92);
+    drawCity(px(0.37), px(0.70), 0.46);
+    drawCity(px(0.79), px(0.66), 0.42);
+    drawVillage(px(0.26), px(0.30), 22, 8);
+    drawVillage(px(0.53), px(0.64), 24, 9);
+    drawVillage(px(0.17), px(0.63), 18, 7);
+    drawVillage(px(0.67), px(0.79), 20, 7);
+    drawVillage(px(0.47), px(0.86), 14, 6);
+
+    drawRoad([capital, [px(0.54), px(0.35)], [px(0.43), px(0.46)], [px(0.31), px(0.53)]], 6, true);
+    drawRoad([capital, [px(0.72), px(0.39)], [px(0.79), px(0.52)], [px(0.82), px(0.66)]], 5.5, true);
+    drawRoad([capital, [px(0.58), px(0.48)], [px(0.48), px(0.58)], [px(0.37), px(0.70)]], 6, true);
+    drawRoad([[px(0.37), px(0.70)], [px(0.43), px(0.78)], [px(0.47), px(0.87)]], 4.2);
+    drawRoad([[px(0.28), px(0.31)], [px(0.37), px(0.28)], [px(0.48), px(0.25)], capital], 4.2);
+
+    for (let index = 0; index < 36; index += 1) {
+      const x = random() * size;
+      const y = random() * size;
+      const r = px(0.04 + random() * 0.07);
+      const cloudShadow = ctx.createRadialGradient(x, y, 0, x, y, r);
+      cloudShadow.addColorStop(0, "rgba(5, 9, 14, 0.08)");
+      cloudShadow.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ctx.fillStyle = cloudShadow;
+      ctx.beginPath();
+      ctx.ellipse(x + r * 0.18, y + r * 0.15, r * 1.1, r * 0.56, random() * Math.PI, 0, Math.PI * 2);
+      ctx.fill();
+
+      const cloud = ctx.createRadialGradient(x, y, 0, x, y, r);
+      cloud.addColorStop(0, "rgba(255, 255, 255, 0.055)");
+      cloud.addColorStop(0.55, "rgba(255, 255, 255, 0.022)");
+      cloud.addColorStop(1, "rgba(255, 255, 255, 0)");
+      ctx.fillStyle = cloud;
+      ctx.beginPath();
+      ctx.ellipse(x, y, r, r * 0.50, random() * Math.PI, 0, Math.PI * 2);
       ctx.fill();
     }
-  };
 
-  const drawVillage = (cx, cy, spread = 36, count = 10) => {
-    for (let i = 0; i < count; i += 1) {
-      const angle = random() * Math.PI * 2;
-      const distance = 4 + random() * spread;
-      const x = cx + Math.cos(angle) * distance;
-      const y = cy + Math.sin(angle) * distance;
-      const w = 5 + random() * 8;
-      const h = 4 + random() * 6;
-      ctx.fillStyle = random() > 0.56 ? "rgba(152, 111, 81, 0.82)" : "rgba(177, 138, 98, 0.82)";
-      ctx.fillRect(x - w * 0.5, y - h * 0.5, w, h);
-      ctx.fillStyle = "rgba(118, 68, 54, 0.55)";
-      ctx.fillRect(x - w * 0.5, y - h * 0.65, w, h * 0.25);
-      if (random() > 0.45) {
-        ctx.fillStyle = "rgba(96, 140, 76, 0.55)";
-        ctx.fillRect(x + w * 0.45, y - 1, 3, 3);
-      }
-    }
-  };
+    // Atmospheric veil to make the terrain feel farther below the drones.
+    const aerialVeil = ctx.createLinearGradient(0, 0, 0, size);
+    aerialVeil.addColorStop(0, "rgba(214, 234, 255, 0.05)");
+    aerialVeil.addColorStop(0.45, "rgba(90, 124, 150, 0.035)");
+    aerialVeil.addColorStop(1, "rgba(8, 18, 26, 0.08)");
+    ctx.fillStyle = aerialVeil;
+    ctx.fillRect(0, 0, size, size);
 
-  const drawCity = (cx, cy, scale = 1) => {
-    const radius = 130 * scale;
-    const cityShade = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius * 1.5);
-    cityShade.addColorStop(0, "rgba(195, 209, 205, 0.94)");
-    cityShade.addColorStop(0.5, "rgba(110, 130, 129, 0.88)");
-    cityShade.addColorStop(1, "rgba(42, 57, 60, 0)");
-    ctx.fillStyle = cityShade;
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, radius * 1.15, radius * 0.92, 0.2, 0, Math.PI * 2);
-    ctx.fill();
+    const vignette = ctx.createRadialGradient(px(0.5), px(0.5), px(0.12), px(0.5), px(0.5), px(0.84));
+    vignette.addColorStop(0, "rgba(255, 255, 255, 0.02)");
+    vignette.addColorStop(0.65, "rgba(1, 10, 16, 0.14)");
+    vignette.addColorStop(1, "rgba(1, 7, 11, 0.46)");
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, size, size);
 
-    // Dense city fabric.
-    ctx.save();
-    ctx.translate(cx, cy);
-    ctx.rotate(0.16);
-    for (let row = -15; row <= 15; row += 1) {
-      for (let col = -18; col <= 18; col += 1) {
-        if ((row + col) % 7 === 0) continue;
-        const blockW = 3 + random() * 5;
-        const blockH = 3 + random() * 5;
-        const bx = col * 6 + (row % 2) * 1.5;
-        const by = row * 5.2;
-        ctx.fillStyle = random() > 0.55 ? "rgba(203, 214, 208, 0.86)" : random() > 0.5 ? "rgba(150, 168, 169, 0.88)" : "rgba(101, 122, 123, 0.9)";
-        ctx.fillRect(bx - blockW * 0.5, by - blockH * 0.5, blockW, blockH);
-      }
-    }
-    ctx.strokeStyle = "rgba(84, 95, 94, 0.72)";
-    ctx.lineWidth = 1.8;
-    for (let lane = -11; lane <= 11; lane += 2) {
-      ctx.beginPath();
-      ctx.moveTo(-110, lane * 6);
-      ctx.lineTo(110, lane * 6);
-      ctx.stroke();
-    }
-    for (let lane = -9; lane <= 9; lane += 3) {
-      ctx.beginPath();
-      ctx.moveTo(lane * 10, -84);
-      ctx.lineTo(lane * 10, 84);
-      ctx.stroke();
-    }
-    ctx.restore();
-  };
-
-  const islands = [
-    { path: createIslandPath(px(0.49), px(0.52), px(0.40), px(0.45), 811), cx: px(0.49), cy: px(0.52), rx: px(0.40), ry: px(0.45) },
-    { path: createIslandPath(px(0.18), px(0.22), px(0.16), px(0.14), 917, 120), cx: px(0.18), cy: px(0.22), rx: px(0.16), ry: px(0.14) },
-    { path: createIslandPath(px(0.82), px(0.70), px(0.15), px(0.20), 1031, 124), cx: px(0.82), cy: px(0.70), rx: px(0.15), ry: px(0.20) },
-    { path: createIslandPath(px(0.46), px(0.87), px(0.17), px(0.11), 1201, 110), cx: px(0.46), cy: px(0.87), rx: px(0.17), ry: px(0.11) },
-  ];
-
-  islands.forEach((island, index) => {
-    // Shelf / beach shadow.
-    ctx.save();
-    ctx.shadowColor = "rgba(4, 19, 28, 0.34)";
-    ctx.shadowBlur = 30;
-    ctx.shadowOffsetY = 10;
-    ctx.fillStyle = "#215f67";
-    ctx.fill(island.path);
-    ctx.restore();
-
-    // Shallow water rim.
-    ctx.save();
-    ctx.strokeStyle = "rgba(154, 238, 231, 0.42)";
-    ctx.lineWidth = 28;
-    ctx.stroke(island.path);
-    ctx.strokeStyle = "rgba(237, 216, 156, 0.90)";
-    ctx.lineWidth = 16;
-    ctx.stroke(island.path);
-
-    const land = ctx.createRadialGradient(
-      island.cx - island.rx * 0.24,
-      island.cy - island.ry * 0.28,
-      island.rx * 0.04,
-      island.cx,
-      island.cy,
-      Math.max(island.rx, island.ry) * 1.08,
-    );
-    land.addColorStop(0, index === 0 ? "#d5d98a" : "#cad783");
-    land.addColorStop(0.28, index === 0 ? "#8dc06f" : "#86ba6d");
-    land.addColorStop(0.70, index === 0 ? "#659354" : "#628f56");
-    land.addColorStop(1, "#3f6d49");
-    ctx.fillStyle = land;
-    ctx.fill(island.path);
-    ctx.clip(island.path);
-
-    // Gentle terrain shading / elevation.
-    for (let patch = 0; patch < 220; patch += 1) {
-      const x = island.cx + (random() - 0.5) * island.rx * 1.9;
-      const y = island.cy + (random() - 0.5) * island.ry * 1.9;
-      const r = 20 + random() * 125;
-      const tint = ctx.createRadialGradient(x, y, 0, x, y, r);
-      tint.addColorStop(0, random() > 0.54 ? "rgba(231, 233, 173, 0.08)" : "rgba(39, 77, 52, 0.08)");
-      tint.addColorStop(1, "rgba(0, 0, 0, 0)");
-      ctx.fillStyle = tint;
-      ctx.beginPath();
-      ctx.ellipse(x, y, r, r * (0.55 + random() * 0.35), random() * Math.PI, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Agricultural patterns.
-    for (let field = 0; field < (index === 0 ? 74 : 26); field += 1) {
-      drawField(
-        island.cx + (random() - 0.5) * island.rx * 1.42,
-        island.cy + (random() - 0.5) * island.ry * 1.38,
-        28 + random() * 76,
-        18 + random() * 54,
-        (random() - 0.5) * 0.9,
-        random() > 0.5 ? "rgba(178, 176, 86, 0.34)" : "rgba(114, 157, 81, 0.32)",
-        random() > 0.5 ? "rgba(131, 136, 70, 0.24)" : "rgba(92, 126, 67, 0.24)",
-      );
-    }
-
-    // Forests.
-    const forests = index === 0 ? 20 : 8;
-    for (let forest = 0; forest < forests; forest += 1) {
-      drawForestCluster(
-        island.cx + (random() - 0.5) * island.rx * 1.25,
-        island.cy + (random() - 0.5) * island.ry * 1.2,
-        36 + random() * 110,
-        28 + random() * 78,
-        42 + Math.floor(random() * 68),
-      );
-    }
-
-    ctx.restore();
-  });
-
-  // Rivers / channels.
-  drawRiver([[px(0.19), px(0.10)], [px(0.23), px(0.22)], [px(0.20), px(0.33)], [px(0.25), px(0.45)], [px(0.22), px(0.60)], [px(0.29), px(0.78)]], 32);
-  drawRiver([[px(0.03), px(0.54)], [px(0.16), px(0.50)], [px(0.29), px(0.52)], [px(0.42), px(0.47)], [px(0.57), px(0.50)], [px(0.76), px(0.47)], [px(0.99), px(0.52)]], 24);
-  drawRiver([[px(0.53), px(0.05)], [px(0.50), px(0.17)], [px(0.55), px(0.28)], [px(0.52), px(0.41)], [px(0.58), px(0.55)], [px(0.56), px(0.70)]], 22);
-
-  // Cities and towns.
-  const capital = [px(0.64), px(0.28)];
-  drawCity(capital[0], capital[1], 1.2);
-  drawCity(px(0.37), px(0.70), 0.64);
-  drawCity(px(0.79), px(0.66), 0.56);
-  drawVillage(px(0.26), px(0.30), 28, 12);
-  drawVillage(px(0.53), px(0.64), 32, 14);
-  drawVillage(px(0.17), px(0.63), 22, 9);
-  drawVillage(px(0.67), px(0.79), 26, 10);
-  drawVillage(px(0.47), px(0.86), 18, 8);
-
-  // Road network.
-  drawRoad([capital, [px(0.54), px(0.35)], [px(0.43), px(0.46)], [px(0.31), px(0.53)]], 8, true);
-  drawRoad([capital, [px(0.72), px(0.39)], [px(0.79), px(0.52)], [px(0.82), px(0.66)]], 7, true);
-  drawRoad([capital, [px(0.58), px(0.48)], [px(0.48), px(0.58)], [px(0.37), px(0.70)]], 8, true);
-  drawRoad([[px(0.37), px(0.70)], [px(0.43), px(0.78)], [px(0.47), px(0.87)]], 6);
-  drawRoad([[px(0.28), px(0.31)], [px(0.37), px(0.28)], [px(0.48), px(0.25)], capital], 6);
-  drawRoad([[px(0.26), px(0.30)], [px(0.31), px(0.34)], [px(0.36), px(0.42)]], 4);
-  drawRoad([[px(0.53), px(0.64)], [px(0.48), px(0.60)], [px(0.44), px(0.58)]], 4);
-  drawRoad([[px(0.17), px(0.63)], [px(0.22), px(0.58)], [px(0.28), px(0.55)]], 4);
-  drawRoad([[px(0.67), px(0.79)], [px(0.70), px(0.73)], [px(0.74), px(0.69)]], 4);
-
-  // Fine cloud haze and shadowing to push the image away from a cartoon look.
-  for (let index = 0; index < 42; index += 1) {
-    const x = random() * size;
-    const y = random() * size;
-    const r = px(0.03 + random() * 0.065);
-    const cloudShadow = ctx.createRadialGradient(x, y, 0, x, y, r);
-    cloudShadow.addColorStop(0, "rgba(14, 24, 34, 0.06)");
-    cloudShadow.addColorStop(1, "rgba(0, 0, 0, 0)");
-    ctx.fillStyle = cloudShadow;
-    ctx.beginPath();
-    ctx.ellipse(x + r * 0.22, y + r * 0.18, r * 1.1, r * 0.58, random() * Math.PI, 0, Math.PI * 2);
-    ctx.fill();
-
-    const cloud = ctx.createRadialGradient(x, y, 0, x, y, r);
-    cloud.addColorStop(0, "rgba(255, 255, 255, 0.12)");
-    cloud.addColorStop(0.55, "rgba(255, 255, 255, 0.06)");
-    cloud.addColorStop(1, "rgba(255, 255, 255, 0)");
-    ctx.fillStyle = cloud;
-    ctx.beginPath();
-    ctx.ellipse(x, y, r, r * 0.52, random() * Math.PI, 0, Math.PI * 2);
-    ctx.fill();
+    texture = PIXI.Texture.from(canvas);
+    if (texture?.source) texture.source.scaleMode = "linear";
+    if (texture?.baseTexture) texture.baseTexture.scaleMode = PIXI.SCALE_MODES?.LINEAR ?? "linear";
+    WORLD_TERRAIN_TEXTURE_CACHE.set(cacheKey, texture);
   }
-
-  const vignette = ctx.createRadialGradient(px(0.5), px(0.5), px(0.16), px(0.5), px(0.5), px(0.80));
-  vignette.addColorStop(0, "rgba(0, 0, 0, 0)");
-  vignette.addColorStop(0.76, "rgba(3, 22, 30, 0.05)");
-  vignette.addColorStop(1, "rgba(2, 12, 18, 0.22)");
-  ctx.fillStyle = vignette;
-  ctx.fillRect(0, 0, size, size);
-
-  const texture = PIXI.Texture.from(canvas);
-  if (texture?.source) texture.source.scaleMode = "linear";
-  if (texture?.baseTexture) texture.baseTexture.scaleMode = PIXI.SCALE_MODES?.LINEAR ?? "linear";
 
   const sprite = new PIXI.Sprite(texture);
   sprite.position.set(0, 0);
