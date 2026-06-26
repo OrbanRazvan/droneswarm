@@ -740,12 +740,23 @@ function updateCombatTextVisual(visual, event, resources, now) {
   return true;
 }
 
-function syncCombatTextLayer({ map, source, resources, parent, bounds, now }) {
+function syncCombatTextLayer({
+  map,
+  source,
+  resources,
+  parent,
+  bounds,
+  now,
+  forceVisible = false,
+}) {
   const active = new Set();
   const events = [];
 
   for (const event of source || []) {
-    if (!event?.id || !isVisibleInBounds(event, bounds, 260)) continue;
+    if (!event?.id) continue;
+    // Private combat text is always for the local drone. Do not drop it just
+    // because the server coordinate and the client camera are one frame apart.
+    if (!forceVisible && !isVisibleInBounds(event, bounds, 260)) continue;
     const ttl = Math.max(300, Number(event.ttl || 2000));
     if (Date.now() - Number(event.createdAt || 0) >= ttl) continue;
     events.push(event);
@@ -1972,6 +1983,7 @@ function PixiArenaRenderer({
           parent: combatLayer,
           bounds,
           now,
+          forceVisible: Boolean(data?.combatEventsPrivate),
         });
       });
     };

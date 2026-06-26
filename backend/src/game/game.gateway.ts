@@ -340,7 +340,7 @@ export class GameGateway {
 
     const sequence = Number(room.combatEventSequence || 0) + 1;
     room.combatEventSequence = sequence;
-    room.combatEvents.push({
+    const event = {
       id: `combat-${sequence}-${crypto.randomUUID()}`,
       x: Math.round(Number(unit.x || 0)),
       y: Math.round(Number(unit.y || 0)),
@@ -349,12 +349,29 @@ export class GameGateway {
       // Combat text belongs only to the affected/rewarded player. State
       // serialization below sends it exclusively to this socket, so unrelated
       // nearby fights do not clutter anyone else's screen.
-      viewerId: unit.id,
+      viewerId: String(unit.id),
       side: sequence % 2 === 0 ? 1 : -1,
       lane: sequence % 3,
       createdAt: now,
       ttl: 2000,
-    });
+    };
+
+    room.combatEvents.push(event);
+
+    // IMPORTANT: PvP snapshots are intentionally high-frequency/volatile.
+    // Sending combat text only inside snapshots means a dropped snapshot can
+    // permanently lose the animation. Battle Royale creates these events
+    // locally, so it never has that problem. Normal/Zone need this reliable,
+    // one-socket event as the multiplayer equivalent.
+    const privateEventName = room?.normalMode
+      ? "normal-pvp:combat"
+      : room?.zonePvpMode
+        ? "zone-pvp:combat"
+        : null;
+    if (privateEventName) {
+      const recipient = this.server?.sockets?.sockets?.get(String(unit.id));
+      recipient?.emit(privateEventName, event);
+    }
 
     if (room.combatEvents.length > 96) {
       room.combatEvents.splice(0, room.combatEvents.length - 96);

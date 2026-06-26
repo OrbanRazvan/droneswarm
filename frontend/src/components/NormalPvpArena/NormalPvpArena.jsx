@@ -1584,8 +1584,14 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
 
     const applyPrivateCombatEvent = (event) => {
-      const viewerId = worldRef.current.you?.id || socket.id;
-      if (!event?.id || !viewerId || event.viewerId !== viewerId) return;
+      const viewerId = String(worldRef.current.you?.id || socket.id || "");
+      if (
+        !event?.id ||
+        !viewerId ||
+        String(event.viewerId || "") !== viewerId
+      ) {
+        return;
+      }
 
       combatEventMapRef.current = mergePrivateCombatEvents(
         combatEventMapRef.current,
@@ -1593,10 +1599,23 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         viewerId,
         Date.now(),
       );
+      const combatEvents = [...combatEventMapRef.current.values()];
       worldRef.current = {
         ...worldRef.current,
-        combatEvents: [...combatEventMapRef.current.values()],
+        combatEvents,
       };
+
+      // Do not wait for React state or the next volatile world snapshot.
+      // Pixi reads this live object on its next WebGL frame, matching the
+      // immediate local feedback used by BattleRoyaleMode.
+      if (pixiLiveRef.current) {
+        pixiLiveRef.current = {
+          ...pixiLiveRef.current,
+          combatEvents,
+          combatViewerId: viewerId,
+          combatEventsPrivate: true,
+        };
+      }
     };
 
     socket.on("normal-pvp:joined", (state) => {
