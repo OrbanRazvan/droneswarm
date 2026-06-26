@@ -327,6 +327,70 @@ function mergePrivateCombatEvents(previousMap, incoming = [], viewerId, now = Da
   return previousMap;
 }
 
+
+// Multiplayer combat events normally arrive on a reliable private socket channel.
+// This local fallback mirrors BattleRoyaleMode feedback if a snapshot arrives first
+// or an event is delayed, without showing events belonging to another player.
+function buildSelfCombatFallbackEvents(previous, current, viewerId, now, existingEvents) {
+  const activeViewerId = viewerId ? String(viewerId) : "";
+  if (!previous || !current || !activeViewerId) return [];
+
+  const hasRecent = (text) => {
+    for (const event of existingEvents?.values?.() || []) {
+      if (
+        String(event?.text || "") === text &&
+        now - Number(event?.createdAt || 0) < 650
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const events = [];
+  const add = (text, kind, offsetY = 0) => {
+    if (!text || hasRecent(text)) return;
+    events.push({
+      id: `local-combat-${now}-${events.length}-${Math.random().toString(36).slice(2, 8)}`,
+      viewerId: activeViewerId,
+      x: Number(current.x || previous.x || 0),
+      y: Number(current.y || previous.y || 0) + offsetY,
+      text,
+      kind,
+      side: events.length % 2 === 0 ? 1 : -1,
+      lane: events.length % 3,
+      createdAt: now,
+      ttl: 2000,
+    });
+  };
+
+  const hpDelta = Math.round(Number(current.hp || 0) - Number(previous.hp || 0));
+  const droneDelta = Math.round(Number(current.drones || 0) - Number(previous.drones || 0));
+  const energyDelta = Math.round(Number(current.energy || 0) - Number(previous.energy || 0));
+  const killsIncreased = Number(current.kills || 0) > Number(previous.kills || 0);
+  const moveDelta = Number(current.moveSpeedMultiplier || 1) - Number(previous.moveSpeedMultiplier || 1);
+  const attackSpeedDelta = Number(current.attackDroneSpeedMultiplier || 1) - Number(previous.attackDroneSpeedMultiplier || 1);
+
+  if (hpDelta < 0) add(`-${Math.abs(hpDelta)} HP`, "damage", -4);
+  if (droneDelta < 0) add(`-${Math.abs(droneDelta)} DRONE`, "drone-loss", -28);
+
+  const shieldWasBlocked =
+    Boolean(previous.shieldActive) &&
+    !current.shieldActive &&
+    Number(previous.shieldUntil || 0) > now &&
+    hpDelta === 0 &&
+    droneDelta === 0;
+  if (shieldWasBlocked) add("SHIELD BLOCKED", "shield", -18);
+
+  if (energyDelta > 0) add(`ENERGY +${energyDelta}`, "heal", -8);
+  if (killsIncreased && hpDelta > 0) add(`+${hpDelta} HP`, "heal", -4);
+  if (killsIncreased && droneDelta > 0) add(`+${droneDelta} DRONE`, "drone-reward", -28);
+  if (killsIncreased && moveDelta >= 0.1) add("+15% MOVE SPEED", "move-reward", -52);
+  if (killsIncreased && attackSpeedDelta >= 0.04) add("+5% ATTACK DRONE SPEED", "attack-reward", -76);
+
+  return events;
+}
+
 function cleanupHiddenCollected(hiddenMap, now) {
   for (const [id, seenAt] of hiddenMap.entries()) {
     if (now - seenAt > LOCAL_COLLECT_HIDE_TTL) {

@@ -971,6 +971,11 @@ export class GameGateway {
       leaderboard: [],
       coreDropCountdown: Math.ceil(CORE_WARNING_DELAY / 1000),
     });
+
+    // A new player must update the already-waiting player immediately. The
+    // normal simulation broadcast is volatile, which can be skipped while a
+    // tab is backgrounded or while the second socket connects.
+    this.broadcastZonePvpRoomState(room, Date.now(), true);
   }
 
   @SubscribeMessage("zone-pvp:leave")
@@ -985,7 +990,15 @@ export class GameGateway {
   ) {
     const room = this.getZonePvpRoomBySocket(client.id);
     const player = room?.players.get(client.id);
-    if (!room || room.status !== "playing" || !player || !player.alive) return;
+    if (!room || !player || !player.alive) return;
+
+    // The client starts sending heartbeat input immediately after joining.
+    // In waiting/countdown we do not apply movement, but we MUST retain this
+    // heartbeat so two players are never dropped before the match begins.
+    const heartbeatNow = Date.now();
+    player.lastSeenAt = heartbeatNow;
+    player.lastInputReceivedAt = heartbeatNow;
+    if (room.status !== "playing") return;
 
     const seq = Number(input?.seq || 0);
     const safeSeq = Number.isFinite(seq) ? seq : 0;
@@ -3263,9 +3276,14 @@ export class GameGateway {
   cleanupZonePvpRoom(room, now) {
     for (const player of room.players.values()) {
       const socketOnline = this.server.sockets.sockets.has(player.id);
-      // Dead players are spectators, not inactive clients. Do not evict them
-      // solely because they stopped sending input after elimination.
-      if (!socketOnline || (player.alive !== false && now - player.lastSeenAt > 30000)) {
+      // Dead players are spectators, not inactive clients. Lobby players may
+      // also be waiting without gameplay input, so inactivity eviction applies
+      // only after the Zone PvP match has actually started.
+      const shouldExpireActivePlayer =
+        room.status === "playing" &&
+        player.alive !== false &&
+        now - Number(player.lastSeenAt || now) > 30000;
+      if (!socketOnline || shouldExpireActivePlayer) {
         this.removeZonePvpPlayer(player.id);
       }
     }
@@ -3291,7 +3309,7 @@ export class GameGateway {
     return ZONE_START_RADIUS + (ZONE_END_RADIUS - ZONE_START_RADIUS) * progress;
   }
 
-  broadcastZonePvpRoomState(room, now) {
+  broadcastZonePvpRoomState(room, now, reliable = false) {
     const players = [...room.players.values()];
     const alivePlayers = players.filter((player) => player.alive);
     const zoneRadius = this.getZonePvpZoneRadius(room);
@@ -3490,7 +3508,11 @@ export class GameGateway {
         payload.leaderboard = leaderboard;
       }
 
-      socket.volatile.emit("zone-pvp:state", payload);
+      if (reliable) {
+        socket.emit("zone-pvp:state", payload);
+      } else {
+        socket.volatile.emit("zone-pvp:state", payload);
+      }
     }
   }
 
