@@ -25,12 +25,14 @@ const NORMAL_WORLD_WIDTH = 14000;
 const NORMAL_WORLD_HEIGHT = 14000;
 const NORMAL_ROOM_ZONE_RADIUS = 100000;
 const NORMAL_VISIBLE_PLAYERS_LIMIT = 60;
-const NORMAL_ORB_BASE_TARGET = 300;
-const NORMAL_ORB_PER_ALIVE_PLAYER = 35;
-const NORMAL_ORB_MAX_TARGET = 460;
-const NORMAL_ENERGY_BASE_TARGET = 18;
-const NORMAL_ENERGY_PER_ALIVE_PLAYER = 2;
-const NORMAL_ENERGY_MAX_TARGET = 40;
+const NORMAL_ORB_BASE_TARGET = 600;
+const NORMAL_ORB_PER_ALIVE_PLAYER = 50;
+const NORMAL_ORB_MAX_TARGET = 1000;
+const NORMAL_ENERGY_BASE_TARGET = 50;
+const NORMAL_ENERGY_PER_ALIVE_PLAYER = 4;
+const NORMAL_ENERGY_MAX_TARGET = 110;
+const NORMAL_VISIBLE_ORB_LIMIT = 240;
+const NORMAL_VISIBLE_ENERGY_LIMIT = 80;
 const NORMAL_BASE_MOVE_SPEED_MULTIPLIER = 1.08;
 const NORMAL_BASE_ATTACK_DRONE_SPEED_MULTIPLIER = 1.12;
 const NORMAL_KILL_MOVE_SPEED_STEP = 0.15;
@@ -357,8 +359,61 @@ let GameGateway = class GameGateway {
         };
         player.lastSeenAt = Date.now();
     }
+    emitNormalPvpJoined(client, room, player) {
+        const orbLimit = NORMAL_VISIBLE_ORB_LIMIT;
+        const energyLimit = NORMAL_VISIBLE_ENERGY_LIMIT;
+        const viewRadius = VIEW_DISTANCE;
+        const nearbyOrbs = room.orbSpatialIndex
+            ? this.filterNearIndexed(player, room.orbSpatialIndex, viewRadius, orbLimit)
+            : this.filterNear(player, room.orbs, viewRadius, orbLimit);
+        const nearbyEnergyCells = room.energySpatialIndex
+            ? this.filterNearIndexed(player, room.energySpatialIndex, viewRadius, energyLimit)
+            : this.filterNear(player, room.energyCells, viewRadius, energyLimit);
+        const nearbyCores = room.coreSpatialIndex
+            ? this.filterNearIndexed(player, room.coreSpatialIndex, viewRadius + 600, 18)
+            : this.filterNear(player, room.cores, viewRadius + 600, 18);
+        client.emit("normal-pvp:joined", {
+            status: "playing",
+            serverTime: Date.now(),
+            playerId: client.id,
+            worldWidth: NORMAL_WORLD_WIDTH,
+            worldHeight: NORMAL_WORLD_HEIGHT,
+            safeZoneRadius: NORMAL_ROOM_ZONE_RADIUS,
+            playerCount: this.getAlivePlayers(room).length,
+            minPlayers: NORMAL_ROOM_MIN_PLAYERS,
+            maxPlayers: NORMAL_ROOM_MAX_PLAYERS,
+            you: this.serializePlayer(player),
+            players: [],
+            orbs: nearbyOrbs,
+            minimapOrbs: room.orbs.slice(0, 180),
+            minimapEnergyCells: room.energyCells.slice(0, 90),
+            energyCells: nearbyEnergyCells,
+            cores: nearbyCores,
+            minimapCores: room.cores.slice(0, 12),
+            projectiles: [],
+            combatEvents: [],
+            leaderboard: [],
+            coreDropCountdown: Math.ceil(CORE_WARNING_DELAY / 1000),
+        });
+    }
     handleNormalPvpJoin(client, data) {
         this.removePlayer(client.id);
+        this.removeBattleRoyaleOnlinePlayer(client.id);
+        this.removeZonePvpPlayer(client.id);
+        const existingRoom = this.getNormalRoomBySocket(client.id);
+        const existingPlayer = existingRoom?.players.get(client.id);
+        if (existingRoom && existingPlayer) {
+            existingPlayer.userId = data?.isGuest ? null : data?.userId;
+            existingPlayer.isGuest = Boolean(data?.isGuest);
+            existingPlayer.username = String(data?.username || (data?.isGuest ? "Guest" : "Player")).slice(0, 18);
+            existingPlayer.skin = normalizeSkin(data?.isGuest ? "cyan" : data?.skin);
+            existingPlayer.lastSeenAt = Date.now();
+            existingPlayer.lastInputReceivedAt = Date.now();
+            this.markRoomOccupied(existingRoom);
+            client.join(existingRoom.id);
+            this.emitNormalPvpJoined(client, existingRoom, existingPlayer);
+            return;
+        }
         this.removeNormalPlayer(client.id);
         const room = this.findOrCreateNormalRoom();
         const spawn = this.getNormalSpawn(room);
@@ -411,26 +466,7 @@ let GameGateway = class GameGateway {
         this.markRoomOccupied(room);
         this.normalSocketRoom.set(client.id, room.id);
         client.join(room.id);
-        client.emit("normal-pvp:joined", {
-            status: "playing",
-            playerId: client.id,
-            worldWidth: NORMAL_WORLD_WIDTH,
-            worldHeight: NORMAL_WORLD_HEIGHT,
-            safeZoneRadius: NORMAL_ROOM_ZONE_RADIUS,
-            playerCount: this.getAlivePlayers(room).length,
-            minPlayers: NORMAL_ROOM_MIN_PLAYERS,
-            maxPlayers: NORMAL_ROOM_MAX_PLAYERS,
-            you: this.serializePlayer(player),
-            players: [],
-            orbs: [],
-            minimapOrbs: [],
-            minimapEnergyCells: [],
-            energyCells: [],
-            cores: [],
-            projectiles: [],
-            leaderboard: [],
-            coreDropCountdown: Math.ceil(CORE_WARNING_DELAY / 1000),
-        });
+        this.emitNormalPvpJoined(client, room, player);
     }
     handleNormalPvpLeave(client) {
         this.removeNormalPlayer(client.id);
@@ -2141,12 +2177,18 @@ let GameGateway = class GameGateway {
                     .slice(-32),
             };
             if (includeViewportItems) {
+                const orbLimit = room.normalMode
+                    ? NORMAL_VISIBLE_ORB_LIMIT
+                    : VISIBLE_ORB_LIMIT;
+                const energyLimit = room.normalMode
+                    ? NORMAL_VISIBLE_ENERGY_LIMIT
+                    : VISIBLE_ENERGY_LIMIT;
                 payload.orbs = room.orbSpatialIndex
-                    ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, VISIBLE_ORB_LIMIT)
-                    : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, VISIBLE_ORB_LIMIT);
+                    ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, orbLimit)
+                    : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, orbLimit);
                 payload.energyCells = room.energySpatialIndex
-                    ? this.filterNearIndexed(viewAnchor, room.energySpatialIndex, VIEW_DISTANCE, VISIBLE_ENERGY_LIMIT)
-                    : this.filterNear(viewAnchor, room.energyCells, VIEW_DISTANCE, VISIBLE_ENERGY_LIMIT);
+                    ? this.filterNearIndexed(viewAnchor, room.energySpatialIndex, VIEW_DISTANCE, energyLimit)
+                    : this.filterNear(viewAnchor, room.energyCells, VIEW_DISTANCE, energyLimit);
                 payload.cores = room.coreSpatialIndex
                     ? this.filterNearIndexed(viewAnchor, room.coreSpatialIndex, VIEW_DISTANCE + 600, 18)
                     : this.filterNear(viewAnchor, room.cores, VIEW_DISTANCE + 600, 18);

@@ -49,9 +49,11 @@ const MOBILE_REACT_RENDER_SYNC_INTERVAL_MS = 260;
 const MOBILE_HUD_SYNC_INTERVAL_MS = 250;
 const MOBILE_RENDER_LIMITS = Object.freeze({
   players: 12,
-  orbs: 85,
-  energy: 28,
-  cores: 6,
+  // Normal PvP now has a denser server world. These limits remain modest
+  // enough for older phones, while showing substantially more nearby loot.
+  orbs: 140,
+  energy: 55,
+  cores: 7,
   projectiles: 20,
 });
 
@@ -1130,7 +1132,11 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const [mobileShieldActive, setMobileShieldActive] = useState(false);
 
   useEffect(() => {
+    // Do not auto-connect before all event listeners are attached. On a fast
+    // connection, an auto-connect can receive "normal-pvp:joined" before the
+    // listener exists, leaving a guest on an empty arena until refresh.
     const socket = io(API_URL, {
+      autoConnect: false,
       transports: ["websocket"],
       withCredentials: false,
       reconnection: true,
@@ -1368,15 +1374,57 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
     };
 
-    socket.on("connect", () => {
-      setConnectionError("");
+    let disposed = false;
+    let joinAttempts = 0;
+    let joinRetryTimer = null;
+
+    const clearJoinRetry = () => {
+      if (joinRetryTimer !== null) {
+        window.clearTimeout(joinRetryTimer);
+        joinRetryTimer = null;
+      }
+    };
+
+    const hasJoinedCurrentSocket = () =>
+      Boolean(
+        socket.connected &&
+          socket.id &&
+          worldRef.current.you?.id === socket.id,
+      );
+
+    const requestNormalPvpJoin = () => {
+      if (disposed || !socket.connected) return;
+
+      clearJoinRetry();
       socket.emit("normal-pvp:join", {
         userId: user?.isGuest ? null : user?.id,
         isGuest: Boolean(user?.isGuest),
         username: getDisplayName(user),
         skin: getSelectedSkin(user),
       });
-    });
+
+      joinAttempts += 1;
+
+      // The server makes duplicate joins idempotent. Retry a few times only
+      // when the reliable joined state was not received, never by asking the
+      // player to refresh the page.
+      joinRetryTimer = window.setTimeout(() => {
+        if (
+          !disposed &&
+          socket.connected &&
+          !hasJoinedCurrentSocket() &&
+          joinAttempts < 4
+        ) {
+          requestNormalPvpJoin();
+        }
+      }, 850);
+    };
+
+    const handleConnect = () => {
+      setConnectionError("");
+      joinAttempts = 0;
+      requestNormalPvpJoin();
+    };
 
     socket.on("connect_error", () => {
       setConnectionError(
@@ -1500,7 +1548,13 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       });
     };
 
-    socket.on("normal-pvp:joined", applyState);
+    socket.on("normal-pvp:joined", (state) => {
+      applyState(state);
+      if (state?.you?.id === socket.id) {
+        joinAttempts = 0;
+        clearJoinRetry();
+      }
+    });
     socket.on("normal-pvp:state", applyState);
     socket.on("normal-pvp:eliminated", applyEliminated);
     socket.on("normal-pvp:collect", applyCollectSync);
@@ -1509,6 +1563,10 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         typeof message === "string" ? message : "Eroare Normal PvP.",
       ),
     );
+    socket.on("connect", handleConnect);
+
+    // All listeners are ready before the transport starts.
+    socket.connect();
 
     const sendInputNow = (force = false) => {
       if (!socket.connected) return;
@@ -1617,8 +1675,11 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     }, mobilePerformanceRef.current ? MOBILE_HUD_SYNC_INTERVAL_MS : HUD_SYNC_INTERVAL_MS);
 
     return () => {
+      disposed = true;
+      clearJoinRetry();
       window.clearInterval(inputTimer);
       window.clearInterval(hudTimer);
+      socket.off("connect", handleConnect);
       socket.emit("normal-pvp:leave");
       socket.disconnect();
       socketRef.current = null;
@@ -1940,14 +2001,14 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         (orb) =>
           !isHiddenCollected(hiddenOrbIdsRef.current, orb.id) &&
           isVisible(orb, liveBounds, 45),
-        renderLimits?.orbs || 140,
+        renderLimits?.orbs || 240,
       );
       const liveEnergyCells = collectVisible(
         stableEnergyMapRef.current.values(),
         (cell) =>
           !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id) &&
           isVisible(cell, liveBounds, 70),
-        renderLimits?.energy || 50,
+        renderLimits?.energy || 80,
       );
       const liveCores = collectVisible(
         data.cores || [],
@@ -1985,6 +2046,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         coreColorMap: coreColorMapRef.current,
         otherPlayerSize: 112,
         otherPlayerQuality: 0,
+        staticItemBudget: isMobilePerformance ? 180 : 280,
       };
 
       if (
@@ -2449,12 +2511,12 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const visibleOrbs = collectVisible(
     renderData.orbs || [],
     (orb) => isVisible(orb, bounds, 40),
-    reactiveRenderLimits?.orbs || 140,
+    reactiveRenderLimits?.orbs || 240,
   );
   const visibleEnergyCells = collectVisible(
     renderData.energyCells || [],
     (cell) => isVisible(cell, bounds, 60),
-    reactiveRenderLimits?.energy || 50,
+    reactiveRenderLimits?.energy || 80,
   );
   const visibleCores = collectVisible(
     renderData.cores || [],
@@ -2579,6 +2641,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         coreTypes={CORE_TYPES}
         otherPlayerSize={112}
         otherPlayerQuality={0}
+        staticItemBudget={isMobileControls ? 180 : 280}
         liveDataRef={pixiLiveRef}
         forceLowQuality={graphicsQuality === "low" || isMobileControls}
         worldWidth={worldWidth}

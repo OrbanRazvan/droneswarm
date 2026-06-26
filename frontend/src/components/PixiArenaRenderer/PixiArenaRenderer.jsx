@@ -1121,6 +1121,7 @@ function PixiArenaRenderer({
   coreTypes = [],
   liveDataRef = null,
   forceLowQuality = false,
+  staticItemBudget = null,
   worldWidth = DEFAULT_WORLD_WIDTH,
   worldHeight = DEFAULT_WORLD_HEIGHT,
   safeZoneRadius = null,
@@ -1149,6 +1150,7 @@ function PixiArenaRenderer({
     worldHeight,
     safeZoneRadius,
     showZone,
+    staticItemBudget,
   };
 
   useEffect(() => {
@@ -1281,9 +1283,15 @@ function PixiArenaRenderer({
         const staticSyncInterval = config.mobile ? 150 : STATIC_SYNC_INTERVAL_MS;
         if (now - lastStaticSync >= staticSyncInterval) {
           lastStaticSync = now;
-          const itemBudget = config.maxStaticItems;
-          const orbBudget = Math.floor(itemBudget * 0.72);
-          const energyBudget = Math.floor(itemBudget * 0.2);
+          // Normal PvP can request a denser loot budget without changing
+          // other game modes. Clamp it to a safe device-specific ceiling.
+          const requestedStaticBudget = Number(data.staticItemBudget || 0);
+          const staticBudgetCeiling = config.mobile ? 190 : 300;
+          const itemBudget = requestedStaticBudget > 0
+            ? clamp(Math.round(requestedStaticBudget), 40, staticBudgetCeiling)
+            : config.maxStaticItems;
+          const orbBudget = Math.floor(itemBudget * 0.70);
+          const energyBudget = Math.floor(itemBudget * 0.24);
           const coreBudget = Math.max(2, itemBudget - orbBudget - energyBudget);
 
           upsertStaticLayer({

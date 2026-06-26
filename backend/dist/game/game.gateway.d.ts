@@ -29,6 +29,7 @@ export declare class GameGateway {
     handlePvpJoin(client: Socket, data: any): void;
     handlePvpLeave(client: Socket): void;
     handlePvpInput(client: Socket, input: any): void;
+    private emitNormalPvpJoined;
     handleNormalPvpJoin(client: Socket, data: any): void;
     handleNormalPvpLeave(client: Socket): void;
     handleNormalPvpInput(client: Socket, input: any): void;
