@@ -1253,6 +1253,13 @@ function createPixelTerrainTexture(worldWidth, worldHeight) {
   const cacheKey = `battle-royale-space-premium:${mobile ? "mobile" : "desktop"}:${size}`;
   let texture = WORLD_TERRAIN_TEXTURE_CACHE.get(cacheKey);
 
+  // A previous Pixi application may have been unmounted after changing modes.
+  // Never reuse a texture whose GPU/source was already destroyed.
+  if (texture?.destroyed || texture?.source?.destroyed || texture?.baseTexture?.destroyed) {
+    WORLD_TERRAIN_TEXTURE_CACHE.delete(cacheKey);
+    texture = null;
+  }
+
   if (!texture) {
     const canvas = document.createElement("canvas");
     canvas.width = size;
@@ -1540,6 +1547,20 @@ function createPixelTerrainTexture(worldWidth, worldHeight) {
   return sprite;
 }
 
+function destroyTerrainChild(child) {
+  try {
+    // Terrain textures are globally cached across arena mode changes. Destroy
+    // only the display object, never the shared texture/source.
+    child?.destroy?.({ children: true, texture: false, textureSource: false });
+  } catch {
+    try {
+      child?.destroy?.({ children: true });
+    } catch {
+      // no-op
+    }
+  }
+}
+
 function syncWorldTerrain(layer, state, theme, worldWidth, worldHeight) {
   const normalizedTheme = String(theme || "default");
   const width = Math.max(1, Math.round(Number(worldWidth || DEFAULT_WORLD_WIDTH)));
@@ -1547,23 +1568,30 @@ function syncWorldTerrain(layer, state, theme, worldWidth, worldHeight) {
   const key = `${normalizedTheme}:${width}:${height}`;
   if (state.key === key) return;
 
-  state.key = key;
   const previous = layer.removeChildren();
-  previous.forEach((child) => {
-    try {
-      child.destroy?.({ children: true, texture: true, textureSource: true });
-    } catch {
-      child.destroy?.();
-    }
-  });
+  previous.forEach(destroyTerrainChild);
+  state.key = key;
 
   if (normalizedTheme !== PIXEL_TERRAIN_THEME) return;
-  layer.addChild(createPixelTerrainTexture(width, height));
+
+  try {
+    layer.addChild(createPixelTerrainTexture(width, height));
+  } catch (error) {
+    // A terrain texture must never be allowed to stop the whole Pixi ticker.
+    // In the unlikely case a device refuses the canvas texture, players, loot
+    // and projectiles still render over the dark base instead of a blank arena.
+    state.failedKey = key;
+    if (typeof console !== "undefined") {
+      console.warn("Battle Royale terrain texture fallback", error);
+    }
+  }
 }
 
 function safeDestroy(app) {
   try {
-    app?.destroy?.(true, { children: true, texture: true, textureSource: true });
+    // Keep globally cached background textures alive when switching between
+    // Battle Royale, Normal PvP and Zone PvP.
+    app?.destroy?.(true, { children: true, texture: false, textureSource: false });
   } catch {
     try {
       app?.destroy?.(true);
@@ -1635,6 +1663,9 @@ function PixiArenaRenderer({
     let destroyed = false;
     let app = null;
     let onResize = null;
+    let canvas = null;
+    let onContextLost = null;
+    let onContextRestored = null;
 
     const setup = async () => {
       if (!hostRef.current) return;
@@ -1663,7 +1694,11 @@ function PixiArenaRenderer({
         return;
       }
 
-      hostRef.current.appendChild(app.canvas || app.view);
+      // Remove a stale canvas left behind by an interrupted browser WebGL
+      // restore before attaching the new one.
+      hostRef.current.textContent = "";
+      canvas = app.canvas || app.view;
+      hostRef.current.appendChild(canvas);
       app.stage.eventMode = "none";
       app.stage.interactiveChildren = false;
       app.stage.sortableChildren = true;
@@ -1720,7 +1755,24 @@ function PixiArenaRenderer({
       const projectilePool = [];
       const simpleProjectilePool = [];
       const combatTextMap = new Map();
-      const terrainState = { key: null };
+      const terrainState = { key: null, failedKey: null };
+
+      // Mobile browsers can occasionally lose a WebGL context when changing
+      // mode. Prevent the default discard and force terrain/static layers to
+      // rebuild from their already-live data after restoration.
+      onContextLost = (event) => {
+        event?.preventDefault?.();
+        terrainState.key = null;
+        terrainState.failedKey = null;
+        lastStaticSync = 0;
+      };
+      onContextRestored = () => {
+        terrainState.key = null;
+        terrainState.failedKey = null;
+        lastStaticSync = 0;
+      };
+      canvas?.addEventListener?.("webglcontextlost", onContextLost, false);
+      canvas?.addEventListener?.("webglcontextrestored", onContextRestored, false);
 
       let lastStaticSync = 0;
       let lastZoneRadius = null;
@@ -1752,13 +1804,21 @@ function PixiArenaRenderer({
 
         // No game logic is executed here. This only makes a static sprite for
         // Battle Royale and rebuilds it only when the theme or map size changes.
-        syncWorldTerrain(
-          terrainLayer,
-          terrainState,
-          data.worldTheme,
-          data.worldWidth,
-          data.worldHeight,
-        );
+        // Terrain is visual-only. Guard it so one canvas/GPU issue cannot
+        // freeze player, projectile or loot rendering for the whole arena.
+        try {
+          syncWorldTerrain(
+            terrainLayer,
+            terrainState,
+            data.worldTheme,
+            data.worldWidth,
+            data.worldHeight,
+          );
+        } catch (error) {
+          if (typeof console !== "undefined") {
+            console.warn("Pixi terrain sync skipped", error);
+          }
+        }
         setWorldTransform(world, camera.x, camera.y, camera.scale);
         const bounds = getBounds(camera.x, camera.y, camera.scale, width, height, 360);
 
@@ -1921,6 +1981,8 @@ function PixiArenaRenderer({
     return () => {
       destroyed = true;
       if (onResize) window.removeEventListener("resize", onResize);
+      if (canvas && onContextLost) canvas.removeEventListener?.("webglcontextlost", onContextLost, false);
+      if (canvas && onContextRestored) canvas.removeEventListener?.("webglcontextrestored", onContextRestored, false);
       safeDestroy(app);
       if (hostRef.current) hostRef.current.textContent = "";
     };

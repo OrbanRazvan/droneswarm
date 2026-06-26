@@ -302,6 +302,31 @@ function mergeStableItems(previousMap, incoming = [], now, ttlMs) {
   return previousMap;
 }
 
+// Combat events have their own reliable socket channel. Keep a small local
+// cache because high-frequency world snapshots are intentionally volatile.
+// The Map deduplicates the direct event and the later state-snapshot copy.
+function mergePrivateCombatEvents(previousMap, incoming = [], viewerId, now = Date.now()) {
+  const activeViewerId = viewerId ? String(viewerId) : "";
+
+  for (const event of incoming || []) {
+    if (!event?.id || !activeViewerId || String(event.viewerId || "") !== activeViewerId) {
+      continue;
+    }
+    const createdAt = Number(event.createdAt || now);
+    const ttl = Math.max(300, Number(event.ttl || 2000));
+    if (now - createdAt >= ttl) continue;
+    previousMap.set(event.id, { ...event, createdAt, ttl });
+  }
+
+  for (const [id, event] of previousMap.entries()) {
+    const createdAt = Number(event?.createdAt || now);
+    const ttl = Math.max(300, Number(event?.ttl || 2000));
+    if (now - createdAt >= ttl + 260) previousMap.delete(id);
+  }
+
+  return previousMap;
+}
+
 function cleanupHiddenCollected(hiddenMap, now) {
   for (const [id, seenAt] of hiddenMap.entries()) {
     if (now - seenAt > LOCAL_COLLECT_HIDE_TTL) {
@@ -737,6 +762,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const battlePrepareWasVisibleRef = useRef(false);
   const battleBeginTimerRef = useRef(null);
   const lastArenaStatusRef = useRef("connecting");
+  const combatEventMapRef = useRef(new Map());
 
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
   const joystickPointerRef = useRef(null);
@@ -802,6 +828,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
   useEffect(() => {
     const socket = io(API_URL, {
+      autoConnect: false,
       transports: ["websocket"],
       withCredentials: false,
       reconnection: true,
@@ -814,6 +841,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     const applyState = (state) => {
       const now = performance.now();
       const nowWall = Date.now();
+      const combatViewerId = state?.you?.id || worldRef.current.you?.id || socket.id;
+      combatEventMapRef.current = mergePrivateCombatEvents(
+        combatEventMapRef.current,
+        Array.isArray(state?.combatEvents) ? state.combatEvents : [],
+        combatViewerId,
+        nowWall,
+      );
 
       // Sincronizare locala pentru PREPARE PHASE / BATTLE BEGIN.
       // Serverul ramane autoritar, dar tinem si un fallback local ca HUD-ul sa nu dispara
@@ -914,15 +948,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           : worldRef.current.minimapCores,
 
         projectiles: Array.isArray(state.projectiles) ? state.projectiles : worldRef.current.projectiles,
-        // Private combat text only: every client retains events assigned to its
-        // own socket/player, never nearby fights from other players.
-        combatEvents: Array.isArray(state.combatEvents)
-          ? state.combatEvents.filter(
-              (event) =>
-                Boolean(state.you?.id || worldRef.current.you?.id) &&
-                event?.viewerId === (state.you?.id || worldRef.current.you?.id),
-            )
-          : worldRef.current.combatEvents,
+        // Reliable direct combat events + snapshot copies are merged above.
+        // This remains private to the local socket and is deduplicated by id.
+        combatEvents: [...combatEventMapRef.current.values()],
         leaderboard: Array.isArray(state.leaderboard) ? state.leaderboard : worldRef.current.leaderboard,
       };
 
@@ -1007,15 +1035,16 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
     };
 
-    socket.on("connect", () => {
+    const handleConnect = () => {
       setConnectionError("");
+      combatEventMapRef.current.clear();
       socket.emit("zone-pvp:join", {
         userId: user?.isGuest ? null : user?.id,
         isGuest: Boolean(user?.isGuest),
         username: getDisplayName(user),
         skin: getSelectedSkin(user),
       });
-    });
+    };
 
     socket.on("connect_error", () => {
       setConnectionError("Nu ma pot conecta la serverul PvP. Verifica Render/WebSocket.");
@@ -1059,10 +1088,32 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       });
     };
 
+    const applyPrivateCombatEvent = (event) => {
+      const viewerId = worldRef.current.you?.id || socket.id;
+      if (!event?.id || !viewerId || event.viewerId !== viewerId) return;
+
+      combatEventMapRef.current = mergePrivateCombatEvents(
+        combatEventMapRef.current,
+        [event],
+        viewerId,
+        Date.now(),
+      );
+      worldRef.current = {
+        ...worldRef.current,
+        combatEvents: [...combatEventMapRef.current.values()],
+      };
+    };
+
     socket.on("zone-pvp:joined", applyState);
     socket.on("zone-pvp:state", applyState);
+    socket.on("zone-pvp:combat", applyPrivateCombatEvent);
     socket.on("zone-pvp:eliminated", applyEliminated);
     socket.on("zone-pvp:error", (message) => setConnectionError(typeof message === "string" ? message : "Eroare Zone PvP."));
+
+    // All listeners are attached before transport starts, avoiding a fast
+    // join/state race on mobile browsers.
+    socket.on("connect", handleConnect);
+    socket.connect();
 
     const sendInputNow = (force = false) => {
       if (!socket.connected) return;
@@ -1132,6 +1183,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     return () => {
       window.clearInterval(inputTimer);
       window.clearInterval(hudTimer);
+      socket.off("connect", handleConnect);
+      socket.off("zone-pvp:combat", applyPrivateCombatEvent);
       socket.emit("zone-pvp:leave");
       socket.disconnect();
       socketRef.current = null;

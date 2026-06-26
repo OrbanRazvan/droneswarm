@@ -601,6 +601,31 @@ function mergeStableItems(previousMap, incoming = [], now, ttlMs) {
   return previousMap;
 }
 
+// Combat events have their own reliable socket channel. Keep a tiny local
+// cache because realtime world snapshots are deliberately volatile in PvP.
+// The Map also deduplicates the direct event and the later state-snapshot copy.
+function mergePrivateCombatEvents(previousMap, incoming = [], viewerId, now = Date.now()) {
+  const activeViewerId = viewerId ? String(viewerId) : "";
+
+  for (const event of incoming || []) {
+    if (!event?.id || !activeViewerId || String(event.viewerId || "") !== activeViewerId) {
+      continue;
+    }
+    const createdAt = Number(event.createdAt || now);
+    const ttl = Math.max(300, Number(event.ttl || 2000));
+    if (now - createdAt >= ttl) continue;
+    previousMap.set(event.id, { ...event, createdAt, ttl });
+  }
+
+  for (const [id, event] of previousMap.entries()) {
+    const createdAt = Number(event?.createdAt || now);
+    const ttl = Math.max(300, Number(event?.ttl || 2000));
+    if (now - createdAt >= ttl + 260) previousMap.delete(id);
+  }
+
+  return previousMap;
+}
+
 function cleanupHiddenCollected(hiddenMap, now) {
   for (const [id, seenAt] of hiddenMap.entries()) {
     if (now - seenAt > LOCAL_COLLECT_HIDE_TTL) {
@@ -1054,6 +1079,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const remoteSnapshotBufferRef = useRef(new Map());
   const lastConfirmedHpRef = useRef(null);
   const lastCollectionSeqRef = useRef(0);
+  const combatEventMapRef = useRef(new Map());
 
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
   const joystickPointerRef = useRef(null);
@@ -1148,6 +1174,14 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const applyState = (state) => {
       const now = performance.now();
+      const wallNow = Date.now();
+      const combatViewerId = state?.you?.id || worldRef.current.you?.id || socket.id;
+      combatEventMapRef.current = mergePrivateCombatEvents(
+        combatEventMapRef.current,
+        Array.isArray(state?.combatEvents) ? state.combatEvents : [],
+        combatViewerId,
+        wallNow,
+      );
 
       cleanupHiddenCollected(hiddenOrbIdsRef.current, now);
       cleanupHiddenCollected(hiddenEnergyIdsRef.current, now);
@@ -1249,15 +1283,9 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         projectiles: Array.isArray(state.projectiles)
           ? state.projectiles
           : worldRef.current.projectiles,
-        // Defense in depth: even if an old/stale backend packet arrives,
-        // this client retains only combat text owned by its own player id.
-        combatEvents: Array.isArray(state.combatEvents)
-          ? state.combatEvents.filter(
-              (event) =>
-                Boolean(state.you?.id || worldRef.current.you?.id) &&
-                event?.viewerId === (state.you?.id || worldRef.current.you?.id),
-            )
-          : worldRef.current.combatEvents,
+        // Direct reliable combat events + volatile snapshot copies are merged
+        // above and deduplicated here. Only this player can ever keep them.
+        combatEvents: [...combatEventMapRef.current.values()],
         leaderboard: Array.isArray(state.leaderboard)
           ? state.leaderboard
           : worldRef.current.leaderboard,
@@ -1402,6 +1430,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       if (disposed || !socket.connected) return;
 
       clearJoinRetry();
+      combatEventMapRef.current.clear();
       socket.emit("normal-pvp:join", {
         userId: user?.isGuest ? null : user?.id,
         isGuest: Boolean(user?.isGuest),
@@ -1554,6 +1583,22 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       });
     };
 
+    const applyPrivateCombatEvent = (event) => {
+      const viewerId = worldRef.current.you?.id || socket.id;
+      if (!event?.id || !viewerId || event.viewerId !== viewerId) return;
+
+      combatEventMapRef.current = mergePrivateCombatEvents(
+        combatEventMapRef.current,
+        [event],
+        viewerId,
+        Date.now(),
+      );
+      worldRef.current = {
+        ...worldRef.current,
+        combatEvents: [...combatEventMapRef.current.values()],
+      };
+    };
+
     socket.on("normal-pvp:joined", (state) => {
       applyState(state);
       if (state?.you?.id === socket.id) {
@@ -1562,6 +1607,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
     });
     socket.on("normal-pvp:state", applyState);
+    socket.on("normal-pvp:combat", applyPrivateCombatEvent);
     socket.on("normal-pvp:eliminated", applyEliminated);
     socket.on("normal-pvp:collect", applyCollectSync);
     socket.on("normal-pvp:error", (message) =>
@@ -1686,6 +1732,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       window.clearInterval(inputTimer);
       window.clearInterval(hudTimer);
       socket.off("connect", handleConnect);
+      socket.off("normal-pvp:combat", applyPrivateCombatEvent);
       socket.emit("normal-pvp:leave");
       socket.disconnect();
       socketRef.current = null;
