@@ -9,21 +9,21 @@ import { Server, Socket } from "socket.io";
 
 const WORLD_WIDTH = 15000;
 const WORLD_HEIGHT = 15000;
-const ROOM_MAX_PLAYERS = 50;
+const ROOM_MAX_PLAYERS = 60;
 const ROOM_MIN_PLAYERS = 2;
 
-const NORMAL_ROOM_MAX_PLAYERS = 50;
+const NORMAL_ROOM_MAX_PLAYERS = 60;
 const NORMAL_ROOM_MIN_PLAYERS = 1;
 const NORMAL_ROOM_ZONE_RADIUS = 100000;
-const NORMAL_VISIBLE_PLAYERS_LIMIT = 50;
+const NORMAL_VISIBLE_PLAYERS_LIMIT = 60;
 
-const BR_ONLINE_ROOM_MAX_PLAYERS = 50;
+const BR_ONLINE_ROOM_MAX_PLAYERS = 60;
 const BR_ONLINE_ROOM_MIN_PLAYERS = 2;
 const BR_ONLINE_START_COUNTDOWN_MS = 5000;
 const BR_ONLINE_ZONE_SHRINK_DURATION = 600000;
 const BR_ONLINE_ZONE_DAMAGE = 10;
 const BR_ONLINE_ZONE_DAMAGE_INTERVAL = 1000;
-const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 50;
+const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 60;
 
 // ---------------------------------------------------------------------------
 // ZONE PVP - mod nou, clona exacta a Normal PvP (normal-pvp:*) la care se
@@ -34,9 +34,9 @@ const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 50;
 // ca zona sa acopere intreaga harta de 10000x10000 la fel ca celelalte moduri
 // care au deja zona.
 // ---------------------------------------------------------------------------
-const ZONE_PVP_ROOM_MAX_PLAYERS = 2;
-const ZONE_PVP_ROOM_MIN_PLAYERS = 1;
-const ZONE_PVP_START_COUNTDOWN_MS = 5000;
+const ZONE_PVP_ROOM_MAX_PLAYERS = 60;
+const ZONE_PVP_ROOM_MIN_PLAYERS = 2;
+const ZONE_PVP_START_COUNTDOWN_MS = 12000;
 const ZONE_PVP_BATTLE_PREPARE_DURATION = 30000;
 const ZONE_PVP_ZONE_SHRINK_DURATION = 420000;
 const ZONE_PVP_ZONE_DAMAGE = 10;
@@ -51,6 +51,8 @@ const NORMAL_STATE_INTERVAL_MS = 33; // 30 Hz
 const NORMAL_STATE_INTERVAL_CROWDED_MS = 50; // 20 Hz at 24+ players
 const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
 const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
+const ZONE_STATE_INTERVAL_MS = 33; // 30 Hz
+const ZONE_STATE_INTERVAL_CROWDED_MS = 50; // 20 Hz at 24+ players
 const STATIC_STATE_INTERVAL_MS = 500; // minimap + leaderboard
 const ITEM_SPATIAL_CELL_SIZE = 1000;
 const ITEM_ZONE_PRUNE_INTERVAL_MS = 500;
@@ -567,7 +569,7 @@ export class GameGateway {
     ) {
       room.status = "countdown";
       room.countdownStartedAt = Date.now();
-      room.locked = true;
+      room.locked = false;
     }
 
     const zonePvpCountdown =
@@ -769,7 +771,10 @@ export class GameGateway {
           this.updateZonePvpWinCondition(room, now);
         }
 
-        const broadcastInterval = 16;
+        const broadcastInterval =
+          room.players.size >= 24
+            ? ZONE_STATE_INTERVAL_CROWDED_MS
+            : ZONE_STATE_INTERVAL_MS;
 
         if (
           !room.lastBroadcastAt ||
@@ -1989,6 +1994,7 @@ export class GameGateway {
       nextCoreWaveAt: Date.now() + CORE_WARNING_DELAY,
       lastLocalItemAt: 0,
       lastBroadcastAt: 0,
+      lastStaticStateAt: 0,
       winnerId: null,
       winnerName: null,
       finishedAt: null,
@@ -2283,7 +2289,7 @@ export class GameGateway {
   findOrCreateBattleRoyaleOnlineRoom() {
     for (const room of this.battleRoyaleOnlineRooms.values()) {
       if (
-        room.status === "waiting" &&
+        (room.status === "waiting" || room.status === "countdown") &&
         room.players.size < BR_ONLINE_ROOM_MAX_PLAYERS
       ) {
         return room;
@@ -2575,7 +2581,7 @@ export class GameGateway {
   findOrCreateZonePvpRoom() {
     for (const room of this.zonePvpRooms.values()) {
       if (
-        room.status === "waiting" &&
+        (room.status === "waiting" || room.status === "countdown") &&
         !room.locked &&
         room.players.size < ZONE_PVP_ROOM_MAX_PLAYERS
       ) {
@@ -2684,24 +2690,39 @@ export class GameGateway {
       ? Math.max(0, room.battlePrepareUntil - now)
       : 0;
 
-    const leaderboard = players
-      .slice()
-      .sort(
-        (a, b) =>
-          (b.kills || 0) - (a.kills || 0) ||
-          (b.totalCollected || 0) - (a.totalCollected || 0),
-      )
-      .slice(0, 8)
-      .map((player) => ({
-        id: player.id,
-        username: player.username,
-        kills: player.kills || 0,
-        drones: player.drones || 0,
-        progress: player.progress || 0,
-        nextDroneAt: player.nextDroneAt || DRONE_REQUIREMENTS[0],
-        totalCollected: player.totalCollected || 0,
-        alive: player.alive,
-      }));
+    const includeStaticState =
+      !room.lastStaticStateAt ||
+      now - room.lastStaticStateAt >= STATIC_STATE_INTERVAL_MS;
+
+    if (includeStaticState) {
+      room.lastStaticStateAt = now;
+    }
+
+    let leaderboard: any[] = [];
+    let minimapOrbs: any[] = [];
+    let minimapEnergyCells: any[] = [];
+    let minimapCores: any[] = [];
+
+    if (includeStaticState) {
+      leaderboard = players
+        .slice()
+        .sort(
+          (a, b) =>
+            (b.kills || 0) - (a.kills || 0) ||
+            (b.totalCollected || 0) - (a.totalCollected || 0),
+        )
+        .slice(0, 8)
+        .map((player) => ({
+          id: player.id,
+          username: player.username,
+          kills: player.kills || 0,
+          drones: player.drones || 0,
+          progress: player.progress || 0,
+          nextDroneAt: player.nextDroneAt || DRONE_REQUIREMENTS[0],
+          totalCollected: player.totalCollected || 0,
+          alive: player.alive,
+        }));
+    }
 
     const secondsUntilCoreDrop =
       room.cores.length === 0 && room.nextCoreWaveAt
@@ -2715,19 +2736,23 @@ export class GameGateway {
         ? secondsUntilCoreDrop
         : null;
 
-    const minimapOrbs = [...room.orbs]
-      .sort((a, b) => a.id.localeCompare(b.id))
-      .filter((_, index) => index % 3 === 0)
-      .slice(0, 120);
+    if (includeStaticState) {
+      minimapOrbs = [...room.orbs]
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .filter((_, index) => index % 3 === 0)
+        .slice(0, 120);
 
-    const minimapEnergyCells = [...room.energyCells]
-      .sort((a, b) => a.id.localeCompare(b.id))
-      .filter((_, index) => index % 2 === 0)
-      .slice(0, 60);
+      minimapEnergyCells = [...room.energyCells]
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .filter((_, index) => index % 2 === 0)
+        .slice(0, 60);
 
-    const minimapCores = [...room.cores]
-      .sort((a, b) => a.id.localeCompare(b.id))
-      .slice(0, 12);
+      minimapCores = [...room.cores]
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .slice(0, 12);
+    }
+
+    const playerIndex = this.buildSpatialIndex(players);
 
     for (const player of players) {
       const socket = this.server.sockets.sockets.get(player.id);
@@ -2763,22 +2788,23 @@ export class GameGateway {
 
       const viewAnchor = spectatorTarget || player;
 
-      const visiblePlayers =
-        player.alive === false
-          ? this.filterNear(
-              viewAnchor,
-              aliveOthers,
-              VIEW_DISTANCE + 1200,
-              ZONE_PVP_VISIBLE_PLAYERS_LIMIT,
-            ).map((other) => this.serializePlayer(other))
-          : this.filterNear(
-              player,
-              players.filter((other) => other.id !== player.id),
-              VIEW_DISTANCE,
-              ZONE_PVP_VISIBLE_PLAYERS_LIMIT,
-            ).map((other) => this.serializePlayer(other));
+      const playerCandidates = this.querySpatialIndex(
+        playerIndex,
+        viewAnchor.x,
+        viewAnchor.y,
+        player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE,
+      );
 
-      socket.volatile.emit("zone-pvp:state", {
+      const visiblePlayers = this.filterNear(
+        viewAnchor,
+        playerCandidates.filter((other) =>
+          other.id !== player.id && (player.alive !== false || other.alive !== false),
+        ),
+        player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE,
+        ZONE_PVP_VISIBLE_PLAYERS_LIMIT,
+      ).map((other) => this.serializePlayer(other));
+
+      const payload: any = {
         status: room.status,
         countdown: zonePvpCountdown,
         coreDropCountdown,
@@ -2840,12 +2866,16 @@ export class GameGateway {
               45,
             ),
 
-        minimapOrbs,
-        minimapEnergyCells,
-        minimapCores,
+      };
 
-        leaderboard,
-      });
+      if (includeStaticState) {
+        payload.minimapOrbs = minimapOrbs;
+        payload.minimapEnergyCells = minimapEnergyCells;
+        payload.minimapCores = minimapCores;
+        payload.leaderboard = leaderboard;
+      }
+
+      socket.volatile.emit("zone-pvp:state", payload);
     }
   }
 

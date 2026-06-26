@@ -1552,12 +1552,10 @@ function getBattleRoyalePerfProfile() {
 
   const isLowEndDevice = isLowEndMobile || isWeakDesktop;
 
-  // aiBatches = in cate valuri rotative impartim cei 69 de boti.
-  // 1 = toti recalculeaza in fiecare tick (device normal/puternic).
-  // 3 = doar ~1/3 din boti recalculeaza per tick (device slab) - reduce
-  //     costul CPU al buclei AI la aproximativ o treime, fara sa schimbe
-  //     numarul de boti activi/vizibili.
-  const aiBatches = isLowEndDevice ? 3 : 1;
+  // AI este distribuit rotativ: desktopul proceseaza jumatate din boti/tick,
+  // iar telefonul un sfert. Pozitiile continua intre decizii, astfel miscarea
+  // ramane naturala fara spike-uri CPU de la toate deciziile simultan.
+  const aiBatches = isLowEndDevice ? 4 : 2;
 
   return { isLowEndDevice, aiBatches };
 }
@@ -1567,6 +1565,8 @@ function BattleRoyale({ user, onExitToMenu }) {
   const mouse = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
   const joystickPointerRef = useRef(null);
+  const joystickKnobRef = useRef(null);
+  const mobileJoystickActiveRef = useRef(false);
   const mobileAttackPointerRef = useRef(null);
   const mobileAimRef = useRef({ active: false, x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const mobileAimDirRef = useRef({ x: 1, y: 0 });
@@ -1581,6 +1581,7 @@ function BattleRoyale({ user, onExitToMenu }) {
   const explosionsRef = useRef([]);
   const damageTextsRef = useRef([]);
   const coresRef = useRef([]);
+  const pixiLiveRef = useRef(null);
 
   const lastFireRef = useRef(0);
   const lastCooldownTextRef = useRef(0);
@@ -3754,7 +3755,7 @@ function BattleRoyale({ user, onExitToMenu }) {
 
       const nowBotLogic = performance.now();
 
-      const botLogicInterval = isMobileLandscape ? 28 : 20;
+      const botLogicInterval = isMobileLandscape ? 42 : 28;
 
       if (nowBotLogic - lastBotLogicUpdateRef.current > botLogicInterval) {
         const botDelta = Math.min(
@@ -4538,7 +4539,7 @@ function BattleRoyale({ user, onExitToMenu }) {
 
       playerRef.current = nextPlayer;
 
-      if (now - lastRenderSyncRef.current >= 16) {
+      if (now - lastRenderSyncRef.current >= (perfProfileRef.current.isLowEndDevice ? 100 : 66)) {
         lastRenderSyncRef.current = now;
         setPlayer(nextPlayer);
       }
@@ -4566,7 +4567,36 @@ function BattleRoyale({ user, onExitToMenu }) {
 
       projectilesRef.current = updatedProjectiles;
 
-      if (now - lastProjectilesRenderSyncRef.current >= 16) {
+      const liveViewportWidth = window.innerWidth || 1280;
+      const liveViewportHeight = window.innerHeight || 720;
+      const liveScale = isMobileLandscape ? 1 : 0.72;
+      const liveSpectator = !nextPlayer.alive
+        ? botsRef.current.find((bot) => bot.alive)
+        : null;
+      const liveTarget = nextPlayer.alive ? nextPlayer : (liveSpectator || nextPlayer);
+
+      pixiLiveRef.current = {
+        player: nextPlayer.alive ? nextPlayer : null,
+        players: [],
+        bots: botsRef.current,
+        simpleBots: [],
+        orbs: orbsRef.current,
+        energyCells: energyCellsRef.current,
+        cores: coresRef.current,
+        projectiles: updatedProjectiles,
+        simpleProjectiles: [],
+        cameraX: liveViewportWidth / 2 - (liveTarget?.x || 0) * liveScale,
+        cameraY: liveViewportHeight / 2 - (liveTarget?.y || 0) * liveScale,
+        scale: liveScale,
+        viewportWidth: liveViewportWidth,
+        viewportHeight: liveViewportHeight,
+        worldWidth: WORLD_WIDTH,
+        worldHeight: WORLD_HEIGHT,
+        safeZoneRadius: currentZoneRadius,
+        showZone: true,
+      };
+
+      if (now - lastProjectilesRenderSyncRef.current >= (perfProfileRef.current.isLowEndDevice ? 100 : 66)) {
         lastProjectilesRenderSyncRef.current = now;
         setProjectiles([...updatedProjectiles]);
       }
@@ -4582,8 +4612,7 @@ function BattleRoyale({ user, onExitToMenu }) {
       collisionFrameSkipRef.current += 1;
 
       if (
-        !perfProfileRef.current.isLowEndDevice ||
-        collisionFrameSkipRef.current % 2 === 0
+        collisionFrameSkipRef.current % (perfProfileRef.current.isLowEndDevice ? 3 : 2) === 0
       ) {
         checkBotsTouchBots();
       }
@@ -4647,7 +4676,14 @@ function BattleRoyale({ user, onExitToMenu }) {
       active: power > 0.02,
     };
 
-    setMobileJoystick({ x: knobX, y: knobY, active: power > 0.02 });
+    if (joystickKnobRef.current) {
+      joystickKnobRef.current.style.transition = "none";
+      joystickKnobRef.current.style.transform = `translate(${knobX}px, ${knobY}px)`;
+    }
+    if (mobileJoystickActiveRef.current !== (power > 0.02)) {
+      mobileJoystickActiveRef.current = power > 0.02;
+      setMobileJoystick({ x: knobX, y: knobY, active: power > 0.02 });
+    }
   };
 
   const handleJoystickStart = (e) => {
@@ -4687,7 +4723,12 @@ function BattleRoyale({ user, onExitToMenu }) {
 
     joystickPointerRef.current = null;
     mobileMoveRef.current = { x: 0, y: 0, active: false };
+    mobileJoystickActiveRef.current = false;
     setMobileJoystick({ x: 0, y: 0, active: false });
+    if (joystickKnobRef.current) {
+      joystickKnobRef.current.style.transition = "transform 0.12s ease-out";
+      joystickKnobRef.current.style.transform = "translate(0px, 0px)";
+    }
   };
 
   const statusUnit = player.alive ? player : viewTarget;
@@ -4985,14 +5026,6 @@ function BattleRoyale({ user, onExitToMenu }) {
           transform: `translate3d(${cameraX}px, ${cameraY}px, 0) scale(${mobileWorldScale})`,
         }}
       >
-        <div
-          className="toxic-overlay"
-          style={{
-            "--zone-x": `${WORLD_WIDTH / 2}px`,
-            "--zone-y": `${WORLD_HEIGHT / 2}px`,
-            "--zone-radius": `${safeZoneRadius}px`,
-          }}
-        />
 
         {explosions.map((explosion) => (
           <div
@@ -5056,6 +5089,11 @@ function BattleRoyale({ user, onExitToMenu }) {
         coreTypes={CORE_TYPES}
         otherPlayerSize={104}
         otherPlayerQuality={2}
+        liveDataRef={pixiLiveRef}
+        worldWidth={WORLD_WIDTH}
+        worldHeight={WORLD_HEIGHT}
+        safeZoneRadius={safeZoneRadius}
+        showZone={true}
         forceLowQuality={false}
       />
 
@@ -5069,6 +5107,7 @@ function BattleRoyale({ user, onExitToMenu }) {
             onPointerCancel={handleJoystickEnd}
           >
             <div
+              ref={joystickKnobRef}
               className="mobile-joystick-knob"
               style={{
                 transform: `translate(${mobileJoystick.x}px, ${mobileJoystick.y}px)`,

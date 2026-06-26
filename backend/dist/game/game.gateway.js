@@ -17,22 +17,22 @@ const websockets_1 = require("@nestjs/websockets");
 const socket_io_1 = require("socket.io");
 const WORLD_WIDTH = 15000;
 const WORLD_HEIGHT = 15000;
-const ROOM_MAX_PLAYERS = 50;
+const ROOM_MAX_PLAYERS = 60;
 const ROOM_MIN_PLAYERS = 2;
-const NORMAL_ROOM_MAX_PLAYERS = 50;
+const NORMAL_ROOM_MAX_PLAYERS = 60;
 const NORMAL_ROOM_MIN_PLAYERS = 1;
 const NORMAL_ROOM_ZONE_RADIUS = 100000;
-const NORMAL_VISIBLE_PLAYERS_LIMIT = 50;
-const BR_ONLINE_ROOM_MAX_PLAYERS = 50;
+const NORMAL_VISIBLE_PLAYERS_LIMIT = 60;
+const BR_ONLINE_ROOM_MAX_PLAYERS = 60;
 const BR_ONLINE_ROOM_MIN_PLAYERS = 2;
 const BR_ONLINE_START_COUNTDOWN_MS = 5000;
 const BR_ONLINE_ZONE_SHRINK_DURATION = 600000;
 const BR_ONLINE_ZONE_DAMAGE = 10;
 const BR_ONLINE_ZONE_DAMAGE_INTERVAL = 1000;
-const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 50;
-const ZONE_PVP_ROOM_MAX_PLAYERS = 2;
-const ZONE_PVP_ROOM_MIN_PLAYERS = 1;
-const ZONE_PVP_START_COUNTDOWN_MS = 5000;
+const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 60;
+const ZONE_PVP_ROOM_MAX_PLAYERS = 60;
+const ZONE_PVP_ROOM_MIN_PLAYERS = 2;
+const ZONE_PVP_START_COUNTDOWN_MS = 12000;
 const ZONE_PVP_BATTLE_PREPARE_DURATION = 30000;
 const ZONE_PVP_ZONE_SHRINK_DURATION = 420000;
 const ZONE_PVP_ZONE_DAMAGE = 10;
@@ -43,6 +43,8 @@ const NORMAL_STATE_INTERVAL_MS = 33;
 const NORMAL_STATE_INTERVAL_CROWDED_MS = 50;
 const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
 const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
+const ZONE_STATE_INTERVAL_MS = 33;
+const ZONE_STATE_INTERVAL_CROWDED_MS = 50;
 const STATIC_STATE_INTERVAL_MS = 500;
 const ITEM_SPATIAL_CELL_SIZE = 1000;
 const ITEM_ZONE_PRUNE_INTERVAL_MS = 500;
@@ -481,7 +483,7 @@ let GameGateway = class GameGateway {
             room.status === "waiting") {
             room.status = "countdown";
             room.countdownStartedAt = Date.now();
-            room.locked = true;
+            room.locked = false;
         }
         const zonePvpCountdown = room.status === "countdown" && room.countdownStartedAt
             ? Math.max(1, Math.ceil((ZONE_PVP_START_COUNTDOWN_MS -
@@ -636,7 +638,9 @@ let GameGateway = class GameGateway {
                     this.maintainWorldItems(room, zoneRadius, now);
                     this.updateZonePvpWinCondition(room, now);
                 }
-                const broadcastInterval = 16;
+                const broadcastInterval = room.players.size >= 24
+                    ? ZONE_STATE_INTERVAL_CROWDED_MS
+                    : ZONE_STATE_INTERVAL_MS;
                 if (!room.lastBroadcastAt ||
                     now - room.lastBroadcastAt >= broadcastInterval) {
                     room.lastBroadcastAt = now;
@@ -1654,6 +1658,7 @@ let GameGateway = class GameGateway {
             nextCoreWaveAt: Date.now() + CORE_WARNING_DELAY,
             lastLocalItemAt: 0,
             lastBroadcastAt: 0,
+            lastStaticStateAt: 0,
             winnerId: null,
             winnerName: null,
             finishedAt: null,
@@ -1846,7 +1851,7 @@ let GameGateway = class GameGateway {
     }
     findOrCreateBattleRoyaleOnlineRoom() {
         for (const room of this.battleRoyaleOnlineRooms.values()) {
-            if (room.status === "waiting" &&
+            if ((room.status === "waiting" || room.status === "countdown") &&
                 room.players.size < BR_ONLINE_ROOM_MAX_PLAYERS) {
                 return room;
             }
@@ -2039,7 +2044,7 @@ let GameGateway = class GameGateway {
     }
     findOrCreateZonePvpRoom() {
         for (const room of this.zonePvpRooms.values()) {
-            if (room.status === "waiting" &&
+            if ((room.status === "waiting" || room.status === "countdown") &&
                 !room.locked &&
                 room.players.size < ZONE_PVP_ROOM_MAX_PLAYERS) {
                 return room;
@@ -2126,21 +2131,32 @@ let GameGateway = class GameGateway {
         const battlePrepareRemainingMs = room.battlePrepareUntil
             ? Math.max(0, room.battlePrepareUntil - now)
             : 0;
-        const leaderboard = players
-            .slice()
-            .sort((a, b) => (b.kills || 0) - (a.kills || 0) ||
-            (b.totalCollected || 0) - (a.totalCollected || 0))
-            .slice(0, 8)
-            .map((player) => ({
-            id: player.id,
-            username: player.username,
-            kills: player.kills || 0,
-            drones: player.drones || 0,
-            progress: player.progress || 0,
-            nextDroneAt: player.nextDroneAt || DRONE_REQUIREMENTS[0],
-            totalCollected: player.totalCollected || 0,
-            alive: player.alive,
-        }));
+        const includeStaticState = !room.lastStaticStateAt ||
+            now - room.lastStaticStateAt >= STATIC_STATE_INTERVAL_MS;
+        if (includeStaticState) {
+            room.lastStaticStateAt = now;
+        }
+        let leaderboard = [];
+        let minimapOrbs = [];
+        let minimapEnergyCells = [];
+        let minimapCores = [];
+        if (includeStaticState) {
+            leaderboard = players
+                .slice()
+                .sort((a, b) => (b.kills || 0) - (a.kills || 0) ||
+                (b.totalCollected || 0) - (a.totalCollected || 0))
+                .slice(0, 8)
+                .map((player) => ({
+                id: player.id,
+                username: player.username,
+                kills: player.kills || 0,
+                drones: player.drones || 0,
+                progress: player.progress || 0,
+                nextDroneAt: player.nextDroneAt || DRONE_REQUIREMENTS[0],
+                totalCollected: player.totalCollected || 0,
+                alive: player.alive,
+            }));
+        }
         const secondsUntilCoreDrop = room.cores.length === 0 && room.nextCoreWaveAt
             ? Math.ceil(Math.max(0, room.nextCoreWaveAt - now) / 1000)
             : null;
@@ -2149,17 +2165,20 @@ let GameGateway = class GameGateway {
             secondsUntilCoreDrop <= Math.ceil(CORE_WARNING_DELAY / 1000)
             ? secondsUntilCoreDrop
             : null;
-        const minimapOrbs = [...room.orbs]
-            .sort((a, b) => a.id.localeCompare(b.id))
-            .filter((_, index) => index % 3 === 0)
-            .slice(0, 120);
-        const minimapEnergyCells = [...room.energyCells]
-            .sort((a, b) => a.id.localeCompare(b.id))
-            .filter((_, index) => index % 2 === 0)
-            .slice(0, 60);
-        const minimapCores = [...room.cores]
-            .sort((a, b) => a.id.localeCompare(b.id))
-            .slice(0, 12);
+        if (includeStaticState) {
+            minimapOrbs = [...room.orbs]
+                .sort((a, b) => a.id.localeCompare(b.id))
+                .filter((_, index) => index % 3 === 0)
+                .slice(0, 120);
+            minimapEnergyCells = [...room.energyCells]
+                .sort((a, b) => a.id.localeCompare(b.id))
+                .filter((_, index) => index % 2 === 0)
+                .slice(0, 60);
+            minimapCores = [...room.cores]
+                .sort((a, b) => a.id.localeCompare(b.id))
+                .slice(0, 12);
+        }
+        const playerIndex = this.buildSpatialIndex(players);
         for (const player of players) {
             const socket = this.server.sockets.sockets.get(player.id);
             if (!socket)
@@ -2185,10 +2204,9 @@ let GameGateway = class GameGateway {
                 player.killedById = null;
             }
             const viewAnchor = spectatorTarget || player;
-            const visiblePlayers = player.alive === false
-                ? this.filterNear(viewAnchor, aliveOthers, VIEW_DISTANCE + 1200, ZONE_PVP_VISIBLE_PLAYERS_LIMIT).map((other) => this.serializePlayer(other))
-                : this.filterNear(player, players.filter((other) => other.id !== player.id), VIEW_DISTANCE, ZONE_PVP_VISIBLE_PLAYERS_LIMIT).map((other) => this.serializePlayer(other));
-            socket.volatile.emit("zone-pvp:state", {
+            const playerCandidates = this.querySpatialIndex(playerIndex, viewAnchor.x, viewAnchor.y, player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE);
+            const visiblePlayers = this.filterNear(viewAnchor, playerCandidates.filter((other) => other.id !== player.id && (player.alive !== false || other.alive !== false)), player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE, ZONE_PVP_VISIBLE_PLAYERS_LIMIT).map((other) => this.serializePlayer(other));
+            const payload = {
                 status: room.status,
                 countdown: zonePvpCountdown,
                 coreDropCountdown,
@@ -2223,11 +2241,14 @@ let GameGateway = class GameGateway {
                 projectiles: room.projectileSpatialIndex
                     ? this.filterNearIndexed(viewAnchor, room.projectileSpatialIndex, VIEW_DISTANCE + 400, 45)
                     : this.filterNear(viewAnchor, room.projectiles, VIEW_DISTANCE + 400, 45),
-                minimapOrbs,
-                minimapEnergyCells,
-                minimapCores,
-                leaderboard,
-            });
+            };
+            if (includeStaticState) {
+                payload.minimapOrbs = minimapOrbs;
+                payload.minimapEnergyCells = minimapEnergyCells;
+                payload.minimapCores = minimapCores;
+                payload.leaderboard = leaderboard;
+            }
+            socket.volatile.emit("zone-pvp:state", payload);
         }
     }
     findOrCreateRoom() {

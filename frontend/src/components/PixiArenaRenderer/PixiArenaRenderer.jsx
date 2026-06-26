@@ -1,42 +1,19 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import * as PIXI from "pixi.js";
 import "./PixiArenaRenderer.css";
 
-const SKIN_THEMES = {
-  cyan: ["#00eaff", "#78f7ff", "#003140", "#ffffff"],
-  red: ["#ff4040", "#ff9a9a", "#380000", "#ffffff"],
-  purple: ["#9b5cff", "#d5b6ff", "#180034", "#ffffff"],
-  orange: ["#ff9f1c", "#ffd166", "#4b2100", "#fff7e6"],
-  green: ["#19ff8a", "#8cffc4", "#00391f", "#ffffff"],
-  pink: ["#ff4fd8", "#ffb8ef", "#4d003c", "#ffffff"],
-  "ice-blue": ["#7de7ff", "#e7fbff", "#07314a", "#ffffff"],
-  "solar-gold": ["#ffd447", "#fff0a8", "#513a00", "#ffffff"],
-  "shadow-black": ["#2e3440", "#6b7280", "#05070c", "#bdeeff"],
-  "toxic-lime": ["#b6ff00", "#e8ff8a", "#284000", "#ffffff"],
-  "royal-violet": ["#6d28d9", "#c4b5fd", "#14002e", "#f8f5ff"],
-  "crimson-white": ["#dc143c", "#ffffff", "#43000d", "#fff5f7"],
-  "neon-teal": ["#00ffcc", "#a7ffee", "#003c33", "#ffffff"],
-  "ember-red": ["#ff5a1f", "#ffb86b", "#451100", "#fff0e6"],
-  "arctic-silver": ["#c7d2fe", "#f8fafc", "#1e293b", "#ffffff"],
-  "void-purple": ["#4c1d95", "#a78bfa", "#070012", "#e9d5ff"],
-  "plasma-pink": ["#ff00aa", "#ff7adf", "#3f0030", "#ffffff"],
-  "jade-black": ["#00a86b", "#86efac", "#001e14", "#eafff5"],
-  "azure-white": ["#38bdf8", "#ffffff", "#082f49", "#ffffff"],
-  "inferno-orange": ["#ff6b00", "#ffcf33", "#4a1300", "#fff4df"],
-  "midnight-blue": ["#1e3a8a", "#60a5fa", "#020617", "#dbeafe"],
-  "acid-green": ["#39ff14", "#c6ff8a", "#0f2b00", "#ffffff"],
-  "ruby-black": ["#e11d48", "#fb7185", "#09090b", "#ffe4e6"],
-  "ghost-white": ["#e5e7eb", "#ffffff", "#334155", "#ffffff"],
-  "cyber-yellow": ["#faff00", "#fff7ad", "#3a3800", "#ffffff"],
-  "deep-ocean": ["#006994", "#67e8f9", "#001b2e", "#e0ffff"],
-  "magenta-cyan": ["#ff00ff", "#00ffff", "#250033", "#ffffff"],
-  "bronze-steel": ["#b87333", "#d1d5db", "#2b1605", "#fff7ed"],
-  "electric-indigo": ["#4f46e5", "#93c5fd", "#0b102f", "#eef2ff"],
-  "dark-emerald": ["#047857", "#34d399", "#001f16", "#d1fae5"],
-};
+/*
+  WebGL renderer for all arena modes.
 
-const STANDARD_DRONE_SIZE = 118;
-const STANDARD_DRONE_MIN_SIZE = 82;
+  Important architectural rules:
+  - React never owns per-frame game entities. It only gives the renderer the
+    latest snapshot / live ref.
+  - Every repeated vector shape is a shared PIXI.GraphicsContext. The renderer
+    moves pooled Graphics/Container instances instead of clear() + rebuilding
+    hundreds of vector paths every frame.
+  - HUD, menus and touch controls remain DOM. World, players, items,
+    projectiles and zone are WebGL only.
+*/
 
 const ORB_COLORS = {
   cyan: 0x00eaff,
@@ -47,167 +24,61 @@ const ORB_COLORS = {
   pink: 0xff4fc3,
 };
 
-const MOBILE_PERF_PROFILES = {
-  LOW: "low",
-  MID: "mid",
-  HIGH: "high",
+const SKIN_THEMES = {
+  cyan: [0x00eaff, 0x78f7ff, 0x003140, 0xffffff],
+  red: [0xff4040, 0xff9a9a, 0x380000, 0xffffff],
+  purple: [0x9b5cff, 0xd5b6ff, 0x180034, 0xffffff],
+  orange: [0xff9f1c, 0xffd166, 0x4b2100, 0xfff7e6],
+  green: [0x19ff8a, 0x8cffc4, 0x00391f, 0xffffff],
+  pink: [0xff4fd8, 0xffb8ef, 0x4d003c, 0xffffff],
+  "ice-blue": [0x7de7ff, 0xe7fbff, 0x07314a, 0xffffff],
+  "solar-gold": [0xffd447, 0xfff0a8, 0x513a00, 0xffffff],
+  "shadow-black": [0x2e3440, 0x6b7280, 0x05070c, 0xbdeeff],
+  "toxic-lime": [0xb6ff00, 0xe8ff8a, 0x284000, 0xffffff],
+  "royal-violet": [0x6d28d9, 0xc4b5fd, 0x14002e, 0xf8f5ff],
+  "crimson-white": [0xdc143c, 0xffffff, 0x43000d, 0xfff5f7],
+  "neon-teal": [0x00ffcc, 0xa7ffee, 0x003c33, 0xffffff],
+  "ember-red": [0xff5a1f, 0xffb86b, 0x451100, 0xfff0e6],
+  "arctic-silver": [0xc7d2fe, 0xf8fafc, 0x1e293b, 0xffffff],
+  "void-purple": [0x4c1d95, 0xa78bfa, 0x070012, 0xe9d5ff],
+  "plasma-pink": [0xff00aa, 0xff7adf, 0x3f0030, 0xffffff],
+  "jade-black": [0x00a86b, 0x86efac, 0x001e14, 0xeafff5],
+  "azure-white": [0x38bdf8, 0xffffff, 0x082f49, 0xffffff],
+  "inferno-orange": [0xff6b00, 0xffcf33, 0x4a1300, 0xfff4df],
+  "midnight-blue": [0x1e3a8a, 0x60a5fa, 0x020617, 0xdbeafe],
+  "acid-green": [0x39ff14, 0xc6ff8a, 0x0f2b00, 0xffffff],
+  "ruby-black": [0xe11d48, 0xfb7185, 0x09090b, 0xffe4e6],
+  "ghost-white": [0xe5e7eb, 0xffffff, 0x334155, 0xffffff],
+  "cyber-yellow": [0xfaff00, 0xfff7ad, 0x3a3800, 0xffffff],
+  "deep-ocean": [0x006994, 0x67e8f9, 0x001b2e, 0xe0ffff],
+  "magenta-cyan": [0xff00ff, 0x00ffff, 0x250033, 0xffffff],
+  "bronze-steel": [0xb87333, 0xd1d5db, 0x2b1605, 0xfff7ed],
+  "electric-indigo": [0x4f46e5, 0x93c5fd, 0x0b102f, 0xeef2ff],
+  "dark-emerald": [0x047857, 0x34d399, 0x001f16, 0xd1fae5],
+  "emerald-rift-a": [0x00ff99, 0xa7ffd7, 0x00291a, 0xffffff],
+  "emerald-rift-b": [0x00d47a, 0x7cffc4, 0x001f14, 0xffffff],
+  "emerald-rift-c": [0x45ffb0, 0xd8ffef, 0x003322, 0xffffff],
 };
 
-// ---------------------------------------------------------------------------
-// IMPORTANT: device-urile vechi (Huawei P20/P30/Mate, telefoane Android cu
-// Adreno/Mali low-end) au GPU mult mai slab la alpha blending/glow-uri si CPU
-// mult mai lent decat un iPhone modern. Pana acum, tier-ul LOW reducea doar
-// ---------------------------------------------------------------------------
-// IMPORTANT - corectie fata de versiunea anterioara: NU mai plafonam ticker-ul
-// Pixi la un FPS target fix (ex 30) pe device slab. Bucla de joc (in
-// PvpArena.jsx/NormalPvpArena.jsx) ruleaza separat, prin requestAnimationFrame,
-// care pe orice telefon avanseaza la rata nativa a ecranului (de regula 60Hz,
-// legata de vsync, indiferent cat de lent e CPU-ul). Daca plafonam Pixi la
-// 30fps, randarea citeste pixiLiveRef doar o data la ~33ms, in timp ce datele
-// se actualizeaza de doua ori mai des (60Hz) - rezultatul vizual e EXACT
-// senzatia de "sacadat/in trepte" reclamata, pentru ca pozitia "salta" intre
-// valori in pasi mari la fiecare desenare, in loc sa avanseze fin.
-// Solutia corecta: lasam Pixi sa deseneze cat de des poate device-ul (browser-ul
-// decide natural, in functie de cat de ieftin e fiecare frame), fara plafon
-// artificial. Pe device foarte slab, randarea va ajunge organic la framerate-ul
-// pe care GPU-ul il poate sustine, dar fara mismatch fata de rAF-ul de joc.
-// ---------------------------------------------------------------------------
+const MAX_MINI_DRONES = 5;
+const DEFAULT_WORLD_WIDTH = 15000;
+const DEFAULT_WORLD_HEIGHT = 15000;
+const STATIC_SYNC_INTERVAL_MS = 90;
+const ENTITY_STALE_MS = 500;
+const MAX_RENDERED_PLAYERS = 60;
+const MAX_RENDERED_PROJECTILES = 96;
 
-function getDeviceProfile() {
-  // =========================================================
-  // FORCE LOW QUALITY GLOBAL
-  // =========================================================
-  // Pentru multiplayer vrem aceeasi randare minima pe orice device:
-  // telefon, laptop vechi, desktop, tableta. Nu mai incercam sa detectam
-  // device-ul si nu mai urcam automat calitatea. Totul ramane pe minim.
-  return {
-    isMobile: typeof window !== "undefined" && typeof navigator !== "undefined"
-      ? /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent || "")
-      : false,
-    isPhonePortrait: typeof window !== "undefined" ? window.innerHeight >= window.innerWidth : false,
-    isLowEndMobile: true,
-    isVeryLowEndMobile: true,
-    isWeakDesktop: true,
-    tier: MOBILE_PERF_PROFILES.LOW,
-    dpr: 1,
-    // 0.75 = canvas mai usor de randat, apoi scalat la dimensiunea ecranului.
-    // Grafica e mai simpla/blurry, dar FPS-ul e mult mai stabil.
-    resolution: 0.75,
-  };
-}
-
-function getQualityBudget(device, dynamicQuality = 0) {
-  // =========================================================
-  // FORCE LOW QUALITY GLOBAL BUDGET
-  // =========================================================
-  // Buget unic pentru toate device-urile. Scop: multiplayer cat mai fluent,
-  // nu grafica spectaculoasa.
-  return {
-    quality: 0,
-    margin: 140,
-
-    // Iteme randate per frame. Tine cifrele mici pentru CPU/GPU slab.
-    orbs: 70,
-    energy: 12,
-    cores: 3,
-
-    // Battle Royale singleplayer: vrem sa vedem botii complet, nu doar puncte.
-    // Pastram itemele low-quality, dar dronele/playerii se vad intregi, cu mini-dronele lor.
-    players: 50,
-    bots: 50,
-    simpleBots: 0,
-
-    // Proiectile limitate, ca sa ramana fluent.
-    projectiles: 18,
-    simpleProjectiles: 24,
-
-    // Calitate suficienta pentru corp + rotoare + mini-drone vizibile.
-    botQuality: 2,
-    playerQuality: 2,
-
-    // Desen simplificat pentru orbs/energy/core-uri.
-    drawLiteItems: true,
-
-    // Fara glow-uri mari, dar dronele raman complete.
-    disableGlow: true,
-  };
-}
-
-function drawOrbLite(g, orb, cameraX, cameraY, scale, vw, vh) {
-  const p = screen(orb.x, orb.y, cameraX, cameraY, scale);
-  if (p.x < -60 || p.y < -60 || p.x > vw + 60 || p.y > vh + 60) return;
-
-  const color = ORB_COLORS[orb.color] || ORB_COLORS.cyan;
-  const r = Math.max(7, 10.5 * scale);
-
-  g.circle(p.x, p.y, r).fill({ color, alpha: 0.94 });
-  g.circle(p.x - r * 0.25, p.y - r * 0.28, r * 0.22).fill({
-    color: 0xffffff,
-    alpha: 0.42,
-  });
-}
-
-function drawEnergyLite(g, cell, cameraX, cameraY, scale, vw, vh) {
-  const p = screen(cell.x, cell.y, cameraX, cameraY, scale);
-  if (p.x < -70 || p.y < -70 || p.x > vw + 70 || p.y > vh + 70) return;
-
-  const r = Math.max(11, 16 * scale);
-  g.roundRect(p.x - r * 0.45, p.y - r * 0.62, r * 0.9, r * 1.24, r * 0.24).fill({
-    color: 0x06351f,
-    alpha: 0.92,
-  });
-  g.roundRect(p.x - r * 0.32, p.y - r * 0.44, r * 0.64, r * 0.88, r * 0.18).fill({
-    color: 0x67ffb1,
-    alpha: 0.92,
-  });
-}
-
-
-// =========================================================
-// ULTRA LOW QUALITY WORLD DRAWING
-// =========================================================
-// Aceste functii deseneaza itemele in coordonate de lume, nu in coordonate de ecran.
-// Avantaj: mutam containerul static cu camera in fiecare frame, dar redesenam orb/energy/core
-// mult mai rar. Asta reduce masiv g.clear() + sute de primitive refacute la fiecare frame.
-function drawOrbLiteWorld(g, orb) {
-  if (!orb) return;
-  const color = ORB_COLORS[orb.color] || ORB_COLORS.cyan;
-  g.circle(orb.x, orb.y, 10).fill({ color, alpha: 0.9 });
-  g.circle(orb.x - 2.5, orb.y - 2.5, 2.8).fill({ color: 0xffffff, alpha: 0.35 });
-}
-
-function drawEnergyLiteWorld(g, cell) {
-  if (!cell) return;
-  g.roundRect(cell.x - 8, cell.y - 12, 16, 24, 4).fill({ color: 0x06351f, alpha: 0.9 });
-  g.roundRect(cell.x - 5, cell.y - 8, 10, 16, 3).fill({ color: 0x67ffb1, alpha: 0.9 });
-}
-
-function drawCoreLiteWorld(g, core, coreColorMap = {}) {
-  if (!core) return;
-  const color = hex(core.color || coreColorMap[core.type] || "#ffffff");
-  g.circle(core.x, core.y, 18).fill({ color, alpha: 0.88 });
-  g.circle(core.x, core.y, 25).stroke({ color, width: 3, alpha: 0.38 });
-}
-
-function makeStaticSignature(bounds, scale, orbs = [], energyCells = [], cores = []) {
-  const tile = 700;
-  return [
-    Math.floor(bounds.left / tile),
-    Math.floor(bounds.right / tile),
-    Math.floor(bounds.top / tile),
-    Math.floor(bounds.bottom / tile),
-    Math.round((scale || 1) * 100) / 100,
-    orbs.length,
-    energyCells.length,
-    cores.length,
-    orbs[0]?.id || "",
-    orbs[orbs.length - 1]?.id || "",
-    energyCells[0]?.id || "",
-    energyCells[energyCells.length - 1]?.id || "",
-    cores[0]?.id || "",
-    cores[cores.length - 1]?.id || "",
-  ].join("|");
-}
+// All motion below is transform-only: no Graphics geometry is rebuilt while
+// the game runs. That keeps turns and shields smooth even in 50–60 player rooms.
+const MAIN_ROTOR_POINTS = [
+  [-59, -45],
+  [59, -45],
+  [-59, 45],
+  [59, 45],
+];
+const TURN_RESPONSE = 10.5;
+const BANK_RESPONSE = 13;
+const SHIELD_RESPONSE = 14;
 
 function normalizeSkin(skin) {
   const value = String(skin || "cyan")
@@ -215,700 +86,884 @@ function normalizeSkin(skin) {
     .toLowerCase()
     .replace(/_/g, "-")
     .replace(/\s+/g, "-");
-
-  if (!value || value === "basic" || value === "basic-drone") return "cyan";
   return SKIN_THEMES[value] ? value : "cyan";
 }
 
-function hex(value) {
+function colorFrom(value, fallback = 0xffffff) {
   if (typeof value === "number") return value;
-  return Number.parseInt(String(value || "#ffffff").replace("#", "").slice(0, 6), 16);
+  const source = String(value || "").replace("#", "").slice(0, 6);
+  const parsed = Number.parseInt(source, 16);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function mixColor(a, b, amount = 0.5) {
-  const ar = (a >> 16) & 255;
-  const ag = (a >> 8) & 255;
-  const ab = a & 255;
-  const br = (b >> 16) & 255;
-  const bg = (b >> 8) & 255;
-  const bb = b & 255;
-
-  return (
-    (Math.round(ar + (br - ar) * amount) << 16) +
-    (Math.round(ag + (bg - ag) * amount) << 8) +
-    Math.round(ab + (bb - ab) * amount)
-  );
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
-function screen(x, y, cameraX, cameraY, scale) {
+function shortestAngleDelta(from, to) {
+  const fullTurn = Math.PI * 2;
+  return ((to - from + Math.PI * 3) % fullTurn) - Math.PI;
+}
+
+function lerpAngle(from, to, amount) {
+  return from + shortestAngleDelta(from, to) * clamp(amount, 0, 1);
+}
+
+function damp(current, target, response, deltaSeconds) {
+  const amount = 1 - Math.exp(-Math.max(0, response) * Math.max(0, deltaSeconds));
+  return current + (target - current) * amount;
+}
+
+function dampAngle(from, to, response, deltaSeconds) {
+  const amount = 1 - Math.exp(-Math.max(0, response) * Math.max(0, deltaSeconds));
+  return lerpAngle(from, to, amount);
+}
+
+function getUnitFacingTarget(unit, fallback = 0) {
+  const moveX = Number(unit?.moveX || 0);
+  const moveY = Number(unit?.moveY || 0);
+  const moving = Boolean(unit?.isMoving) || Math.hypot(moveX, moveY) > 0.015;
+  const declaredAngle = Number(unit?.moveAngle);
+
+  if (moving && Number.isFinite(declaredAngle)) {
+    // The illustrated drone has its nose at the top of the local coordinate system.
+    return declaredAngle + Math.PI * 0.5;
+  }
+
+  if (moving) {
+    return Math.atan2(moveY, moveX) + Math.PI * 0.5;
+  }
+
+  return fallback;
+}
+
+function isMobileDevice() {
+  if (typeof navigator === "undefined") return false;
+  return /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent || "");
+}
+
+function getRendererConfig(forceLowQuality) {
+  const mobile = isMobileDevice();
+  const dpr = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
+  const deviceMemory = typeof navigator !== "undefined" ? Number(navigator.deviceMemory || 0) : 0;
+  const cores = typeof navigator !== "undefined" ? Number(navigator.hardwareConcurrency || 4) : 4;
+  const weakMobile = mobile && (cores <= 4 || (deviceMemory > 0 && deviceMemory <= 4));
+
+  // Dynamic resolution only reduces the number of pixels the GPU shades; the
+  // simulation/ticker stays native rAF to avoid the old 30 FPS stair-step bug.
+  const resolution = forceLowQuality || weakMobile
+    ? 1
+    : mobile
+      ? Math.min(1.25, dpr)
+      : Math.min(1.5, dpr);
+
   return {
-    x: x * scale + cameraX,
-    y: y * scale + cameraY,
+    mobile,
+    weakMobile,
+    resolution,
+    antialias: !(forceLowQuality || weakMobile),
+    maxStaticItems: forceLowQuality || weakMobile ? 110 : 180,
+    maxPlayers: forceLowQuality || weakMobile ? 42 : MAX_RENDERED_PLAYERS,
+    maxProjectiles: forceLowQuality || weakMobile ? 48 : MAX_RENDERED_PROJECTILES,
   };
 }
 
-function getWorldViewBounds(cameraX, cameraY, scale, viewportWidth, viewportHeight, margin = 360) {
-  const safeScale = scale || 1;
+function createRotorModule(ctx, x, y, radius, colors, mini = false) {
+  const [primary, secondary, dark, highlight] = colors;
+  const guardWidth = mini ? 1.25 : 2.8;
+  const bladeWidth = mini ? 2.1 : 4.5;
+  const hubRadius = mini ? 2.5 : 5.8;
+  const bladeLength = mini ? radius * 0.58 : radius * 0.64;
 
+  // Carbon guard + neon edge. The large radius makes the drone immediately
+  // readable as a real quadcopter instead of four floating circles.
+  ctx.circle(x, y, radius).fill({ color: dark, alpha: 0.95 });
+  ctx.circle(x, y, radius - (mini ? 1.3 : 2.8)).fill({ color: 0x020713, alpha: 0.9 });
+  ctx.circle(x, y, radius).stroke({ color: secondary, width: guardWidth, alpha: 0.84 });
+  ctx.circle(x, y, radius - (mini ? 2.4 : 5.2)).stroke({ color: primary, width: mini ? 0.9 : 1.55, alpha: 0.58 });
+
+  // Two broad, crossed blades: visually like propellers, but still a static
+  // shared context, so this has zero per-frame geometry cost.
+  ctx.moveTo(x - bladeLength, y - bladeLength * 0.34)
+    .lineTo(x + bladeLength, y + bladeLength * 0.34)
+    .stroke({ color: secondary, width: bladeWidth, alpha: 0.42 });
+  ctx.moveTo(x - bladeLength * 0.34, y + bladeLength)
+    .lineTo(x + bladeLength * 0.34, y - bladeLength)
+    .stroke({ color: primary, width: bladeWidth, alpha: 0.31 });
+
+  ctx.circle(x, y, hubRadius + (mini ? 1.2 : 2.2)).fill({ color: dark, alpha: 1 });
+  ctx.circle(x, y, hubRadius).fill({ color: primary, alpha: 0.98 });
+  ctx.circle(x - hubRadius * 0.32, y - hubRadius * 0.38, Math.max(1.1, hubRadius * 0.34))
+    .fill({ color: highlight, alpha: 0.92 });
+}
+
+function createDroneContext(colors) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+
+  // The body faces up by default. updateUnitVisual rotates this single shared
+  // visual toward movement, so the drone feels like an actual vehicle.
+  const rotors = [
+    [-59, -45],
+    [59, -45],
+    [-59, 45],
+    [59, 45],
+  ];
+
+  // Strong arm shadows first, then metallic colored arm cores.
+  rotors.forEach(([x, y]) => {
+    const fromX = x < 0 ? -21 : 21;
+    const fromY = y < 0 ? -17 : 17;
+
+    ctx.moveTo(fromX, fromY).lineTo(x, y).stroke({
+      color: dark,
+      width: 12,
+      alpha: 1,
+    });
+    ctx.moveTo(fromX, fromY).lineTo(x, y).stroke({
+      color: primary,
+      width: 6.4,
+      alpha: 0.78,
+    });
+    ctx.moveTo(fromX, fromY).lineTo(x, y).stroke({
+      color: secondary,
+      width: 1.35,
+      alpha: 0.64,
+    });
+  });
+
+  // Larger realistic rotor modules. They are entirely inside the cached
+  // GraphicsContext and get reused for every drone with the same skin.
+  rotors.forEach(([x, y]) => createRotorModule(ctx, x, y, 24, colors, false));
+
+  // Dark aerodynamic chassis outline.
+  ctx.poly([
+    0, -52,
+    23, -39,
+    34, -8,
+    30, 24,
+    17, 47,
+    0, 56,
+    -17, 47,
+    -30, 24,
+    -34, -8,
+    -23, -39,
+  ]).fill({ color: dark, alpha: 1 });
+
+  // Colored armored shell, with a taper at the nose and a broad rear battery.
+  ctx.poly([
+    0, -47,
+    17, -34,
+    25, -7,
+    22, 21,
+    12, 40,
+    0, 47,
+    -12, 40,
+    -22, 21,
+    -25, -7,
+    -17, -34,
+  ]).fill({ color: primary, alpha: 1 });
+
+  // Central carbon seam makes it feel like a mechanical shell, not an orb.
+  ctx.poly([
+    0, -41,
+    7, -26,
+    9, 12,
+    4, 34,
+    0, 39,
+    -4, 34,
+    -9, 12,
+    -7, -26,
+  ]).fill({ color: dark, alpha: 0.55 });
+
+  // Raised front canopy / sensor block.
+  ctx.poly([
+    0, -42,
+    12, -29,
+    11, -10,
+    0, -2,
+    -11, -10,
+    -12, -29,
+  ]).fill({ color: secondary, alpha: 0.56 });
+  ctx.poly([
+    0, -38,
+    6, -29,
+    5, -17,
+    0, -13,
+    -5, -17,
+    -6, -29,
+  ]).fill({ color: highlight, alpha: 0.72 });
+
+  // Side vents and rear engine / status LED.
+  ctx.roundRect(-24, 8, 8, 18, 3).fill({ color: dark, alpha: 0.88 });
+  ctx.roundRect(16, 8, 8, 18, 3).fill({ color: dark, alpha: 0.88 });
+  ctx.roundRect(-22, 10, 4, 12, 2).fill({ color: secondary, alpha: 0.45 });
+  ctx.roundRect(18, 10, 4, 12, 2).fill({ color: secondary, alpha: 0.45 });
+
+  ctx.roundRect(-8, 29, 16, 13, 5).fill({ color: dark, alpha: 0.98 });
+  ctx.roundRect(-5, 32, 10, 7, 3).fill({ color: highlight, alpha: 0.9 });
+
+  // Clean outer rim + a very small specular line. No blur/filter is used.
+  ctx.poly([
+    0, -47,
+    17, -34,
+    25, -7,
+    22, 21,
+    12, 40,
+    0, 47,
+    -12, 40,
+    -22, 21,
+    -25, -7,
+    -17, -34,
+  ]).stroke({ color: highlight, width: 1.7, alpha: 0.38 });
+
+  return ctx;
+}
+
+function createMiniDroneContext(colors) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+
+  // A true scaled-down sibling of the main drone: same 4 arms, 4 large
+  // propeller modules, carbon shell and front sensor, rather than dots.
+  const rotors = [
+    [-17, -13],
+    [17, -13],
+    [-17, 13],
+    [17, 13],
+  ];
+
+  rotors.forEach(([x, y]) => {
+    const fromX = x < 0 ? -6 : 6;
+    const fromY = y < 0 ? -5 : 5;
+    ctx.moveTo(fromX, fromY).lineTo(x, y).stroke({ color: dark, width: 4.8, alpha: 1 });
+    ctx.moveTo(fromX, fromY).lineTo(x, y).stroke({ color: primary, width: 2.25, alpha: 0.78 });
+  });
+
+  rotors.forEach(([x, y]) => createRotorModule(ctx, x, y, 8.4, colors, true));
+
+  ctx.poly([
+    0, -17,
+    8, -12,
+    11, -2,
+    9, 8,
+    4, 15,
+    0, 18,
+    -4, 15,
+    -9, 8,
+    -11, -2,
+    -8, -12,
+  ]).fill({ color: dark, alpha: 1 });
+
+  ctx.poly([
+    0, -15,
+    6, -10,
+    8, -2,
+    6, 7,
+    3, 12,
+    0, 14,
+    -3, 12,
+    -6, 7,
+    -8, -2,
+    -6, -10,
+  ]).fill({ color: primary, alpha: 1 });
+
+  ctx.poly([0, -13, 3.6, -8, 3, -3, 0, -1, -3, -3, -3.6, -8])
+    .fill({ color: secondary, alpha: 0.58 });
+  ctx.circle(0, 9, 2.6).fill({ color: highlight, alpha: 0.9 });
+  ctx.poly([0, -15, 6, -10, 8, -2, 6, 7, 3, 12, 0, 14, -3, 12, -6, 7, -8, -2, -6, -10])
+    .stroke({ color: highlight, width: 0.8, alpha: 0.36 });
+
+  return ctx;
+}
+
+function createRotorSpinContext(colors) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+
+  // Two long blades are rotated as independent transforms around each rotor.
+  // The guard/hub stay inside the body context, so the propeller reads as spinning
+  // without rebuilding any geometry every frame.
+  ctx.roundRect(-2.9, -19, 5.8, 15.5, 2.6).fill({ color: secondary, alpha: 0.72 });
+  ctx.roundRect(-2.9, 3.5, 5.8, 15.5, 2.6).fill({ color: primary, alpha: 0.56 });
+  ctx.roundRect(-1.25, -17.2, 2.5, 11.8, 1.2).fill({ color: highlight, alpha: 0.33 });
+  ctx.circle(0, 0, 5.8).fill({ color: dark, alpha: 0.5 });
+  ctx.circle(0, 0, 3.1).fill({ color: primary, alpha: 0.32 });
+
+  return ctx;
+}
+
+function createOrbContext(color) {
+  const ctx = new PIXI.GraphicsContext();
+  ctx.circle(0, 0, 11).fill({ color, alpha: 0.98 });
+  ctx.circle(-3.5, -4, 3.3).fill({ color: 0xffffff, alpha: 0.55 });
+  ctx.circle(0, 0, 11).stroke({ color: 0xffffff, width: 1.5, alpha: 0.18 });
+  return ctx;
+}
+
+function createEnergyContext() {
+  const ctx = new PIXI.GraphicsContext();
+  ctx.roundRect(-10, -15, 20, 30, 5).fill({ color: 0x062f20, alpha: 1 });
+  ctx.roundRect(-7, -10, 14, 20, 3).fill({ color: 0x5effa7, alpha: 0.96 });
+  ctx.poly([2, -9, -5, 1, 0, 1, -3, 9, 6, -3, 1, -3]).fill({ color: 0xf4fff8, alpha: 0.96 });
+  return ctx;
+}
+
+function createCoreContext(color) {
+  const ctx = new PIXI.GraphicsContext();
+  ctx.circle(0, 0, 28).stroke({ color, width: 3, alpha: 0.62 });
+  ctx.circle(0, 0, 17).fill({ color, alpha: 0.9 });
+  ctx.circle(-6, -7, 5).fill({ color: 0xffffff, alpha: 0.76 });
+  ctx.moveTo(-20, -20).lineTo(20, 20).stroke({ color, width: 3, alpha: 0.5 });
+  ctx.moveTo(20, -20).lineTo(-20, 20).stroke({ color, width: 3, alpha: 0.5 });
+  return ctx;
+}
+
+function createProjectileContext(colors) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+  ctx.moveTo(-26, 0).lineTo(15, 0).stroke({ color: primary, width: 6, alpha: 0.28 });
+  ctx.circle(0, 0, 16).fill({ color: dark, alpha: 1 });
+  ctx.circle(0, 0, 13).fill({ color: primary, alpha: 1 });
+  ctx.circle(-4, -5, 5).fill({ color: secondary, alpha: 0.78 });
+  ctx.circle(-5, -6, 2.5).fill({ color: highlight, alpha: 0.9 });
+  return ctx;
+}
+
+function createShieldShellContext(colors) {
+  const [primary, secondary] = colors;
+  const ctx = new PIXI.GraphicsContext();
+  ctx.circle(0, 0, 1).fill({ color: primary, alpha: 0.075 });
+  ctx.circle(0, 0, 0.92).stroke({ color: secondary, width: 0.03, alpha: 0.38 });
+  ctx.circle(0, 0, 0.68).stroke({ color: primary, width: 0.014, alpha: 0.18 });
+  return ctx;
+}
+
+function createShieldRingContext(colors) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+  const outer = 0.99;
+  const inner = 0.8;
+  const outerPoints = [];
+  const innerPoints = [];
+
+  for (let index = 0; index < 8; index += 1) {
+    const angle = -Math.PI * 0.5 + (index / 8) * Math.PI * 2;
+    outerPoints.push(Math.cos(angle) * outer, Math.sin(angle) * outer);
+    innerPoints.push(Math.cos(angle + Math.PI / 8) * inner, Math.sin(angle + Math.PI / 8) * inner);
+  }
+
+  ctx.circle(0, 0, 1).stroke({ color: secondary, width: 0.024, alpha: 0.86 });
+  ctx.circle(0, 0, 0.87).stroke({ color: primary, width: 0.015, alpha: 0.62 });
+  ctx.poly(outerPoints).stroke({ color: highlight, width: 0.014, alpha: 0.62 });
+  ctx.poly(innerPoints).stroke({ color: dark, width: 0.04, alpha: 0.62 });
+
+  for (let index = 0; index < 8; index += 1) {
+    const angle = -Math.PI * 0.5 + (index / 8) * Math.PI * 2;
+    const x = Math.cos(angle) * 0.99;
+    const y = Math.sin(angle) * 0.99;
+    ctx.circle(x, y, 0.052).fill({ color: primary, alpha: 0.92 });
+    ctx.circle(x - 0.014, y - 0.014, 0.02).fill({ color: highlight, alpha: 0.9 });
+  }
+
+  return ctx;
+}
+
+function createShieldGlyphContext(colors) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+
+  // Small rotating "energy tiles" make the shield look alive while remaining
+  // just one shared WebGL geometry per skin.
+  for (let index = 0; index < 6; index += 1) {
+    const angle = -Math.PI * 0.5 + (index / 6) * Math.PI * 2;
+    const x = Math.cos(angle) * 0.61;
+    const y = Math.sin(angle) * 0.61;
+    ctx.roundRect(x - 0.05, y - 0.05, 0.1, 0.1, 0.028).fill({ color: dark, alpha: 0.72 });
+    ctx.roundRect(x - 0.035, y - 0.035, 0.07, 0.07, 0.02).fill({ color: secondary, alpha: 0.86 });
+    ctx.circle(x, y, 0.018).fill({ color: highlight, alpha: 0.96 });
+  }
+
+  ctx.circle(0, 0, 0.54).stroke({ color: primary, width: 0.012, alpha: 0.34 });
+  return ctx;
+}
+
+function createShieldPulseContext(colors) {
+  const [, secondary, , highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+  ctx.circle(0, 0, 1).stroke({ color: secondary, width: 0.018, alpha: 0.8 });
+  ctx.circle(0, 0, 0.9).stroke({ color: highlight, width: 0.008, alpha: 0.48 });
+  return ctx;
+}
+
+function createOrbitContext() {
+  const ctx = new PIXI.GraphicsContext();
+  ctx.circle(0, 0, 1).stroke({ color: 0xd5fbff, width: 0.02, alpha: 0.34 });
+  return ctx;
+}
+
+function createZoneContext() {
+  const ctx = new PIXI.GraphicsContext();
+  ctx.circle(0, 0, 1).fill({ color: 0x10ff8f, alpha: 0.015 });
+  ctx.circle(0, 0, 1).stroke({ color: 0x45ffb0, width: 0.025, alpha: 0.8 });
+  return ctx;
+}
+
+function createSimpleContext() {
+  const ctx = new PIXI.GraphicsContext();
+  ctx.circle(0, 0, 9).fill({ color: 0xffffff, alpha: 0.92 });
+  ctx.circle(-2.5, -3, 2.5).fill({ color: 0xffffff, alpha: 0.42 });
+  return ctx;
+}
+
+function addToPool(pool, factory, parent, minSize) {
+  while (pool.length < minSize) {
+    const item = factory();
+    item.root.eventMode = "none";
+    item.root.visible = false;
+    parent.addChild(item.root);
+    pool.push(item);
+  }
+}
+
+function createUnitVisual(resources) {
+  const root = new PIXI.Container();
+  root.eventMode = "none";
+  root.sortableChildren = false;
+
+  const orbit = new PIXI.Graphics(resources.orbitContext);
+  orbit.visible = false;
+  root.addChild(orbit);
+
+  // Shield is layered: a subtle dome behind the craft, then rings/glyphs in front.
+  const shieldShell = new PIXI.Graphics(resources.shieldShellContexts.cyan);
+  const shieldRing = new PIXI.Graphics(resources.shieldRingContexts.cyan);
+  const shieldGlyphs = new PIXI.Graphics(resources.shieldGlyphContexts.cyan);
+  const shieldPulse = new PIXI.Graphics(resources.shieldPulseContexts.cyan);
+  [shieldShell, shieldRing, shieldGlyphs, shieldPulse].forEach((part) => {
+    part.visible = false;
+    part.eventMode = "none";
+  });
+  root.addChild(shieldShell);
+
+  const vehicle = new PIXI.Container();
+  vehicle.eventMode = "none";
+  const body = new PIXI.Graphics(resources.droneContexts.cyan);
+  vehicle.addChild(body);
+
+  // One tiny transform per rotor. Contexts are shared, so these spinning blades
+  // cost only transform updates and make the drone feel far more alive.
+  const rotorSpins = MAIN_ROTOR_POINTS.map(([x, y]) => {
+    const rotor = new PIXI.Graphics(resources.rotorSpinContexts.cyan);
+    rotor.position.set(x, y);
+    rotor.eventMode = "none";
+    rotor.alpha = 0.58;
+    vehicle.addChild(rotor);
+    return rotor;
+  });
+
+  root.addChild(vehicle);
+
+  const miniLayer = new PIXI.Container();
+  miniLayer.eventMode = "none";
+  const minis = Array.from({ length: MAX_MINI_DRONES }, () => {
+    const mini = new PIXI.Graphics(resources.miniContexts.cyan);
+    mini.visible = false;
+    mini.eventMode = "none";
+    miniLayer.addChild(mini);
+    return mini;
+  });
+  root.addChild(miniLayer, shieldRing, shieldGlyphs, shieldPulse);
+
+  return {
+    root,
+    body,
+    vehicle,
+    rotorSpins,
+    shieldShell,
+    shieldRing,
+    shieldGlyphs,
+    shieldPulse,
+    orbit,
+    minis,
+    skin: "cyan",
+    facing: 0,
+    facingReady: false,
+    bank: 0,
+    shieldMix: 0,
+    lastFrameAt: 0,
+    hoverSeed: Math.random() * Math.PI * 2,
+    lastSeenAt: 0,
+  };
+}
+
+function createSimpleVisual(resources) {
+  const root = new PIXI.Graphics(resources.simpleContext);
+  return { root, skin: "", lastSeenAt: 0 };
+}
+
+function createProjectileVisual(resources) {
+  const root = new PIXI.Graphics(resources.projectileContexts.cyan);
+  return { root, skin: "cyan", lastSeenAt: 0 };
+}
+
+function createStaticVisual(context) {
+  const root = new PIXI.Graphics(context);
+  return { root, context, lastSeenAt: 0 };
+}
+
+function setWorldTransform(layer, cameraX, cameraY, scale) {
+  layer.position.set(Number(cameraX || 0), Number(cameraY || 0));
+  layer.scale.set(Math.max(0.1, Number(scale || 1)));
+}
+
+function getBounds(cameraX, cameraY, scale, width, height, margin = 320) {
+  const safeScale = Math.max(0.1, Number(scale || 1));
   return {
     left: (-cameraX - margin) / safeScale,
-    right: (viewportWidth - cameraX + margin) / safeScale,
+    right: (width - cameraX + margin) / safeScale,
     top: (-cameraY - margin) / safeScale,
-    bottom: (viewportHeight - cameraY + margin) / safeScale,
+    bottom: (height - cameraY + margin) / safeScale,
   };
 }
 
-function isWorldVisible(item, bounds, radius = 0) {
+function isVisibleInBounds(item, bounds, radius = 150) {
   if (!item) return false;
-
-  return (
-    item.x + radius >= bounds.left &&
-    item.x - radius <= bounds.right &&
-    item.y + radius >= bounds.top &&
-    item.y - radius <= bounds.bottom
-  );
+  const x = Number(item.x || 0);
+  const y = Number(item.y || 0);
+  return x + radius >= bounds.left && x - radius <= bounds.right && y + radius >= bounds.top && y - radius <= bounds.bottom;
 }
 
-function filterVisibleItems(items = [], bounds, radius, limit = Infinity) {
-  const result = [];
+function upsertStaticLayer({ map, items, prefix, contexts, parent, now, maxItems, bounds, getContext }) {
+  const active = new Set();
+  let rendered = 0;
 
-  for (let i = 0; i < items.length; i += 1) {
-    const item = items[i];
+  for (const item of items || []) {
+    if (!item || rendered >= maxItems || !isVisibleInBounds(item, bounds, 70)) continue;
+    const key = `${prefix}:${item.id || `${Math.round(item.x)}:${Math.round(item.y)}`}`;
+    active.add(key);
+    const context = getContext(item, contexts);
+    let visual = map.get(key);
 
-    if (isWorldVisible(item, bounds, radius)) {
-      result.push(item);
-
-      if (result.length >= limit) break;
+    if (!visual) {
+      visual = createStaticVisual(context);
+      visual.root.eventMode = "none";
+      parent.addChild(visual.root);
+      map.set(key, visual);
     }
-  }
 
-  return result;
-}
-
-function hasActiveShield(unit) {
-  return Boolean(
-    unit?.shieldActive ||
-      unit?.isShieldActive ||
-      unit?.shield ||
-      unit?.shielded ||
-      unit?.defending ||
-      unit?.rightClickShieldActive
-  );
-}
-
-function glow(g, x, y, r, color, power = 1, quality = 1, disableGlow = false) {
-  // Pe device foarte slab dezactivam complet glow-urile: sunt cele mai scumpe
-  // efecte (cercuri mari semi-transparente suprapuse) pe GPU vechi cu alpha
-  // blending lent, si elimina cel mai mult din cauza stutter-ului perceput.
-  if (disableGlow) return;
-
-  if (quality >= 2) {
-    g.circle(x, y, r * 2.55).fill({ color, alpha: 0.018 * power });
-    g.circle(x, y, r * 1.75).fill({ color, alpha: 0.036 * power });
-  }
-
-  if (quality >= 1) {
-    g.circle(x, y, r * 1.22).fill({ color, alpha: 0.07 * power });
-  }
-}
-
-function drawOrb(g, orb, cameraX, cameraY, scale, vw, vh, disableGlow = false) {
-  const p = screen(orb.x, orb.y, cameraX, cameraY, scale);
-  if (p.x < -95 || p.y < -95 || p.x > vw + 95 || p.y > vh + 95) return;
-
-  const color = ORB_COLORS[orb.color] || ORB_COLORS.cyan;
-  const light = mixColor(color, 0xffffff, 0.62);
-  const r = Math.max(7, 10.5 * scale);
-
-  // Glow exterior mai frumos.
-  glow(g, p.x, p.y, r * 1.35, color, 0.82, 1, disableGlow);
-
-  // Aura mica.
-  if (!disableGlow) {
-    g.circle(p.x, p.y, r * 1.42).fill({
-      color,
-      alpha: 0.08,
-    });
-  }
-
-  // Corp lucios.
-  g.circle(p.x, p.y, r).fill({
-    color,
-    alpha: 0.98,
-  });
-
-  // Rim.
-  g.circle(p.x, p.y, r * 0.96).stroke({
-    color: light,
-    width: Math.max(1, r * 0.15),
-    alpha: 0.36,
-  });
-
-  // Highlight principal.
-  g.circle(p.x - r * 0.32, p.y - r * 0.36, r * 0.33).fill({
-    color: 0xffffff,
-    alpha: 0.72,
-  });
-
-  // Highlight secundar.
-  g.circle(p.x + r * 0.22, p.y + r * 0.24, r * 0.18).fill({
-    color: light,
-    alpha: 0.22,
-  });
-}
-
-function drawEnergy(g, cell, cameraX, cameraY, scale, vw, vh, disableGlow = false) {
-  const p = screen(cell.x, cell.y, cameraX, cameraY, scale);
-  if (p.x < -120 || p.y < -120 || p.x > vw + 120 || p.y > vh + 120) return;
-
-  const color = 0x67ffb1;
-  const dark = 0x052818;
-  const light = 0xeafff4;
-  const rim = 0x9dffd0;
-
-  const r = Math.max(12, 17 * scale);
-  const w = r * 1.55;
-  const h = r * 2.16;
-
-  glow(g, p.x, p.y, r * 1.2, color, 0.86, 1, disableGlow);
-
-  // Aura verde discreta.
-  if (!disableGlow) {
-    g.circle(p.x, p.y, r * 1.35).fill({
-      color,
-      alpha: 0.07,
-    });
-  }
-
-  // Cap metalic.
-  g.roundRect(p.x - w * 0.27, p.y - h * 0.65, w * 0.54, r * 0.28, r * 0.1).fill({
-    color: light,
-    alpha: 0.82,
-  });
-
-  // Carcasa baterie.
-  g.roundRect(p.x - w * 0.5, p.y - h * 0.5, w, h, r * 0.34).fill({
-    color: dark,
-    alpha: 0.96,
-  });
-
-  g.roundRect(p.x - w * 0.5, p.y - h * 0.5, w, h, r * 0.34).stroke({
-    color: rim,
-    width: Math.max(1.4, r * 0.12),
-    alpha: 0.78,
-  });
-
-  // Interior luminos.
-  g.roundRect(p.x - w * 0.33, p.y - h * 0.31, w * 0.66, h * 0.62, r * 0.23).fill({
-    color,
-    alpha: 0.94,
-  });
-
-  // Reflexie verticala.
-  g.roundRect(p.x - w * 0.23, p.y - h * 0.23, w * 0.18, h * 0.46, r * 0.12).fill({
-    color: light,
-    alpha: 0.18,
-  });
-
-  // Fulger.
-  g.poly([
-    p.x + r * 0.10, p.y - r * 0.48,
-    p.x - r * 0.22, p.y + r * 0.02,
-    p.x + r * 0.02, p.y + r * 0.02,
-    p.x - r * 0.11, p.y + r * 0.48,
-    p.x + r * 0.34, p.y - r * 0.10,
-    p.x + r * 0.10, p.y - r * 0.10,
-  ]).fill({
-    color: light,
-    alpha: 0.96,
-  });
-
-  g.circle(p.x - w * 0.18, p.y - h * 0.26, r * 0.19).fill({
-    color: 0xffffff,
-    alpha: 0.62,
-  });
-}
-
-function drawCore(g, core, cameraX, cameraY, scale, colorMap, time, vw, vh, disableGlow = false) {
-  const p = screen(core.x, core.y, cameraX, cameraY, scale);
-  if (p.x < -130 || p.y < -130 || p.x > vw + 130 || p.y > vh + 130) return;
-
-  const color = hex(colorMap[core.type] || "#00eaff");
-  const r = Math.max(18, 31 * scale);
-
-  glow(g, p.x, p.y, r, color, 0.95, 1, disableGlow);
-
-  g.circle(p.x, p.y, r).stroke({
-    color,
-    width: Math.max(1, 2 * scale),
-    alpha: 0.74,
-  });
-
-  g.circle(p.x, p.y, r * 0.42).fill({
-    color,
-    alpha: 0.94,
-  });
-
-  g.circle(p.x - r * 0.12, p.y - r * 0.14, r * 0.12).fill({
-    color: 0xffffff,
-    alpha: 0.76,
-  });
-
-  g.moveTo(p.x - r * 0.54, p.y - r * 0.54);
-  g.lineTo(p.x + r * 0.54, p.y + r * 0.54);
-  g.stroke({
-    color,
-    width: Math.max(2, 4 * scale),
-    alpha: 0.62,
-  });
-
-  g.moveTo(p.x + r * 0.54, p.y - r * 0.54);
-  g.lineTo(p.x - r * 0.54, p.y + r * 0.54);
-  g.stroke({
-    color,
-    width: Math.max(2, 4 * scale),
-    alpha: 0.62,
-  });
-}
-
-function drawArm(g, cx, cy, x, y, primary, light, width, quality = 1) {
-  g.moveTo(cx, cy);
-  g.lineTo(x, y);
-  g.stroke({
-    color: primary,
-    width,
-    alpha: 0.62,
-  });
-
-  if (quality >= 2) {
-    g.moveTo(cx, cy);
-    g.lineTo(x, y);
-    g.stroke({
-      color: light,
-      width: Math.max(1, width * 0.35),
-      alpha: 0.2,
-    });
-  }
-}
-
-function drawRotor(g, x, y, r, primary, secondary, light, time, quality = 1, disableGlow = false, spinEnabled = true) {
-  const spin = spinEnabled ? time * 0.018 : 0;
-  const soft = mixColor(primary, light, 0.45);
-
-  if (quality >= 1) {
-    glow(g, x, y, r * 0.9, primary, quality >= 2 ? 0.9 : 0.55, quality, disableGlow);
-  }
-
-  g.circle(x, y, r * 1.18).fill({
-    color: primary,
-    alpha: quality >= 2 ? 0.065 : 0.04,
-  });
-
-  g.circle(x, y, r * 1.05).stroke({
-    color: light,
-    width: Math.max(1.1, r * 0.1),
-    alpha: quality >= 2 ? 0.9 : 0.62,
-  });
-
-  g.circle(x, y, r * 0.78).stroke({
-    color: soft,
-    width: Math.max(1, r * 0.075),
-    alpha: quality >= 2 ? 0.5 : 0.34,
-  });
-
-  g.circle(x, y, r * 0.52).stroke({
-    color: secondary,
-    width: Math.max(1, r * 0.055),
-    alpha: quality >= 2 ? 0.36 : 0.22,
-  });
-
-  if (quality >= 1) {
-    for (let i = 0; i < 4; i += 1) {
-      const a = spin + i * Math.PI * 0.5;
-      const bladeLength = r * 0.84;
-      const bladeWidth = Math.max(1.2, r * 0.085);
-
-      g.moveTo(
-        x + Math.cos(a + Math.PI / 2) * bladeWidth,
-        y + Math.sin(a + Math.PI / 2) * bladeWidth
-      );
-      g.lineTo(
-        x + Math.cos(a) * bladeLength,
-        y + Math.sin(a) * bladeLength
-      );
-      g.lineTo(
-        x + Math.cos(a - Math.PI / 2) * bladeWidth,
-        y + Math.sin(a - Math.PI / 2) * bladeWidth
-      );
-      g.fill({
-        color: i % 2 ? secondary : light,
-        alpha: quality >= 2 ? 0.32 : 0.22,
-      });
+    if (visual.context !== context) {
+      visual.context = context;
+      visual.root.context = context;
     }
+
+    visual.root.position.set(Number(item.x || 0), Number(item.y || 0));
+    visual.root.visible = true;
+    visual.lastSeenAt = now;
+    rendered += 1;
   }
 
-  g.circle(x, y, r * 0.31).fill({
-    color: secondary,
-    alpha: 0.98,
-  });
-
-  g.circle(x, y, r * 0.18).fill({
-    color: light,
-    alpha: 0.96,
-  });
-
-  if (quality >= 2) {
-    g.circle(x - r * 0.08, y - r * 0.09, r * 0.075).fill({
-      color: 0xffffff,
-      alpha: 0.56,
-    });
-  }
-}
-
-function drawBody(g, x, y, size, colors, leanX = 0, leanY = 0, quality = 1) {
-  const primary = hex(colors[0]);
-  const secondary = hex(colors[1]);
-  const dark = hex(colors[2]);
-  const light = hex(colors[3]);
-
-  const ox = leanX * size * 0.035;
-  const oy = leanY * size * 0.035;
-
-  const w = size * 0.43;
-  const h = size * 0.68;
-  const cx = x + ox;
-  const cy = y + oy;
-
-  const bright = mixColor(primary, light, 0.6);
-  const deep = mixColor(dark, primary, 0.18);
-  const glass = mixColor(light, primary, 0.22);
-
-  // Smaller glow only around the body, no large blue radiation rings.
-  if (quality >= 1) {
-    g.ellipse(cx, cy + h * 0.03, w * 0.58, h * 0.64).fill({
-      color: primary,
-      alpha: 0.055,
-    });
-  }
-
-  // Outer glossy shell.
-  g.ellipse(cx, cy + h * 0.04, w * 0.52, h * 0.6).fill({
-    color: deep,
-    alpha: 1,
-  });
-
-  g.ellipse(cx, cy, w * 0.48, h * 0.56).fill({
-    color: primary,
-    alpha: 1,
-  });
-
-  // Main bright glass panel.
-  g.ellipse(cx - w * 0.1, cy - h * 0.11, w * 0.33, h * 0.42).fill({
-    color: secondary,
-    alpha: quality >= 2 ? 0.52 : 0.42,
-  });
-
-  // Soft highlight.
-  g.ellipse(cx - w * 0.22, cy - h * 0.28, w * 0.2, h * 0.19).fill({
-    color: light,
-    alpha: 0.72,
-  });
-
-  // Vertical glossy streak.
-  if (quality >= 1) {
-    g.ellipse(cx - w * 0.02, cy - h * 0.02, w * 0.13, h * 0.42).fill({
-      color: glass,
-      alpha: 0.18,
-    });
-  }
-
-  // Lower inner lens.
-  g.ellipse(cx + w * 0.02, cy + h * 0.23, w * 0.21, h * 0.22).fill({
-    color: light,
-    alpha: 0.88,
-  });
-
-  g.ellipse(cx + w * 0.04, cy + h * 0.2, w * 0.11, h * 0.14).fill({
-    color: primary,
-    alpha: 0.25,
-  });
-
-  // Dark side visor.
-  g.ellipse(cx + w * 0.31, cy - h * 0.19, w * 0.22, h * 0.27).fill({
-    color: 0x020815,
-    alpha: 0.96,
-  });
-
-  g.circle(cx + w * 0.23, cy - h * 0.28, Math.max(2.5, size * 0.025)).fill({
-    color: light,
-    alpha: 0.55,
-  });
-
-  // Crisp rim, no wide aura.
-  if (quality >= 1) {
-    g.ellipse(cx, cy, w * 0.49, h * 0.57).stroke({
-      color: mixColor(light, primary, 0.42),
-      width: Math.max(1, size * 0.012),
-      alpha: 0.28,
-    });
-  }
-}
-
-function drawMiniDrone(g, x, y, scale, colors, time, quality = 1, orbitAngle = 0, disableGlow = false, spinEnabled = true) {
-  const primary = hex(colors[0]);
-  const secondary = hex(colors[1]);
-  const dark = hex(colors[2]);
-  const light = hex(colors[3]);
-  const bright = mixColor(primary, light, 0.45);
-
-  const size = Math.max(24, 46 * scale);
-  const body = size * 0.58;
-  const rotorR = size * 0.17;
-
-  if (quality >= 1) {
-    // Smaller glow for sharper mini attack drones.
-    glow(g, x, y, size * 0.38, primary, 0.32, 1, disableGlow);
-  }
-
-  const rotors = [
-    { x: -body * 0.65, y: -body * 0.5 },
-    { x: body * 0.65, y: -body * 0.5 },
-    { x: -body * 0.65, y: body * 0.5 },
-    { x: body * 0.65, y: body * 0.5 },
-  ];
-
-  rotors.forEach((rp) =>
-    drawArm(g, x, y, x + rp.x, y + rp.y, primary, light, Math.max(1, size * 0.04), quality)
-  );
-
-  rotors.forEach((rp) =>
-    drawRotor(g, x + rp.x, y + rp.y, rotorR, primary, secondary, light, time, quality, disableGlow, spinEnabled)
-  );
-
-  g.ellipse(x, y, body * 0.34, body * 0.44).fill({
-    color: primary,
-    alpha: 1,
-  });
-
-  g.ellipse(x - body * 0.08, y - body * 0.07, body * 0.21, body * 0.29).fill({
-    color: bright,
-    alpha: 0.26,
-  });
-
-  g.ellipse(x + body * 0.12, y + body * 0.16, body * 0.22, body * 0.18).fill({
-    color: dark,
-    alpha: 0.22,
-  });
-
-  g.circle(x - body * 0.13, y - body * 0.26, size * 0.044).fill({
-    color: 0xffffff,
-    alpha: 0.88,
-  });
-
-  g.circle(x + body * 0.23, y - body * 0.18, size * 0.041).fill({
-    color: 0x020815,
-    alpha: 0.96,
-  });
-
-  g.circle(x, y + body * 0.16, size * 0.032).fill({
-    color: light,
-    alpha: 0.94,
-  });
-}
-
-function drawShield(g, x, y, radius, primary, time, quality = 1) {
-  const pulse = 1 + Math.sin(time * 0.006) * 0.035;
-
-  g.circle(x, y, radius * 1.14 * pulse).fill({
-    color: primary,
-    alpha: quality >= 2 ? 0.055 : 0.035,
-  });
-
-  g.circle(x, y, radius * 1.02).stroke({
-    color: primary,
-    width: Math.max(2, radius * 0.018),
-    alpha: quality >= 2 ? 0.88 : 0.65,
-  });
-
-  if (quality >= 2) {
-    g.circle(x, y, radius * 0.82).fill({
-      color: primary,
-      alpha: 0.018,
-    });
-
-    for (let i = 0; i < 6; i += 1) {
-      const a = time * 0.0014 + i * ((Math.PI * 2) / 6);
-      const a2 = a + 0.22;
-
-      g.moveTo(x + Math.cos(a) * radius * 1.02, y + Math.sin(a) * radius * 1.02);
-      g.lineTo(x + Math.cos(a2) * radius * 1.02, y + Math.sin(a2) * radius * 1.02);
-      g.stroke({
-        color: 0xffffff,
-        width: Math.max(1, radius * 0.012),
-        alpha: 0.32,
-      });
+  for (const [key, visual] of map) {
+    if (!key.startsWith(`${prefix}:`)) continue;
+    if (!active.has(key) && now - visual.lastSeenAt > 0) {
+      visual.root.visible = false;
+    }
+    if (now - visual.lastSeenAt > ENTITY_STALE_MS * 8) {
+      visual.root.destroy();
+      map.delete(key);
     }
   }
 }
 
-function drawDrone(g, unit, cameraX, cameraY, scale, time, options = {}, vw = 0, vh = 0) {
-  if (!unit || unit.alive === false) return;
-
-  const p = screen(unit.x, unit.y, cameraX, cameraY, scale);
-  if (p.x < -320 || p.y < -320 || p.x > vw + 320 || p.y > vh + 320) return;
-
+function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = false) {
   const skin = normalizeSkin(unit.skin);
-  const colors = SKIN_THEMES[skin] || SKIN_THEMES.cyan;
-
-  const primary = hex(colors[0]);
-  const secondary = hex(colors[1]);
-  const light = hex(colors[3]);
-
-  const isPlayer = options.isPlayer === true;
-  const isNear = options.isNear !== false;
-  const disableGlow = options.disableGlow === true;
-  // IMPORTANT: pe device foarte slab (disableAnimations), rotoarele nu se mai
-  // invart (spinEnabled=false trimis catre drawRotor) si mini-dronele NU mai
-  // orbiteaza in jurul dronei mari - apar fixe pe ultima pozitie calculata.
-  // Eliminam astfel costul de Math.cos/Math.sin recalculat la fiecare frame
-  // pentru fiecare rotor (4 per drona) si pentru fiecare mini-drona orbitala
-  // (pana la 4 per drona), multiplicat cu pana la 69 de boti simultan.
-  const disableAnimations = options.disableAnimations === true;
-  const quality = Number.isFinite(options.quality) ? options.quality : isPlayer ? 2 : isNear ? 1 : 0;
-
-  const visualSize = Math.max(STANDARD_DRONE_MIN_SIZE, (STANDARD_DRONE_SIZE) * scale);
-  const rotorBase = visualSize * 0.92;
-  const rotorR = visualSize * 0.15;
-
-  const leanX = unit.moveX || 0;
-  const leanY = unit.moveY || 0;
-
-  if (quality >= 1) {
-    // Clean glossy glow only, no large radiation rings around the drone.
-    glow(g, p.x, p.y, visualSize * 0.42, primary, isPlayer ? 0.45 : 0.28, Math.min(quality, 1), disableGlow);
-  }
-
-  const rotors = [
-    { x: -rotorBase * 0.52, y: -rotorBase * 0.46 },
-    { x: rotorBase * 0.52, y: -rotorBase * 0.46 },
-    { x: -rotorBase * 0.52, y: rotorBase * 0.46 },
-    { x: rotorBase * 0.52, y: rotorBase * 0.46 },
-  ];
-
-  rotors.forEach((rp) =>
-    drawArm(
-      g,
-      p.x,
-      p.y,
-      p.x + rp.x,
-      p.y + rp.y,
-      primary,
-      light,
-      Math.max(1, visualSize * 0.032),
-      quality
-    )
-  );
-
-  rotors.forEach((rp) =>
-    drawRotor(
-      g,
-      p.x + rp.x,
-      p.y + rp.y,
-      rotorR,
-      primary,
-      secondary,
-      light,
-      time,
-      quality,
-      disableGlow,
-      !disableAnimations
-    )
-  );
-
-  drawBody(g, p.x, p.y, visualSize, colors, leanX, leanY, quality);
-
-  if (hasActiveShield(unit)) {
-    drawShield(g, p.x, p.y, visualSize * 0.95, primary, time, quality);
-  }
-
-  const droneCount = Math.min(unit.drones || 0, 8);
-  if (droneCount <= 0) return;
-
-  const orbitBase = unit.attacking && !unit.isBot ? 175 : 145;
-  const orbitRadius = orbitBase * scale;
-
-  const mouseAngle = Math.atan2((unit.mouseY || unit.y) - unit.y, (unit.mouseX || unit.x) - unit.x);
-  const attackOffset =
-    unit.attacking && !unit.isBot
-      ? { x: Math.cos(mouseAngle) * 75, y: Math.sin(mouseAngle) * 75 }
-      : { x: 0, y: 0 };
-
-  // IMPORTANT: pe device foarte slab, orbitRotation e fortat la 0 - mini-
-  // dronele raman pe pozitia lor unghiulara initiala (distribuite uniform in
-  // jurul dronei mari), fara sa se mai roteasca in jurul axei. Vizual: orbii
-  // colectati apar in continuare ca mini-drone in jurul dronei, dar stau pe
-  // loc, fara animatie de rotatie continua.
-  const orbitRotation = disableAnimations ? 0 : time * (unit.attacking ? 0.0032 : 0.00125);
-
-  if (quality >= 1 && droneCount > 0) {
-    // Visible but clean orbit line for the small drones.
-    g.circle(p.x, p.y, orbitRadius).stroke({
-      color: mixColor(primary, light, 0.48),
-      width: Math.max(1.4, visualSize * 0.015),
-      alpha: isPlayer ? 0.58 : 0.34,
+  if (visual.skin !== skin) {
+    visual.skin = skin;
+    visual.body.context = resources.droneContexts[skin] || resources.droneContexts.cyan;
+    visual.rotorSpins.forEach((rotor) => {
+      rotor.context = resources.rotorSpinContexts[skin] || resources.rotorSpinContexts.cyan;
     });
+    visual.minis.forEach((mini) => {
+      mini.context = resources.miniContexts[skin] || resources.miniContexts.cyan;
+    });
+    visual.shieldShell.context = resources.shieldShellContexts[skin] || resources.shieldShellContexts.cyan;
+    visual.shieldRing.context = resources.shieldRingContexts[skin] || resources.shieldRingContexts.cyan;
+    visual.shieldGlyphs.context = resources.shieldGlyphContexts[skin] || resources.shieldGlyphContexts.cyan;
+    visual.shieldPulse.context = resources.shieldPulseContexts[skin] || resources.shieldPulseContexts.cyan;
   }
 
-  for (let i = 0; i < droneCount; i += 1) {
-    const angle = (i / droneCount) * Math.PI * 2 + orbitRotation;
-    const miniWorldX = unit.x + Math.cos(angle) * orbitBase + attackOffset.x;
-    const miniWorldY = unit.y + Math.sin(angle) * orbitBase + attackOffset.y;
-    const mini = screen(miniWorldX, miniWorldY, cameraX, cameraY, scale);
+  const deltaSeconds = clamp((now - (visual.lastFrameAt || now)) / 1000, 1 / 240, 0.05);
+  visual.lastFrameAt = now;
 
-    drawMiniDrone(
-      g,
-      mini.x,
-      mini.y,
-      scale,
-      colors,
-      time,
-      quality >= 1 ? 1 : 0,
-      angle,
-      disableGlow,
-      !disableAnimations
+  visual.root.visible = true;
+  visual.root.position.set(Number(unit.x || 0), Number(unit.y || 0));
+  visual.root.alpha = unit.alive === false ? 0.34 : 1;
+  visual.root.scale.set(compact ? 0.76 : isPlayer ? 1.04 : 1);
+
+  const movementX = Number(unit.moveX || 0);
+  const movementY = Number(unit.moveY || 0);
+  const hasMovement = Boolean(unit.isMoving) || Math.hypot(movementX, movementY) > 0.015;
+  const targetFacing = getUnitFacingTarget(unit, visual.facing);
+
+  if (!visual.facingReady) {
+    visual.facing = targetFacing;
+    visual.facingReady = true;
+  } else if (hasMovement) {
+    const turnDelta = shortestAngleDelta(visual.facing, targetFacing);
+    visual.facing = dampAngle(visual.facing, targetFacing, TURN_RESPONSE, deltaSeconds);
+
+    // Gentle banking gives direction changes weight/inertia rather than a
+    // mechanical instant pivot. It is intentionally tiny for readability.
+    const angularVelocity = turnDelta / Math.max(deltaSeconds, 0.001);
+    const targetBank = clamp(-angularVelocity * 0.024, -0.22, 0.22);
+    visual.bank = damp(visual.bank, targetBank, BANK_RESPONSE, deltaSeconds);
+  } else {
+    visual.bank = damp(visual.bank, 0, BANK_RESPONSE * 0.7, deltaSeconds);
+  }
+
+  const hoverTime = now * 0.0019 + visual.hoverSeed;
+  const throttle = hasMovement ? 1 : 0;
+  const hoverLift = Math.sin(hoverTime) * (1.45 + throttle * 0.4);
+  const subtleStretch = 1 + Math.sin(hoverTime * 1.45) * 0.012 + throttle * 0.016;
+  const bankAmount = Math.abs(visual.bank);
+
+  visual.vehicle.rotation = visual.facing;
+  visual.vehicle.position.set(visual.bank * 6.5, hoverLift);
+  visual.vehicle.skew.set(visual.bank * 0.16, -visual.bank * 0.06);
+  visual.vehicle.scale.set(
+    subtleStretch * (1 + bankAmount * 0.035),
+    subtleStretch * (1 - bankAmount * 0.022),
+  );
+
+  const rotorSpeed = hasMovement ? 0.037 : 0.016;
+  visual.rotorSpins.forEach((rotor, index) => {
+    const direction = index % 2 === 0 ? 1 : -1;
+    rotor.rotation = direction * now * rotorSpeed + index * Math.PI * 0.5;
+    rotor.alpha = hasMovement ? 0.7 : 0.48;
+  });
+
+  const shieldActive = Boolean(unit.shieldActive || unit.isShieldActive || Number(unit.shieldUntil || 0) > Date.now());
+  visual.shieldMix = damp(visual.shieldMix || 0, shieldActive ? 1 : 0, SHIELD_RESPONSE, deltaSeconds);
+  const shieldVisible = visual.shieldMix > 0.015;
+  [visual.shieldShell, visual.shieldRing, visual.shieldGlyphs, visual.shieldPulse].forEach((part) => {
+    part.visible = shieldVisible;
+  });
+
+  if (shieldVisible) {
+    const shieldPulsePhase = (now % 920) / 920;
+    const shieldBreath = 1 + Math.sin(now * 0.0105) * 0.028;
+    const shieldSize = (isPlayer ? 137 : 130) * shieldBreath;
+    const shieldAlpha = visual.shieldMix;
+
+    visual.shieldShell.scale.set(shieldSize * (0.95 + shieldAlpha * 0.05));
+    visual.shieldShell.alpha = 0.68 * shieldAlpha;
+
+    visual.shieldRing.scale.set(shieldSize * (1.01 + Math.sin(now * 0.007) * 0.015));
+    visual.shieldRing.rotation = now * 0.00065;
+    visual.shieldRing.alpha = (0.64 + Math.sin(now * 0.012) * 0.1) * shieldAlpha;
+
+    visual.shieldGlyphs.scale.set(shieldSize * 0.98);
+    visual.shieldGlyphs.rotation = -now * 0.00092;
+    visual.shieldGlyphs.alpha = 0.78 * shieldAlpha;
+
+    visual.shieldPulse.scale.set(shieldSize * (1 + shieldPulsePhase * 0.21));
+    visual.shieldPulse.alpha = (1 - shieldPulsePhase) * 0.34 * shieldAlpha;
+  }
+
+  const count = Math.min(MAX_MINI_DRONES, Math.max(0, Number(unit.drones || 0)));
+  visual.orbit.visible = count > 0;
+  const attacking = Boolean(unit.attacking);
+  const orbitRadius = attacking && isPlayer ? 175 : 145;
+  visual.orbit.scale.set(orbitRadius);
+  visual.orbit.alpha = isPlayer ? 0.64 : 0.36;
+
+  const baseAngle = attacking && isPlayer
+    ? Math.atan2(Number(unit.mouseY || unit.y) - Number(unit.y || 0), Number(unit.mouseX || unit.x) - Number(unit.x || 0))
+    : 0;
+  const spin = isPlayer ? now * (attacking ? 0.003 : 0.00135) : now * 0.0006;
+  const aimX = attacking && isPlayer ? Math.cos(baseAngle) * 55 : 0;
+  const aimY = attacking && isPlayer ? Math.sin(baseAngle) * 55 : 0;
+
+  visual.minis.forEach((mini, index) => {
+    const visible = index < count;
+    mini.visible = visible;
+    if (!visible) return;
+
+    const angle = (index / Math.max(1, count)) * Math.PI * 2 + spin;
+    const miniHover = Math.sin(now * 0.004 + index * 1.9) * 2.5;
+    mini.position.set(
+      Math.cos(angle) * orbitRadius + aimX,
+      Math.sin(angle) * orbitRadius + aimY + miniHover,
     );
+    mini.rotation = visual.facing + Math.sin(now * 0.003 + index) * 0.045;
+    const miniScale = 1 + Math.sin(now * 0.0045 + index * 1.3) * 0.035;
+    mini.scale.set(miniScale);
+  });
+
+  visual.lastSeenAt = now;
+}
+
+function updateSimpleVisual(visual, unit, resources, now) {
+  const skin = normalizeSkin(unit.skin);
+  if (visual.skin !== skin) {
+    visual.skin = skin;
+    visual.root.context = resources.simpleContexts[skin] || resources.simpleContexts.cyan;
+  }
+  visual.root.visible = true;
+  visual.root.position.set(Number(unit.x || 0), Number(unit.y || 0));
+  visual.root.alpha = 0.84;
+  visual.lastSeenAt = now;
+}
+
+function updateProjectileVisual(visual, projectile, resources, now) {
+  const skin = normalizeSkin(projectile.skin);
+  if (visual.skin !== skin) {
+    visual.skin = skin;
+    visual.root.context = resources.projectileContexts[skin] || resources.projectileContexts.cyan;
+  }
+  visual.root.visible = true;
+  visual.root.position.set(Number(projectile.x || 0), Number(projectile.y || 0));
+  visual.root.rotation = Number(projectile.angle ?? Math.atan2(Number(projectile.vy || 0), Number(projectile.vx || 1)));
+  visual.root.alpha = projectile.localOnly ? 0.88 : 1;
+  visual.lastSeenAt = now;
+}
+
+function syncUnitPool({ pool, source, resources, parent, bounds, max, now, isPlayer = false, compact = false }) {
+  const visible = [];
+  for (const unit of source || []) {
+    if (!unit || unit.alive === false || !isVisibleInBounds(unit, bounds, 320)) continue;
+    visible.push(unit);
+    if (visible.length >= max) break;
+  }
+
+  addToPool(pool, () => createUnitVisual(resources), parent, visible.length);
+  for (let index = 0; index < pool.length; index += 1) {
+    const unit = visible[index];
+    const visual = pool[index];
+    if (!unit) {
+      visual.root.visible = false;
+      continue;
+    }
+    updateUnitVisual(visual, unit, resources, now, isPlayer, compact);
   }
 }
 
-function drawAttackDrone(g, projectile, cameraX, cameraY, scale, time, vw, vh, full = true, disableGlow = false) {
-  const p = screen(projectile.x, projectile.y, cameraX, cameraY, scale);
-  if (p.x < -110 || p.y < -110 || p.x > vw + 110 || p.y > vh + 110) return;
-
-  const skin = normalizeSkin(projectile.skin);
-  const colors = SKIN_THEMES[skin] || SKIN_THEMES.cyan;
-  const primary = hex(colors[0]);
-  const angle = projectile.angle || 0;
-
-  if (full) {
-    const tail = Math.max(18, 34 * scale);
-
-    g.moveTo(p.x - Math.cos(angle) * tail, p.y - Math.sin(angle) * tail);
-    g.lineTo(p.x, p.y);
-    g.stroke({
-      color: primary,
-      width: Math.max(2, 4 * scale),
-      alpha: 0.18,
-    });
+function syncSimplePool({ pool, source, resources, parent, bounds, max, now }) {
+  const visible = [];
+  for (const unit of source || []) {
+    if (!unit || unit.alive === false || !isVisibleInBounds(unit, bounds, 120)) continue;
+    visible.push(unit);
+    if (visible.length >= max) break;
   }
 
-  drawMiniDrone(g, p.x, p.y, Math.max(scale * 1.18, scale), colors, time, full ? 1 : 0, angle, disableGlow);
+  addToPool(pool, () => createSimpleVisual(resources), parent, visible.length);
+  for (let index = 0; index < pool.length; index += 1) {
+    const unit = visible[index];
+    const visual = pool[index];
+    if (!unit) {
+      visual.root.visible = false;
+      continue;
+    }
+    updateSimpleVisual(visual, unit, resources, now);
+  }
+}
 
-  if (projectile.pierceLeft > 1) {
-    g.circle(p.x, p.y, Math.max(14, 22 * scale)).stroke({
-      color: primary,
-      width: 2,
-      alpha: 0.52,
-    });
+function syncProjectilePool({ pool, source, resources, parent, bounds, max, now }) {
+  const visible = [];
+  for (const projectile of source || []) {
+    if (!projectile || !isVisibleInBounds(projectile, bounds, 120)) continue;
+    visible.push(projectile);
+    if (visible.length >= max) break;
+  }
+
+  addToPool(pool, () => createProjectileVisual(resources), parent, visible.length);
+  for (let index = 0; index < pool.length; index += 1) {
+    const projectile = visible[index];
+    const visual = pool[index];
+    if (!projectile) {
+      visual.root.visible = false;
+      continue;
+    }
+    updateProjectileVisual(visual, projectile, resources, now);
+  }
+}
+
+function createResources(coreTypes = []) {
+  const droneContexts = {};
+  const miniContexts = {};
+  const projectileContexts = {};
+  const simpleContexts = {};
+  const rotorSpinContexts = {};
+  const shieldShellContexts = {};
+  const shieldRingContexts = {};
+  const shieldGlyphContexts = {};
+  const shieldPulseContexts = {};
+
+  Object.entries(SKIN_THEMES).forEach(([skin, colors]) => {
+    droneContexts[skin] = createDroneContext(colors);
+    miniContexts[skin] = createMiniDroneContext(colors);
+    projectileContexts[skin] = createProjectileContext(colors);
+    rotorSpinContexts[skin] = createRotorSpinContext(colors);
+    shieldShellContexts[skin] = createShieldShellContext(colors);
+    shieldRingContexts[skin] = createShieldRingContext(colors);
+    shieldGlyphContexts[skin] = createShieldGlyphContext(colors);
+    shieldPulseContexts[skin] = createShieldPulseContext(colors);
+
+    const simple = new PIXI.GraphicsContext();
+    simple.circle(0, 0, 10).fill({ color: colors[0], alpha: 0.9 });
+    simpleContexts[skin] = simple;
+  });
+
+  const coreContexts = {};
+  coreTypes.forEach((core) => {
+    coreContexts[core.type] = createCoreContext(colorFrom(core.color, 0x00eaff));
+  });
+
+  return {
+    droneContexts,
+    miniContexts,
+    projectileContexts,
+    simpleContexts,
+    rotorSpinContexts,
+    shieldShellContexts,
+    shieldRingContexts,
+    shieldGlyphContexts,
+    shieldPulseContexts,
+    orbContexts: Object.fromEntries(Object.entries(ORB_COLORS).map(([name, color]) => [name, createOrbContext(color)])),
+    energyContext: createEnergyContext(),
+    coreContexts,
+    defaultCoreContext: createCoreContext(0x00eaff),
+    orbitContext: createOrbitContext(),
+    zoneContext: createZoneContext(),
+  };
+}
+
+function drawBackground(graphics, width, height) {
+  graphics.clear();
+  graphics.rect(0, 0, width, height).fill({ color: 0x040b18, alpha: 1 });
+
+  const step = 96;
+  const startX = -step;
+  const startY = -step;
+  for (let x = startX; x <= width + step; x += step) {
+    graphics.moveTo(x, 0).lineTo(x, height).stroke({ color: 0x113056, width: 1, alpha: 0.18 });
+  }
+  for (let y = startY; y <= height + step; y += step) {
+    graphics.moveTo(0, y).lineTo(width, y).stroke({ color: 0x113056, width: 1, alpha: 0.18 });
+  }
+
+  graphics.circle(width * 0.5, height * 0.42, Math.max(width, height) * 0.5).fill({ color: 0x00314f, alpha: 0.07 });
+}
+
+function safeDestroy(app) {
+  try {
+    app?.destroy?.(true, { children: true, texture: true, textureSource: true });
+  } catch {
+    try {
+      app?.destroy?.(true);
+    } catch {
+      // no-op: unmount must never fail because a browser driver already lost WebGL context
+    }
   }
 }
 
@@ -928,54 +983,15 @@ function PixiArenaRenderer({
   viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1280,
   viewportHeight = typeof window !== "undefined" ? window.innerHeight : 720,
   coreTypes = [],
-  otherPlayerSize = STANDARD_DRONE_SIZE,
-  otherPlayerQuality = 1,
   liveDataRef = null,
-  // Switch global de calitate grafica (Normal/Low), setat din Dashboard si
-  // pasat catre toate modurile de joc. Citit O SINGURA DATA la montarea
-  // componentei (in setup() de mai jos), NU dintr-un ref citit in ticker -
-  // schimbarea switch-ului in timpul unui meci nu se aplica live, ci la
-  // urmatoarea intrare in arena (remount). Simplu si predictibil, fara
-  // bucle de redetectie sau resize-uri repetate la runtime.
-  forceLowQuality = true,
+  forceLowQuality = false,
+  worldWidth = DEFAULT_WORLD_WIDTH,
+  worldHeight = DEFAULT_WORLD_HEIGHT,
+  safeZoneRadius = null,
+  showZone = false,
 }) {
   const hostRef = useRef(null);
-  const appRef = useRef(null);
-
-  // Layer pooling: nu mai avem un singur Graphics sters si redesenat complet.
-  // staticLayer = orbs/energy/cores in coordonate de lume, redesenate rar;
-  // dynamicGraphics = playeri/boti, redesenati in fiecare frame;
-  // projectileGraphics = proiectile, separat pentru clear ieftin si draw calls mai simple.
-  const staticLayerRef = useRef(null);
-  const staticGraphicsRef = useRef(null);
-  const dynamicGraphicsRef = useRef(null);
-  const projectileGraphicsRef = useRef(null);
-  const renderCacheRef = useRef({
-    lastStaticSignature: "",
-    lastStaticDrawAt: 0,
-    lastFrameDrawAt: 0,
-  });
-
-  // compatibilitate cu cleanup-ul vechi
-  const graphicsRef = useRef(null);
   const latestRef = useRef(null);
-  const performanceRef = useRef({
-    lowQualityUntil: 0,
-    lastSlowFrameAt: 0,
-    frames: 0,
-    fpsStartedAt: typeof performance !== "undefined" ? performance.now() : 0,
-    fps: 60,
-    dynamicQuality: 0,
-    lastQualityChangeAt: 0,
-    device: getDeviceProfile(),
-  });
-
-  const coreColorMap = useMemo(() => {
-    return coreTypes.reduce((acc, core) => {
-      acc[core.type] = core.color;
-      return acc;
-    }, {});
-  }, [coreTypes]);
 
   latestRef.current = {
     player,
@@ -992,361 +1008,243 @@ function PixiArenaRenderer({
     scale,
     viewportWidth,
     viewportHeight,
-    coreColorMap,
-    otherPlayerSize,
-    otherPlayerQuality,
+    worldWidth,
+    worldHeight,
+    safeZoneRadius,
+    showZone,
   };
 
   useEffect(() => {
     let destroyed = false;
-    let app;
+    let app = null;
+    let onResize = null;
 
-    async function setup() {
+    const setup = async () => {
       if (!hostRef.current) return;
 
+      const config = getRendererConfig(forceLowQuality);
       app = new PIXI.Application();
-
-      const device = getDeviceProfile();
-      performanceRef.current.device = device;
-      performanceRef.current.forceLowQuality = forceLowQuality;
-
-      // Switch manual de calitate (Low): fortam exact comportamentul deja
-      // existent pentru device foarte slab (isVeryLowEndMobile), indiferent
-      // de ce a detectat profilul automat al device-ului. Rezolutie minima
-      // (1, fara supersampling), fara antialias, calitate dinamica 0 de la
-      // pornire.
-      const effectiveResolution = forceLowQuality ? 1 : device.resolution;
-      // Antialias este scump pe laptopurile vechi cand ai multi boti/proiectile.
-      // Il dezactivam si pe weak desktop, nu doar pe telefoane foarte slabe.
-      const effectiveAntialias = forceLowQuality ? false : !(device.isVeryLowEndMobile || device.isWeakDesktop);
-
-      // Pe device foarte slab SAU cu Low Quality activat manual, incepem direct
-      // cu calitate dinamica redusa, in loc sa asteptam ca FPS-ul sa scada o
-      // data (reactiv) inainte sa reducem - asta elimina exact primele secunde
-      // de "sacaiala" pana se auto-ajusteaza.
-      if (device.isVeryLowEndMobile || forceLowQuality) {
-        performanceRef.current.dynamicQuality = 0;
-      } else if (device.isWeakDesktop || device.isLowEndMobile) {
-        // Pornim direct mai jos pe laptopuri vechi, ca sa nu avem primele secunde sacadate.
-        performanceRef.current.dynamicQuality = 1;
-      }
-
-      const config = {
-        width: hostRef.current.clientWidth || window.innerWidth,
-        height: hostRef.current.clientHeight || window.innerHeight,
+      const initOptions = {
+        width: Math.max(1, hostRef.current.clientWidth || window.innerWidth),
+        height: Math.max(1, hostRef.current.clientHeight || window.innerHeight),
         backgroundAlpha: 0,
-        // Antialias (MSAA) e relativ scump pe GPU-uri vechi cu multe draw call-uri
-        // suprapuse (fiecare drona = ~15-20 forme). Pe device foarte slab SAU cu
-        // Low Quality activat manual il dezactivam complet; marginile sunt usor
-        // mai aspre, dar framerate-ul devine mult mai stabil.
-        antialias: effectiveAntialias,
-        resolution: Math.max(0.5, effectiveResolution),
+        antialias: config.antialias,
+        resolution: config.resolution,
         autoDensity: true,
         powerPreference: "high-performance",
         preference: "webgl",
       };
 
       if (typeof app.init === "function") {
-        await app.init(config);
+        await app.init(initOptions);
       } else {
-        app = new PIXI.Application(config);
+        app = new PIXI.Application(initOptions);
       }
 
-      if (destroyed) {
-        app.destroy(true);
+      if (destroyed || !hostRef.current) {
+        safeDestroy(app);
         return;
       }
 
-      appRef.current = app;
       hostRef.current.appendChild(app.canvas || app.view);
-
       app.stage.eventMode = "none";
       app.stage.interactiveChildren = false;
+      app.stage.sortableChildren = true;
 
-      const staticLayer = new PIXI.Container();
-      staticLayer.eventMode = "none";
-      staticLayer.interactiveChildren = false;
+      const resources = createResources(coreTypes);
+      const background = new PIXI.Graphics();
+      background.eventMode = "none";
+      background.zIndex = 0;
 
-      const staticGraphics = new PIXI.Graphics();
-      staticGraphics.eventMode = "none";
-      staticLayer.addChild(staticGraphics);
+      const world = new PIXI.Container();
+      world.eventMode = "none";
+      world.interactiveChildren = false;
+      world.sortableChildren = true;
+      world.zIndex = 1;
 
-      const projectileGraphics = new PIXI.Graphics();
-      projectileGraphics.eventMode = "none";
+      const zone = new PIXI.Graphics(resources.zoneContext);
+      zone.eventMode = "none";
+      zone.visible = false;
+      zone.zIndex = 0;
 
-      const dynamicGraphics = new PIXI.Graphics();
-      dynamicGraphics.eventMode = "none";
+      const itemsLayer = new PIXI.Container();
+      itemsLayer.eventMode = "none";
+      itemsLayer.zIndex = 1;
+      const projectilesLayer = new PIXI.Container();
+      projectilesLayer.eventMode = "none";
+      projectilesLayer.zIndex = 2;
+      const entitiesLayer = new PIXI.Container();
+      entitiesLayer.eventMode = "none";
+      entitiesLayer.zIndex = 3;
 
-      staticLayerRef.current = staticLayer;
-      staticGraphicsRef.current = staticGraphics;
-      projectileGraphicsRef.current = projectileGraphics;
-      dynamicGraphicsRef.current = dynamicGraphics;
-      graphicsRef.current = dynamicGraphics;
+      world.addChild(zone, itemsLayer, projectilesLayer, entitiesLayer);
+      app.stage.addChild(background, world);
 
-      // Ordine: iteme jos, proiectile la mijloc, playeri sus.
-      app.stage.addChild(staticLayer);
-      app.stage.addChild(projectileGraphics);
-      app.stage.addChild(dynamicGraphics);
+      const staticMap = new Map();
+      const playerPool = [];
+      const remotePool = [];
+      const botPool = [];
+      const simpleBotPool = [];
+      const projectilePool = [];
+      const simpleProjectilePool = [];
+
+      let lastStaticSync = 0;
+      let lastZoneRadius = null;
+      let lastZoneVisible = false;
 
       const resize = () => {
-        const width = hostRef.current?.clientWidth || window.innerWidth;
-        const height = hostRef.current?.clientHeight || window.innerHeight;
-        const nextDevice = getDeviceProfile();
-        performanceRef.current.device = nextDevice;
-
-        const targetResolution = forceLowQuality ? 1 : nextDevice.resolution;
-
-        if (app.renderer?.resolution !== targetResolution) {
-          app.renderer.resolution = Math.max(0.5, targetResolution);
-        }
-
+        const width = Math.max(1, hostRef.current?.clientWidth || window.innerWidth);
+        const height = Math.max(1, hostRef.current?.clientHeight || window.innerHeight);
         app.renderer.resize(width, height);
+        drawBackground(background, width, height);
       };
 
-      window.addEventListener("resize", resize);
+      onResize = resize;
+      window.addEventListener("resize", onResize, { passive: true });
       resize();
 
-      // NU mai plafonam app.ticker.maxFPS. Randarea ruleaza la rata pe care
-      // device-ul o poate sustine natural, in sincron cu bucla de joc (rAF,
-      // 60Hz). Un plafon artificial (ex 30fps) facea ca randarea sa citeasca
-      // pozitii din pixiLiveRef mai rar decat sunt actualizate, producand
-      // exact senzatia de miscare "in trepte"/sacadata pe device-uri slabe.
-
       app.ticker.add(() => {
-        const staticLayer = staticLayerRef.current;
-        const staticG = staticGraphicsRef.current;
-        const dynamicG = dynamicGraphicsRef.current;
-        const projectileG = projectileGraphicsRef.current;
         const data = liveDataRef?.current || latestRef.current;
+        if (!data) return;
 
-        if (!staticLayer || !staticG || !dynamicG || !projectileG || !data) return;
+        const now = performance.now();
+        const width = Number(data.viewportWidth || hostRef.current?.clientWidth || app.renderer.width || window.innerWidth);
+        const height = Number(data.viewportHeight || hostRef.current?.clientHeight || app.renderer.height || window.innerHeight);
+        const camera = {
+          x: Number(data.cameraX || 0),
+          y: Number(data.cameraY || 0),
+          scale: Math.max(0.1, Number(data.scale || 1)),
+        };
 
-        const {
-          player: currentPlayer,
-          players: currentPlayers = [],
-          bots: currentBots = [],
-          simpleBots: currentSimpleBots = [],
-          orbs: currentOrbs = [],
-          energyCells: currentEnergyCells = [],
-          cores: currentCores = [],
-          projectiles: currentProjectiles = [],
-          simpleProjectiles: currentSimpleProjectiles = [],
-          cameraX: cx,
-          cameraY: cy,
-          scale: worldScale,
-          viewportWidth: rawViewportWidth,
-          viewportHeight: rawViewportHeight,
-          coreColorMap: map,
-          otherPlayerSize: pvpOtherPlayerSize = STANDARD_DRONE_SIZE,
-          otherPlayerQuality: pvpOtherPlayerQuality = 1,
-        } = data;
+        setWorldTransform(world, camera.x, camera.y, camera.scale);
+        const bounds = getBounds(camera.x, camera.y, camera.scale, width, height, 360);
 
-        const vw = rawViewportWidth || app.renderer.width || window.innerWidth;
-        const vh = rawViewportHeight || app.renderer.height || window.innerHeight;
-
-        const time = performance.now();
-        const perf = performanceRef.current;
-        const device = perf.device || getDeviceProfile();
-
-        perf.frames += 1;
-        if (time - perf.fpsStartedAt >= 1000) {
-          perf.fps = Math.round((perf.frames * 1000) / Math.max(1, time - perf.fpsStartedAt));
-          perf.frames = 0;
-          perf.fpsStartedAt = time;
-
-          // Pragurile sunt raportate la 60fps real (randarea nu mai e plafonata).
-          // Pe device foarte slab folosim praguri puțin mai relaxate ca sa nu
-          // oscileze constant intre calitati cand framerate-ul natural al
-          // device-ului e deja sub 60fps stabil.
-          const lowThreshold = device.isVeryLowEndMobile ? 22 : device.isWeakDesktop ? 42 : 47;
-          const highThreshold = device.isVeryLowEndMobile ? 27 : device.isWeakDesktop ? 54 : 57;
-
-          if (time - perf.lastQualityChangeAt > 1400) {
-            if (perf.fps < lowThreshold && perf.dynamicQuality > 0) {
-              perf.dynamicQuality -= 1;
-              perf.lowQualityUntil = time + 1800;
-              perf.lastQualityChangeAt = time;
-            } else if (perf.fps > highThreshold && perf.dynamicQuality < 3 && !device.isLowEndMobile && !device.isWeakDesktop) {
-              perf.dynamicQuality += 1;
-              perf.lastQualityChangeAt = time;
-            }
+        const zoneRadius = Number(data.safeZoneRadius || 0);
+        const shouldShowZone = Boolean(data.showZone && zoneRadius > 0 && zoneRadius < Math.max(Number(data.worldWidth || 0), Number(data.worldHeight || 0)));
+        if (shouldShowZone !== lastZoneVisible || Math.abs(zoneRadius - (lastZoneRadius || 0)) > 4) {
+          lastZoneVisible = shouldShowZone;
+          lastZoneRadius = zoneRadius;
+          zone.visible = shouldShowZone;
+          if (shouldShowZone) {
+            zone.position.set(Number(data.worldWidth || DEFAULT_WORLD_WIDTH) * 0.5, Number(data.worldHeight || DEFAULT_WORLD_HEIGHT) * 0.5);
+            zone.scale.set(zoneRadius);
           }
         }
 
-        const slowFrameThresholdMs = device.isVeryLowEndMobile ? 46 : device.isWeakDesktop ? 30 : 24;
-        if (app.ticker.deltaMS > slowFrameThresholdMs && time - perf.lastSlowFrameAt > 220) {
-          perf.lowQualityUntil = time + 1200;
-          perf.lastSlowFrameAt = time;
+        if (now - lastStaticSync >= STATIC_SYNC_INTERVAL_MS) {
+          lastStaticSync = now;
+          const itemBudget = config.maxStaticItems;
+          const orbBudget = Math.floor(itemBudget * 0.72);
+          const energyBudget = Math.floor(itemBudget * 0.2);
+          const coreBudget = Math.max(2, itemBudget - orbBudget - energyBudget);
 
-          if (perf.dynamicQuality > 0 && time - perf.lastQualityChangeAt > 900) {
-            perf.dynamicQuality -= 1;
-            perf.lastQualityChangeAt = time;
-          }
-        }
-
-        const isForcedLow = true;
-
-        const budget = isForcedLow
-          ? getQualityBudget(
-              { ...device, isVeryLowEndMobile: true, isLowEndMobile: true, isWeakDesktop: false, tier: MOBILE_PERF_PROFILES.LOW },
-              0
-            )
-          : getQualityBudget(device, time < perf.lowQualityUntil ? Math.min(perf.dynamicQuality, 1) : perf.dynamicQuality);
-        const lowQuality = budget.quality <= 0;
-        const disableGlow = Boolean(budget.disableGlow) || isForcedLow;
-        // IMPORTANT: pe device foarte slab (isVeryLowEndMobile), pe mobil
-        // slab generic (isLowEndMobile), pe laptop/PC slab (isWeakDesktop,
-        // RAM <= 8GB SAU <= 4 nuclee), SAU cu switch-ul manual de Low Quality
-        // activat din Dashboard, dezactivam complet animatia de rotire a
-        // celor 4 rotoare ale fiecarei drone SI orbita mini-dronelor in jurul
-        // dronei mari. Cand un bot/jucator stranga orbi, mini-drona aferenta
-        // apare direct pe pozitia ei (fixa), fara sa se mai roteasca. Asta
-        // elimina calculul de Math.cos/Math.sin per rotor/mini-drona la
-        // fiecare frame, cel mai vizibil cu pana la 69 de boti simultan pe
-        // ecran.
-        // Pentru Battle Royale vrem sa vezi mini-dronele care orbiteaza si la boti.
-        // Nu mai oprim animatia mini-dronelor cand forceLowQuality este activ.
-        const disableAnimations = Boolean(
-          device.isVeryLowEndMobile && false
-        );
-        const viewBounds = getWorldViewBounds(cx, cy, worldScale, vw, vh, budget.margin);
-
-        // Layer static in coordonate de lume: il mutam cu camera in fiecare frame,
-        // dar il redesenam doar cand zona vizibila / itemele se schimba suficient.
-        staticLayer.position.set(cx, cy);
-        staticLayer.scale.set(worldScale || 1);
-
-        const staticBounds = getWorldViewBounds(cx, cy, worldScale, vw, vh, 1050);
-        const visibleOrbs = filterVisibleItems(currentOrbs, staticBounds, 24, budget.orbs);
-        const visibleEnergyCells = filterVisibleItems(currentEnergyCells, staticBounds, 45, budget.energy);
-        const visibleCores = filterVisibleItems(currentCores, staticBounds, 85, budget.cores);
-
-        const cache = renderCacheRef.current;
-        const staticSignature = makeStaticSignature(staticBounds, worldScale, visibleOrbs, visibleEnergyCells, visibleCores);
-        const shouldRedrawStatic =
-          staticSignature !== cache.lastStaticSignature ||
-          time - cache.lastStaticDrawAt > 180;
-
-        if (shouldRedrawStatic) {
-          staticG.clear();
-          visibleOrbs.forEach((orb) => drawOrbLiteWorld(staticG, orb));
-          visibleEnergyCells.forEach((cell) => drawEnergyLiteWorld(staticG, cell));
-          visibleCores.forEach((core) => drawCoreLiteWorld(staticG, core, map));
-          cache.lastStaticSignature = staticSignature;
-          cache.lastStaticDrawAt = time;
-        }
-
-        dynamicG.clear();
-        projectileG.clear();
-
-        const visiblePlayers = (currentPlayers || [])
-          .filter((unit) => unit?.alive !== false && unit.id !== currentPlayer?.id && isWorldVisible(unit, viewBounds, 330))
-          .slice(0, budget.players);
-
-        const visibleBots = (currentBots || [])
-          .filter((unit) => unit?.alive !== false && isWorldVisible(unit, viewBounds, 320))
-          .slice(0, budget.bots);
-
-        const visibleSimpleBots = budget.simpleBots > 0
-          ? (currentSimpleBots || [])
-              .filter((unit) => unit?.alive !== false && isWorldVisible(unit, viewBounds, 80))
-              .slice(0, budget.simpleBots)
-          : [];
-
-        const visibleProjectiles = filterVisibleItems(currentProjectiles, viewBounds, 120, budget.projectiles);
-        const visibleSimpleProjectiles = filterVisibleItems(currentSimpleProjectiles, viewBounds, 80, budget.simpleProjectiles);
-
-        visibleSimpleBots.forEach((bot) => {
-          const p = screen(bot.x, bot.y, cx, cy, worldScale);
-          const skin = normalizeSkin(bot.skin);
-          const color = hex((SKIN_THEMES[skin] || SKIN_THEMES.cyan)[0]);
-
-          dynamicG.circle(p.x, p.y, Math.max(7, 11 * worldScale)).fill({
-            color,
-            alpha: 0.82,
+          upsertStaticLayer({
+            map: staticMap,
+            items: data.orbs,
+            prefix: "orb",
+            contexts: resources.orbContexts,
+            parent: itemsLayer,
+            now,
+            maxItems: orbBudget,
+            bounds,
+            getContext: (item, contexts) => contexts[item.color] || contexts.cyan,
           });
-        });
-
-        if (currentPlayer && currentPlayer.alive !== false) {
-          drawDrone(dynamicG, currentPlayer, cx, cy, worldScale, time, {
-            size: STANDARD_DRONE_SIZE,
-            isPlayer: true,
-            isNear: true,
-            quality: budget.playerQuality,
-            disableGlow,
-            disableAnimations,
-          }, vw, vh);
+          upsertStaticLayer({
+            map: staticMap,
+            items: data.energyCells,
+            prefix: "energy",
+            contexts: resources,
+            parent: itemsLayer,
+            now,
+            maxItems: energyBudget,
+            bounds,
+            getContext: () => resources.energyContext,
+          });
+          upsertStaticLayer({
+            map: staticMap,
+            items: data.cores,
+            prefix: "core",
+            contexts: resources.coreContexts,
+            parent: itemsLayer,
+            now,
+            maxItems: coreBudget,
+            bounds,
+            getContext: (item, contexts) => contexts[item.type] || resources.defaultCoreContext,
+          });
         }
 
-        visiblePlayers.forEach((unit) => {
-          drawDrone(dynamicG, unit, cx, cy, worldScale, time, {
-            size: STANDARD_DRONE_SIZE,
-            isPlayer: false,
-            isNear: true,
-            quality: Math.min(pvpOtherPlayerQuality, budget.botQuality),
-            disableGlow,
-            disableAnimations,
-          }, vw, vh);
+        const playerSource = data.player && data.player.alive !== false ? [data.player] : [];
+        syncUnitPool({
+          pool: playerPool,
+          source: playerSource,
+          resources,
+          parent: entitiesLayer,
+          bounds,
+          max: 1,
+          now,
+          isPlayer: true,
         });
-
-        visibleBots.forEach((unit) => {
-          const dx = (unit.x || 0) - (currentPlayer?.x || 0);
-          const dy = (unit.y || 0) - (currentPlayer?.y || 0);
-          const isNear = dx * dx + dy * dy < 900 * 900;
-
-          drawDrone(dynamicG, unit, cx, cy, worldScale, time, {
-            size: STANDARD_DRONE_SIZE,
-            isPlayer: false,
-            isNear,
-            quality: isNear ? budget.botQuality : 0,
-            disableGlow,
-            disableAnimations,
-          }, vw, vh);
+        syncUnitPool({
+          pool: remotePool,
+          source: data.players,
+          resources,
+          parent: entitiesLayer,
+          bounds,
+          max: config.maxPlayers,
+          now,
+          compact: config.weakMobile,
         });
-
-        visibleProjectiles.forEach((projectile) => {
-          drawAttackDrone(projectileG, projectile, cx, cy, worldScale, time, vw, vh, false, disableGlow);
+        syncUnitPool({
+          pool: botPool,
+          source: data.bots,
+          resources,
+          parent: entitiesLayer,
+          bounds,
+          max: config.maxPlayers,
+          now,
+          compact: config.weakMobile,
         });
-
-        visibleSimpleProjectiles.forEach((projectile) => {
-          drawAttackDrone(projectileG, projectile, cx, cy, worldScale, time, vw, vh, false, disableGlow);
+        syncSimplePool({
+          pool: simpleBotPool,
+          source: data.simpleBots,
+          resources,
+          parent: entitiesLayer,
+          bounds,
+          max: config.weakMobile ? 24 : 60,
+          now,
+        });
+        syncProjectilePool({
+          pool: projectilePool,
+          source: data.projectiles,
+          resources,
+          parent: projectilesLayer,
+          bounds,
+          max: config.maxProjectiles,
+          now,
+        });
+        syncProjectilePool({
+          pool: simpleProjectilePool,
+          source: data.simpleProjectiles,
+          resources,
+          parent: projectilesLayer,
+          bounds,
+          max: Math.floor(config.maxProjectiles * 0.55),
+          now,
         });
       });
-
-      app.__resizeHandler = resize;
-    }
+    };
 
     setup();
 
     return () => {
       destroyed = true;
-
-      if (appRef.current) {
-        if (appRef.current.__resizeHandler) {
-          window.removeEventListener("resize", appRef.current.__resizeHandler);
-        }
-
-        appRef.current.destroy(true, {
-          children: true,
-          texture: true,
-          baseTexture: true,
-        });
-      }
-
-      appRef.current = null;
-      graphicsRef.current = null;
-      staticLayerRef.current = null;
-      staticGraphicsRef.current = null;
-      dynamicGraphicsRef.current = null;
-      projectileGraphicsRef.current = null;
-
-      if (hostRef.current) {
-        hostRef.current.innerHTML = "";
-      }
+      if (onResize) window.removeEventListener("resize", onResize);
+      safeDestroy(app);
+      if (hostRef.current) hostRef.current.textContent = "";
     };
-  }, []);
+  }, [coreTypes, forceLowQuality, liveDataRef]);
 
-  return <div ref={hostRef} className="pixi-arena-layer" />;
+  return <div ref={hostRef} className="pixi-arena-layer" aria-hidden="true" />;
 }
 
 export default PixiArenaRenderer;

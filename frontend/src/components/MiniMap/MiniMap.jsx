@@ -10,6 +10,8 @@ const ORB_COLORS = {
   pink: "#ff4fc3",
 };
 
+const MINIMAP_DRAW_INTERVAL_MS = 83; // 12 FPS: suficient pentru HUD, mult mai ieftin pe mobil.
+
 const CORE_COLORS = {
   nano: "#00eaff",
   rotor: "#ffae3d",
@@ -120,15 +122,25 @@ function MiniMap({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    let frame = 0;
+    const ctx = canvas.getContext("2d", { alpha: true, desynchronized: true });
+    if (!ctx) return;
 
-    const draw = () => {
+    let frame = 0;
+    let lastDrawAt = 0;
+    let lastCssWidth = 0;
+    let lastCssHeight = 0;
+
+    const draw = (now) => {
+      frame = requestAnimationFrame(draw);
+      if (now - lastDrawAt < MINIMAP_DRAW_INTERVAL_MS) return;
+      lastDrawAt = now;
+
       const currentSafeZoneRadius = safeZoneRadiusRef.current;
       const currentWorldWidth = worldWidthRef.current;
       const currentWorldHeight = worldHeightRef.current;
-
       const rect = canvas.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+      const dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1 : 1.5);
       const width = Math.max(1, Math.round(rect.width * dpr));
       const height = Math.max(1, Math.round(rect.height * dpr));
 
@@ -137,8 +149,10 @@ function MiniMap({
         canvas.height = height;
       }
 
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
+      if (lastCssWidth !== rect.width || lastCssHeight !== rect.height) {
+        lastCssWidth = rect.width;
+        lastCssHeight = rect.height;
+      }
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, rect.width, rect.height);
@@ -147,9 +161,6 @@ function MiniMap({
       const h = rect.height;
       const cx = w / 2;
       const cy = h / 2;
-
-      // Battle Royale zone se deseneaza DOAR cand raza este mai mica decat lumea.
-      // Normal PvP trimite safeZoneRadius={null}, deci nu apare cerc/linie verde.
       const shouldDrawZone =
         Number(currentSafeZoneRadius) > 0 &&
         Number(currentSafeZoneRadius) < Math.min(Number(currentWorldWidth) || 0, Number(currentWorldHeight) || 0) / 2;
@@ -157,14 +168,11 @@ function MiniMap({
       if (shouldDrawZone) {
         const zoneW = clamp(((currentSafeZoneRadius * 2) / Math.max(1, currentWorldWidth || 1)) * w, 0, w - 8);
         const zoneH = clamp(((currentSafeZoneRadius * 2) / Math.max(1, currentWorldHeight || 1)) * h, 0, h - 8);
-
         ctx.save();
         ctx.beginPath();
         ctx.ellipse(cx, cy, zoneW / 2, zoneH / 2, 0, 0, Math.PI * 2);
         ctx.strokeStyle = "rgba(90, 255, 110, 0.9)";
         ctx.lineWidth = 2;
-        ctx.shadowBlur = 14;
-        ctx.shadowColor = "rgba(70, 255, 100, 0.75)";
         ctx.stroke();
         ctx.restore();
       }
@@ -172,48 +180,28 @@ function MiniMap({
       for (const orb of stableOrbsRef.current) {
         const point = mapPoint(orb, currentWorldWidth, currentWorldHeight, w, h, 5);
         const color = ORB_COLORS[orb.color] || ORB_COLORS.cyan;
-
-        ctx.save();
-        ctx.beginPath();
         ctx.fillStyle = color;
-        ctx.shadowBlur = 6;
-        ctx.shadowColor = color;
-        ctx.globalAlpha = 0.9;
-        ctx.arc(point.x, point.y, 2.6, 0, Math.PI * 2);
+        ctx.globalAlpha = 0.88;
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, 2.2, 0, Math.PI * 2);
         ctx.fill();
-        ctx.restore();
       }
 
       for (const core of stableCoresRef.current) {
         const point = mapPoint(core, currentWorldWidth, currentWorldHeight, w, h, 12);
         const color = CORE_COLORS[core.type] || "#00eaff";
-        ctx.save();
-        ctx.beginPath();
         ctx.fillStyle = color;
-        ctx.shadowBlur = 12;
-        ctx.shadowColor = color;
         ctx.globalAlpha = 0.95;
-        ctx.arc(point.x, point.y, 5, 0, Math.PI * 2);
-        ctx.fill();
-
         ctx.beginPath();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1;
-        ctx.globalAlpha = 0.32;
-        ctx.arc(point.x, point.y, 14, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.restore();
+        ctx.arc(point.x, point.y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
       }
 
-      frame = requestAnimationFrame(draw);
+      ctx.globalAlpha = 1;
     };
 
     frame = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(frame);
-    // IMPORTANT: array de dependente VID in mod intentionat. Bucla de desen
-    // porneste o singura data la montarea componentei si ruleaza pana la
-    // demontare. worldWidth/worldHeight/safeZoneRadius sunt citite din refs
-    // (actualizate mai sus, la fiecare render), nu mai sunt dependente aici.
   }, []);
 
   return (

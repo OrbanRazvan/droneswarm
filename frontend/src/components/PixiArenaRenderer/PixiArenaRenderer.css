@@ -1,23 +1,19 @@
+/* WebGL world only. HUD, menus and controls remain above it in their existing CSS. */
 .pixi-arena-layer {
   position: fixed;
   inset: 0;
   width: 100vw;
   height: 100vh;
-  z-index: 50;
-  pointer-events: none;
   overflow: hidden;
+  pointer-events: none;
   contain: strict;
+  z-index: 1;
 }
 
 .pixi-arena-layer canvas {
   display: block;
-  width: 100%;
-  height: 100%;
-  image-rendering: auto;
-}
-
-.pixi-arena-renderer,
-.pixi-arena-renderer canvas {
-  image-rendering: auto !important;
-  image-rendering: smooth !important;
+  width: 100% !important;
+  height: 100% !important;
+  pointer-events: none;
+  touch-action: none;
 }

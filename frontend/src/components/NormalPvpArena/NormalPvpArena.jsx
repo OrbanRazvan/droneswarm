@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import MiniMap from "../MiniMap/MiniMap";
 import PixiArenaRenderer from "../PixiArenaRenderer/PixiArenaRenderer";
@@ -6,6 +6,10 @@ import "../GameArena/GameArena.css";
 import "./NormalPvpArena.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
+
+// MiniMap primeste date numai cand s-au schimbat. Astfel miscarea joystick-ului
+// nu mai re-randeaza harta mica de zeci de ori pe secunda pe telefoane.
+const MemoizedMiniMap = memo(MiniMap);
 
 const WORLD_WIDTH_FALLBACK = 20000;
 const WORLD_HEIGHT_FALLBACK = 20000;
@@ -33,6 +37,19 @@ const SELF_IDLE_FREEZE_DISTANCE = 1.5;
 // React tine numai HUD/minimap. Randarea jocului ramane in rAF + Pixi.
 const REACT_RENDER_SYNC_INTERVAL_MS = 100;
 const HUD_SYNC_INTERVAL_MS = 125;
+
+// Pe telefon, React ramane strict pentru HUD/minimap. Pixi citeste liveDataRef
+// la fiecare frame, deci nu avem nevoie de re-render React la 10Hz in timp ce
+// jucatorul tine joystick-ul apasat. Mai putine spike-uri pe thread-ul principal.
+const MOBILE_REACT_RENDER_SYNC_INTERVAL_MS = 260;
+const MOBILE_HUD_SYNC_INTERVAL_MS = 250;
+const MOBILE_RENDER_LIMITS = Object.freeze({
+  players: 12,
+  orbs: 85,
+  energy: 28,
+  cores: 6,
+  projectiles: 20,
+});
 
 const REMOTE_SMOOTHING = 24;
 const REMOTE_PREDICTION = 1.0;
@@ -68,7 +85,7 @@ const INPUT_HEARTBEAT_MS = 250;
 const SNAPSHOT_INTERPOLATION_DELAY_MS = 110;
 const SNAPSHOT_BUFFER_TTL_MS = 700;
 
-const MAX_VISIBLE_REMOTE_PLAYERS = 24;
+const MAX_VISIBLE_REMOTE_PLAYERS = 60;
 
 const CORE_TYPES = [
   {
@@ -960,13 +977,15 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const attackPointerRef = useRef(null);
   const shieldPointerRef = useRef(null);
   const mobileAimDirRef = useRef({ x: 1, y: 0 });
-  const lastJoystickUiAtRef = useRef(0);
+  const joystickKnobRef = useRef(null);
+  const mobileJoystickActiveRef = useRef(false);
+  const mobilePerformanceRef = useRef(isRealMobileDevice());
 
   const worldRef = useRef({
     status: "connecting",
     playerCount: 0,
     minPlayers: 1,
-    maxPlayers: 50,
+    maxPlayers: 60,
     countdown: null,
     coreDropCountdown: null,
     winnerId: null,
@@ -1506,7 +1525,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         you: predictedYouRef.current || data.you,
         fps: fpsRef.current.value,
       });
-    }, HUD_SYNC_INTERVAL_MS);
+    }, mobilePerformanceRef.current ? MOBILE_HUD_SYNC_INTERVAL_MS : HUD_SYNC_INTERVAL_MS);
 
     return () => {
       window.clearInterval(inputTimer);
@@ -1523,6 +1542,8 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const tick = (now) => {
       const data = worldRef.current;
+      const isMobilePerformance = mobilePerformanceRef.current;
+      const renderLimits = isMobilePerformance ? MOBILE_RENDER_LIMITS : null;
       const dt = Math.min(
         0.05,
         Math.max(0.001, (now - lastFrameRef.current) / 1000),
@@ -1803,11 +1824,6 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         ? viewport.height / 2 - liveCameraSubject.y * liveCameraScale
         : 0;
 
-      if (worldElementRef.current) {
-        worldElementRef.current.style.transformOrigin = "0 0";
-        worldElementRef.current.style.transform = `translate3d(${liveCameraX}px, ${liveCameraY}px, 0) scale(${liveCameraScale})`;
-      }
-
       const liveBounds = getViewportBounds(
         liveCameraX,
         liveCameraY,
@@ -1819,7 +1835,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         remoteMap.values(),
         (player) =>
           player?.id !== liveYou?.id && isVisible(player, liveBounds, 380),
-        MAX_VISIBLE_REMOTE_PLAYERS,
+        renderLimits?.players || MAX_VISIBLE_REMOTE_PLAYERS,
         (player) => ({
           ...player,
           skin: normalizeSkin(player.skin),
@@ -1831,26 +1847,26 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         (orb) =>
           !isHiddenCollected(hiddenOrbIdsRef.current, orb.id) &&
           isVisible(orb, liveBounds, 45),
-        140,
+        renderLimits?.orbs || 140,
       );
       const liveEnergyCells = collectVisible(
         stableEnergyMapRef.current.values(),
         (cell) =>
           !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id) &&
           isVisible(cell, liveBounds, 70),
-        50,
+        renderLimits?.energy || 50,
       );
       const liveCores = collectVisible(
         data.cores || [],
         (core) =>
           !isHiddenCollected(hiddenCoreIdsRef.current, core.id) &&
           isVisible(core, liveBounds, 130),
-        9,
+        renderLimits?.cores || 9,
       );
       const liveProjectiles = collectVisible(
         projectileMap.values(),
         (projectile) => isVisible(projectile, liveBounds, 180),
-        45,
+        renderLimits?.projectiles || 45,
       );
 
       pixiLiveRef.current = {
@@ -1868,12 +1884,21 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         scale: liveCameraScale,
         viewportWidth: viewport.width,
         viewportHeight: viewport.height,
+        worldWidth,
+        worldHeight,
+        safeZoneRadius: null,
+        showZone: false,
         coreColorMap: coreColorMapRef.current,
         otherPlayerSize: 112,
         otherPlayerQuality: 0,
       };
 
-      if (now - lastRenderSyncRef.current >= REACT_RENDER_SYNC_INTERVAL_MS) {
+      if (
+        now - lastRenderSyncRef.current >=
+        (isMobilePerformance
+          ? MOBILE_REACT_RENDER_SYNC_INTERVAL_MS
+          : REACT_RENDER_SYNC_INTERVAL_MS)
+      ) {
         lastRenderSyncRef.current = now;
         setRenderData({
           ...data,
@@ -1967,6 +1992,8 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       joystickPointerRef.current = null;
       attackPointerRef.current = null;
       shieldPointerRef.current = null;
+      mobileJoystickActiveRef.current = false;
+      setJoystickKnobTransform(0, 0);
       setMobileJoystick({ active: false, knobX: 0, knobY: 0 });
       setMobileAttackActive(false);
       setMobileShieldActive(false);
@@ -1985,6 +2012,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     const onResize = () => {
       setViewport({ width: window.innerWidth, height: window.innerHeight });
       const nextMobile = isRealMobileDevice();
+      mobilePerformanceRef.current = nextMobile;
       setIsMobileControls(nextMobile);
 
       if (!nextMobile) {
@@ -1994,6 +2022,8 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         shieldPointerRef.current = null;
         keysRef.current.mouseDown = false;
         keysRef.current.rightMouseDown = false;
+        mobileJoystickActiveRef.current = false;
+        setJoystickKnobTransform(0, 0);
         setMobileJoystick({ active: false, knobX: 0, knobY: 0 });
         setMobileAttackActive(false);
         setMobileShieldActive(false);
@@ -2057,6 +2087,13 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
   };
 
+  const setJoystickKnobTransform = (knobX = 0, knobY = 0) => {
+    const knob = joystickKnobRef.current;
+    if (!knob) return;
+
+    knob.style.transform = `translate3d(calc(-50% + ${Math.round(knobX)}px), calc(-50% + ${Math.round(knobY)}px), 0)`;
+  };
+
   const updateJoystickFromPointer = (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -2070,12 +2107,11 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       active,
     };
 
-    const now = performance.now();
-    if (
-      !active ||
-      now - lastJoystickUiAtRef.current >= INPUT_SEND_INTERVAL_MS
-    ) {
-      lastJoystickUiAtRef.current = now;
+    // Fara setState la fiecare pointermove. Pe Android, 30 setState/sec aici
+    // re-randau si HUD-ul/minimap-ul; acum mutam doar knob-ul prin compositor.
+    setJoystickKnobTransform(vector.knobX, vector.knobY);
+    if (mobileJoystickActiveRef.current !== active) {
+      mobileJoystickActiveRef.current = active;
       setMobileJoystick({
         active,
         knobX: vector.knobX,
@@ -2098,6 +2134,8 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     }
     joystickPointerRef.current = null;
     mobileMoveRef.current = { x: 0, y: 0, active: false };
+    mobileJoystickActiveRef.current = false;
+    setJoystickKnobTransform(0, 0);
     setMobileJoystick({ active: false, knobX: 0, knobY: 0 });
 
     if (predictedYouRef.current) {
@@ -2293,30 +2331,31 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     cameraScale,
   );
 
+  const reactiveRenderLimits = isMobileControls ? MOBILE_RENDER_LIMITS : null;
   const visibleOrbs = collectVisible(
     renderData.orbs || [],
     (orb) => isVisible(orb, bounds, 40),
-    140,
+    reactiveRenderLimits?.orbs || 140,
   );
   const visibleEnergyCells = collectVisible(
     renderData.energyCells || [],
     (cell) => isVisible(cell, bounds, 60),
-    50,
+    reactiveRenderLimits?.energy || 50,
   );
   const visibleCores = collectVisible(
     renderData.cores || [],
     (core) => isVisible(core, bounds, 120),
-    9,
+    reactiveRenderLimits?.cores || 9,
   );
   const visiblePlayers = collectVisible(
     renderData.players || [],
     (player) => isVisible(player, bounds, 360),
-    MAX_VISIBLE_REMOTE_PLAYERS,
+    reactiveRenderLimits?.players || MAX_VISIBLE_REMOTE_PLAYERS,
   );
   const visibleProjectiles = collectVisible(
     renderData.projectiles || [],
     (projectile) => isVisible(projectile, bounds, 160),
-    45,
+    reactiveRenderLimits?.projectiles || 45,
   );
 
   const rendererPlayer =
@@ -2410,18 +2449,6 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         </div>
       )}
 
-      <div
-        ref={worldElementRef}
-        className="world"
-        style={{
-          width: worldWidth,
-          height: worldHeight,
-          transformOrigin: "0 0",
-          transform: `translate3d(${cameraX}px, ${cameraY}px, 0) scale(${cameraScale})`,
-        }}
-      >
-      </div>
-
       <PixiArenaRenderer
         player={rendererPlayer}
         players={rendererPlayers}
@@ -2438,10 +2465,13 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         otherPlayerSize={112}
         otherPlayerQuality={0}
         liveDataRef={pixiLiveRef}
-        forceLowQuality={true}
+        forceLowQuality={graphicsQuality === "low"}
+        worldWidth={worldWidth}
+        worldHeight={worldHeight}
+        showZone={false}
       />
 
-      {you && !isDead && (
+      {you && !isDead && !isMobileControls && (
         <svg className="aim-svg" aria-hidden="true">
           <line
             className="aim-svg-line"
@@ -2543,7 +2573,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       </div>
 
       {cameraSubject && (
-        <MiniMap
+        <MemoizedMiniMap
           player={cameraSubject}
           worldWidth={worldWidth}
           worldHeight={worldHeight}
@@ -2617,12 +2647,15 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
             onPointerMove={onJoystickPointerMove}
             onPointerUp={stopJoystick}
             onPointerCancel={stopJoystick}
+            style={{ touchAction: "none", WebkitTapHighlightColor: "transparent" }}
           >
             <div className="pvp-mobile-joystick-ring" />
             <div
+              ref={joystickKnobRef}
               className="pvp-mobile-joystick-knob mobile-joystick-knob"
               style={{
-                transform: `translate(calc(-50% + ${mobileJoystick.knobX}px), calc(-50% + ${mobileJoystick.knobY}px))`,
+                transform: `translate3d(calc(-50% + ${mobileJoystick.knobX}px), calc(-50% + ${mobileJoystick.knobY}px), 0)`,
+                willChange: "transform",
               }}
             />
           </div>
@@ -2634,6 +2667,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
               onPointerDown={onShieldPointerDown}
               onPointerUp={stopMobileShield}
               onPointerCancel={stopMobileShield}
+              style={{ touchAction: "none", WebkitTapHighlightColor: "transparent" }}
             >
               SHIELD
             </button>
@@ -2645,6 +2679,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
               onPointerMove={onAttackPointerMove}
               onPointerUp={stopMobileAttack}
               onPointerCancel={stopMobileAttack}
+              style={{ touchAction: "none", WebkitTapHighlightColor: "transparent" }}
             >
               ATTACK
             </button>

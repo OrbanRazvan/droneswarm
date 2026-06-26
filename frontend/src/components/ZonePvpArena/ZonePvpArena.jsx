@@ -55,12 +55,12 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 
 // Multiplayer modern sync
 // Client-side prediction + server reconciliation + remote snapshot buffer.
-const INPUT_SEND_INTERVAL_MS = 16;
+const INPUT_SEND_INTERVAL_MS = 33;
 const SNAPSHOT_INTERPOLATION_DELAY_MS = 90;
 const SNAPSHOT_BUFFER_TTL_MS = 600;
 const MAX_PENDING_INPUTS = 90;
 
-const MAX_VISIBLE_REMOTE_PLAYERS = 24;
+const MAX_VISIBLE_REMOTE_PLAYERS = 60;
 
 const CORE_TYPES = [
   { type: "nano", name: "Nano Core", shortName: "Nano", color: "#00eaff", effect: "+10 MAX HP" },
@@ -647,6 +647,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
   const joystickPointerRef = useRef(null);
+  const joystickKnobRef = useRef(null);
+  const mobileJoystickActiveRef = useRef(false);
   const attackPointerRef = useRef(null);
   const shieldPointerRef = useRef(null);
   const mobileAimDirRef = useRef({ x: 1, y: 0 });
@@ -655,7 +657,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     status: "connecting",
     playerCount: 0,
     minPlayers: 2,
-    maxPlayers: 2,
+    maxPlayers: 60,
     countdown: null,
     coreDropCountdown: null,
     winnerId: null,
@@ -973,7 +975,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         }
       }
 
-      socket.emit("zone-pvp:input", input);
+      socket.volatile.emit("zone-pvp:input", input);
     };
 
     sendInputRef.current = sendInputNow;
@@ -1213,25 +1215,6 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const liveCameraX = liveCameraSubject ? viewport.width / 2 - liveCameraSubject.x * liveCameraScale : 0;
       const liveCameraY = liveCameraSubject ? viewport.height / 2 - liveCameraSubject.y * liveCameraScale : 0;
 
-      if (worldElementRef.current) {
-        worldElementRef.current.style.transformOrigin = "0 0";
-        worldElementRef.current.style.transform = `translate3d(${liveCameraX}px, ${liveCameraY}px, 0) scale(${liveCameraScale})`;
-      }
-
-      // Cercul zonei si fumul verde sunt tinute la diametrul initial.
-      // La fiecare frame modificam DOAR transform: scale(...), fara width/height.
-      // Asta evita reflow/layout si ramane foarte ieftin pe mobil.
-      const zoneScale = Math.max(0.01, zoneRadius / ZONE_RADIUS_FALLBACK);
-      const zoneTransform = `translate(-50%, -50%) scale(${zoneScale})`;
-
-      if (zoneElementRef.current) {
-        zoneElementRef.current.style.transform = zoneTransform;
-      }
-
-      if (zoneSmokeElementRef.current) {
-        zoneSmokeElementRef.current.style.transform = zoneTransform;
-      }
-
       const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 980, liveCameraScale);
       const livePlayers = collectVisible(
         remoteMap.values(),
@@ -1275,6 +1258,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         scale: liveCameraScale,
         viewportWidth: viewport.width,
         viewportHeight: viewport.height,
+        worldWidth,
+        worldHeight,
+        safeZoneRadius: zoneRadius,
+        showZone: true,
         coreColorMap: coreColorMapRef.current,
         otherPlayerSize: 112,
         otherPlayerQuality: 0,
@@ -1450,6 +1437,12 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
   };
 
+  const setJoystickKnobTransform = (knobX = 0, knobY = 0) => {
+    const knob = joystickKnobRef.current;
+    if (!knob) return;
+    knob.style.transform = `translate3d(calc(-50% + ${Math.round(knobX)}px), calc(-50% + ${Math.round(knobY)}px), 0)`;
+  };
+
   const updateJoystickFromPointer = (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -1463,11 +1456,12 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       active,
     };
 
-    setMobileJoystick({
-      active,
-      knobX: vector.knobX,
-      knobY: vector.knobY,
-    });
+    // Compositor-only on drag: no React render on each touch move.
+    setJoystickKnobTransform(vector.knobX, vector.knobY);
+    if (mobileJoystickActiveRef.current !== active) {
+      mobileJoystickActiveRef.current = active;
+      setMobileJoystick({ active, knobX: vector.knobX, knobY: vector.knobY });
+    }
 
     sendInputRef.current();
   };
@@ -1481,6 +1475,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     }
     joystickPointerRef.current = null;
     mobileMoveRef.current = { x: 0, y: 0, active: false };
+    mobileJoystickActiveRef.current = false;
+    setJoystickKnobTransform(0, 0);
     setMobileJoystick({ active: false, knobX: 0, knobY: 0 });
 
     if (predictedYouRef.current) {
@@ -1782,39 +1778,6 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         </div>
       )}
 
-      <div
-        ref={worldElementRef}
-        className="world"
-        style={{
-          width: worldWidth,
-          height: worldHeight,
-          transformOrigin: "0 0",
-          transform: `translate3d(${cameraX}px, ${cameraY}px, 0) scale(${cameraScale})`,
-        }}
-      >
-        <div
-          ref={zoneSmokeElementRef}
-          className="zone-pvp-danger-smoke"
-          style={{
-            left: worldWidth / 2,
-            top: worldHeight / 2,
-            width: ZONE_RADIUS_FALLBACK * 2,
-            height: ZONE_RADIUS_FALLBACK * 2,
-          }}
-        />
-
-        <div
-          ref={zoneElementRef}
-          className="zone-pvp-battle-zone"
-          style={{
-            left: worldWidth / 2,
-            top: worldHeight / 2,
-            width: ZONE_RADIUS_FALLBACK * 2,
-            height: ZONE_RADIUS_FALLBACK * 2,
-          }}
-        />
-      </div>
-
       <PixiArenaRenderer
         player={rendererPlayer}
         players={rendererPlayers}
@@ -1831,7 +1794,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         otherPlayerSize={112}
         otherPlayerQuality={0}
         liveDataRef={pixiLiveRef}
-        forceLowQuality={true}
+        forceLowQuality={graphicsQuality === "low"}
+        worldWidth={worldWidth}
+        worldHeight={worldHeight}
+        safeZoneRadius={safeZoneRadius}
+        showZone={true}
       />
 
       {you && !isDead && (
@@ -1987,6 +1954,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         >
           <div className="pvp-mobile-joystick-ring" />
           <div
+            ref={joystickKnobRef}
             className="pvp-mobile-joystick-knob"
             style={{
               transform: `translate(calc(-50% + ${mobileJoystick.knobX}px), calc(-50% + ${mobileJoystick.knobY}px))`,

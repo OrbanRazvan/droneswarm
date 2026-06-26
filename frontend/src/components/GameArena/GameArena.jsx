@@ -9,8 +9,8 @@ const WORLD_WIDTH = 20000;
 const WORLD_HEIGHT = 20000;
 const VIEW_PADDING = 160;
 
-const MAX_ORBS = 1000;
-const MIN_ORBS = 160;
+const MAX_ORBS = 360;
+const MIN_ORBS = 100;
 const ORBS_PER_ALIVE_PLAYER = 5;
 const ORB_ZONE_DENSITY = 0.0000036;
 const VIEW_DISTANCE = 1400;
@@ -115,7 +115,7 @@ const BOT_SKINS = [
   "magenta-cyan",
   "bronze-steel",
   "electric-indigo",
-  "dark-emerald"
+  "dark-emerald",
   "emerald-rift-a",
   "emerald-rift-b",
   "emerald-rift-c",
@@ -209,7 +209,7 @@ function getSelectedUserSkin(user) {
   );
 }
 
-const BOT_COUNT = 99;
+const BOT_COUNT = 59;
 const BOT_SPEED = PLAYER_SPEED;
 const BOT_VIEW_RANGE = 1900;
 const BOT_ATTACK_RANGE = 900;
@@ -1497,6 +1497,8 @@ function GameArena({ user, gameMode = "ai", onExitToMenu }) {
   const mouse = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
   const joystickPointerRef = useRef(null);
+  const joystickKnobRef = useRef(null);
+  const mobileJoystickActiveRef = useRef(false);
   const mobileAttackPointerRef = useRef(null);
   const mobileAimRef = useRef({ active: false, x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const mobileAimDirRef = useRef({ x: 1, y: 0 });
@@ -1511,6 +1513,7 @@ function GameArena({ user, gameMode = "ai", onExitToMenu }) {
   const explosionsRef = useRef([]);
   const damageTextsRef = useRef([]);
   const coresRef = useRef([]);
+  const pixiLiveRef = useRef(null);
 
   const lastFireRef = useRef(0);
   const lastCooldownTextRef = useRef(0);
@@ -1520,6 +1523,7 @@ function GameArena({ user, gameMode = "ai", onExitToMenu }) {
   const lastFrameTimeRef = useRef(performance.now());
   const lastRenderSyncRef = useRef(0);
   const lastProjectilesRenderSyncRef = useRef(0);
+  const collisionFrameSkipRef = useRef(0);
   const shieldTimeoutRef = useRef(null);
 
   const zoneStartTimeRef = useRef(Date.now());
@@ -3476,7 +3480,7 @@ const leaderboardPlayers = useMemo(() => {
 
       const nowBotLogic = performance.now();
 
-      const botLogicInterval = isMobileLandscape ? 28 : 20;
+      const botLogicInterval = isMobileLandscape ? 42 : 28;
 
       if (
         gameMode === "ai" &&
@@ -4235,7 +4239,7 @@ const leaderboardPlayers = useMemo(() => {
 
       playerRef.current = nextPlayer;
 
-      if (now - lastRenderSyncRef.current >= 16) {
+      if (now - lastRenderSyncRef.current >= (isMobileLandscape ? 100 : 66)) {
         lastRenderSyncRef.current = now;
         setPlayer(nextPlayer);
       }
@@ -4263,13 +4267,45 @@ const leaderboardPlayers = useMemo(() => {
 
       projectilesRef.current = updatedProjectiles;
 
-      if (now - lastProjectilesRenderSyncRef.current >= 16) {
+      const liveViewportWidth = window.innerWidth || 1280;
+      const liveViewportHeight = window.innerHeight || 720;
+      const liveScale = 1;
+      const liveSpectator = !nextPlayer.alive
+        ? botsRef.current.find((bot) => bot.alive)
+        : null;
+      const liveTarget = nextPlayer.alive ? nextPlayer : (liveSpectator || nextPlayer);
+
+      pixiLiveRef.current = {
+        player: nextPlayer.alive ? nextPlayer : null,
+        players: [],
+        bots: botsRef.current,
+        simpleBots: [],
+        orbs: orbsRef.current,
+        energyCells: energyCellsRef.current,
+        cores: coresRef.current,
+        projectiles: updatedProjectiles,
+        simpleProjectiles: [],
+        cameraX: liveViewportWidth / 2 - (liveTarget?.x || 0) * liveScale,
+        cameraY: liveViewportHeight / 2 - (liveTarget?.y || 0) * liveScale,
+        scale: liveScale,
+        viewportWidth: liveViewportWidth,
+        viewportHeight: liveViewportHeight,
+        worldWidth: WORLD_WIDTH,
+        worldHeight: WORLD_HEIGHT,
+        safeZoneRadius: currentZoneRadius,
+        showZone: true,
+      };
+
+      if (now - lastProjectilesRenderSyncRef.current >= (isMobileLandscape ? 100 : 66)) {
         lastProjectilesRenderSyncRef.current = now;
         setProjectiles([...updatedProjectiles]);
       }
 
       checkBotsTouchPlayer();
-      checkBotsTouchBots();
+      collisionFrameSkipRef.current += 1;
+      if (collisionFrameSkipRef.current % (isMobileLandscape ? 3 : 2) === 0) {
+        checkBotsTouchBots();
+      }
       checkBattleRoyaleWinner();
 
       animation = requestAnimationFrame(loop);
@@ -4332,7 +4368,14 @@ const leaderboardPlayers = useMemo(() => {
       active: power > 0.02,
     };
 
-    setMobileJoystick({ x: knobX, y: knobY, active: power > 0.02 });
+    if (joystickKnobRef.current) {
+      joystickKnobRef.current.style.transition = "none";
+      joystickKnobRef.current.style.transform = `translate(${knobX}px, ${knobY}px)`;
+    }
+    if (mobileJoystickActiveRef.current !== (power > 0.02)) {
+      mobileJoystickActiveRef.current = power > 0.02;
+      setMobileJoystick({ x: knobX, y: knobY, active: power > 0.02 });
+    }
   };
 
   const handleJoystickStart = (e) => {
@@ -4372,7 +4415,12 @@ const leaderboardPlayers = useMemo(() => {
 
     joystickPointerRef.current = null;
     mobileMoveRef.current = { x: 0, y: 0, active: false };
+    mobileJoystickActiveRef.current = false;
     setMobileJoystick({ x: 0, y: 0, active: false });
+    if (joystickKnobRef.current) {
+      joystickKnobRef.current.style.transition = "transform 0.12s ease-out";
+      joystickKnobRef.current.style.transform = "translate(0px, 0px)";
+    }
   };
 
   const statusUnit = player.alive ? player : viewTarget;
@@ -4641,14 +4689,6 @@ const leaderboardPlayers = useMemo(() => {
           transform: `translate3d(${cameraX}px, ${cameraY}px, 0) scale(${mobileWorldScale})`,
         }}
       >
-        <div
-          className="toxic-overlay"
-          style={{
-            "--zone-x": `${WORLD_WIDTH / 2}px`,
-            "--zone-y": `${WORLD_HEIGHT / 2}px`,
-            "--zone-radius": `${safeZoneRadius}px`,
-          }}
-        />
 
         {/* Entitatile mari ale arenei sunt desenate pe canvas prin PixiArenaRenderer.
             Asta elimina lag-ul produs de sute de div-uri DOM si renunta la DroneSwarm.jsx pentru modul AI. */}
@@ -4714,6 +4754,11 @@ const leaderboardPlayers = useMemo(() => {
         coreTypes={CORE_TYPES}
         otherPlayerSize={104}
         otherPlayerQuality={2}
+        liveDataRef={pixiLiveRef}
+        worldWidth={WORLD_WIDTH}
+        worldHeight={WORLD_HEIGHT}
+        safeZoneRadius={safeZoneRadius}
+        showZone={true}
       />
 
       {showRotateOverlay && (
@@ -4736,6 +4781,7 @@ const leaderboardPlayers = useMemo(() => {
             onPointerCancel={handleJoystickEnd}
           >
             <div
+              ref={joystickKnobRef}
               className="mobile-joystick-knob"
               style={{
                 transform: `translate(${mobileJoystick.x}px, ${mobileJoystick.y}px)`,
