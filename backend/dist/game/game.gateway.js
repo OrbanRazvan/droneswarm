@@ -46,6 +46,8 @@ const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
 const ZONE_STATE_INTERVAL_MS = 33;
 const ZONE_STATE_INTERVAL_CROWDED_MS = 50;
 const STATIC_STATE_INTERVAL_MS = 500;
+const NORMAL_WORLD_VIEW_INTERVAL_MS = 250;
+const ZONE_WORLD_VIEW_INTERVAL_MS = 250;
 const ITEM_SPATIAL_CELL_SIZE = 1000;
 const ITEM_ZONE_PRUNE_INTERVAL_MS = 500;
 const NORMAL_HIGH_POPULATION_THRESHOLD = 16;
@@ -559,7 +561,7 @@ let GameGateway = class GameGateway {
             return;
         this.loop = setInterval(() => {
             const now = Date.now();
-            const deltaFrames = Math.min(2, Math.max(0.35, (now - this.lastLoopAt) / (1000 / 60)));
+            const deltaFrames = Math.min(120, Math.max(0.35, (now - this.lastLoopAt) / (1000 / 60)));
             this.lastLoopAt = now;
             for (const room of this.rooms.values()) {
                 this.updateRoomStatus(room, now);
@@ -960,12 +962,15 @@ let GameGateway = class GameGateway {
             return;
         const dirX = dx / dist;
         const dirY = dy / dist;
-        const overlap = BODY_COLLISION_DISTANCE - dist;
-        const separation = Math.min(7, Math.max(BODY_COLLISION_LIGHT_PUSH, overlap * 0.08));
-        this.addSmoothKnockback(a, -dirX, -dirY, separation);
-        this.addSmoothKnockback(b, dirX, dirY, separation);
-        this.applyKnockbackStep(a, zoneRadius, room);
-        this.applyKnockbackStep(b, zoneRadius, room);
+        const networkPvp = Boolean(room?.normalMode || room?.zonePvpMode);
+        if (!networkPvp) {
+            const overlap = BODY_COLLISION_DISTANCE - dist;
+            const separation = Math.min(7, Math.max(BODY_COLLISION_LIGHT_PUSH, overlap * 0.08));
+            this.addSmoothKnockback(a, -dirX, -dirY, separation);
+            this.addSmoothKnockback(b, dirX, dirY, separation);
+            this.applyKnockbackStep(a, zoneRadius, room);
+            this.applyKnockbackStep(b, zoneRadius, room);
+        }
         if (this.isBattlePrepareLocked(room, now))
             return;
         if (now - lastAt < BODY_COLLISION_COOLDOWN)
@@ -976,8 +981,11 @@ let GameGateway = class GameGateway {
         const bWasAlive = b.alive;
         this.applyBodyCollisionDamage(a, outcome.aHpDamage, outcome.aDroneLoss);
         this.applyBodyCollisionDamage(b, outcome.bHpDamage, outcome.bDroneLoss);
-        this.addSmoothKnockback(a, -dirX, -dirY, outcome.push);
-        this.addSmoothKnockback(b, dirX, dirY, outcome.push);
+        const impactPush = networkPvp
+            ? Math.min(3.2, Math.max(1.25, outcome.push * 0.24))
+            : outcome.push;
+        this.addSmoothKnockback(a, -dirX, -dirY, impactPush);
+        this.addSmoothKnockback(b, dirX, dirY, impactPush);
         if (aWasAlive && !a.alive && b.alive)
             this.applyKillReward(b);
         if (bWasAlive && !b.alive && a.alive)
@@ -1802,6 +1810,8 @@ let GameGateway = class GameGateway {
                 player.killedById = null;
             }
             const viewAnchor = spectatorTarget || player;
+            const includeWorldView = !player.lastWorldViewAt ||
+                now - player.lastWorldViewAt >= NORMAL_WORLD_VIEW_INTERVAL_MS;
             const playerCandidates = this.querySpatialIndex(playerIndex, viewAnchor.x, viewAnchor.y, player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE);
             const visiblePlayers = this.filterNear(viewAnchor, playerCandidates.filter((other) => other.id !== player.id &&
                 (player.alive !== false || other.alive !== false)), player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE, NORMAL_VISIBLE_PLAYERS_LIMIT).map((other) => snapshotsByPlayer.get(other.id));
@@ -1832,19 +1842,22 @@ let GameGateway = class GameGateway {
                 spectatingPlayer: spectatorTarget
                     ? snapshotsByPlayer.get(spectatorTarget.id)
                     : null,
-                orbs: room.orbSpatialIndex
-                    ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, VISIBLE_ORB_LIMIT)
-                    : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, VISIBLE_ORB_LIMIT),
-                energyCells: room.energySpatialIndex
-                    ? this.filterNearIndexed(viewAnchor, room.energySpatialIndex, VIEW_DISTANCE, VISIBLE_ENERGY_LIMIT)
-                    : this.filterNear(viewAnchor, room.energyCells, VIEW_DISTANCE, VISIBLE_ENERGY_LIMIT),
-                cores: room.coreSpatialIndex
-                    ? this.filterNearIndexed(viewAnchor, room.coreSpatialIndex, VIEW_DISTANCE + 600, 18)
-                    : this.filterNear(viewAnchor, room.cores, VIEW_DISTANCE + 600, 18),
                 projectiles: room.projectileSpatialIndex
                     ? this.filterNearIndexed(viewAnchor, room.projectileSpatialIndex, VIEW_DISTANCE + 400, VISIBLE_PROJECTILE_LIMIT)
                     : this.filterNear(viewAnchor, room.projectiles, VIEW_DISTANCE + 400, VISIBLE_PROJECTILE_LIMIT),
             };
+            if (includeWorldView) {
+                player.lastWorldViewAt = now;
+                payload.orbs = room.orbSpatialIndex
+                    ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, VISIBLE_ORB_LIMIT)
+                    : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, VISIBLE_ORB_LIMIT);
+                payload.energyCells = room.energySpatialIndex
+                    ? this.filterNearIndexed(viewAnchor, room.energySpatialIndex, VIEW_DISTANCE, VISIBLE_ENERGY_LIMIT)
+                    : this.filterNear(viewAnchor, room.energyCells, VIEW_DISTANCE, VISIBLE_ENERGY_LIMIT);
+                payload.cores = room.coreSpatialIndex
+                    ? this.filterNearIndexed(viewAnchor, room.coreSpatialIndex, VIEW_DISTANCE + 600, 18)
+                    : this.filterNear(viewAnchor, room.cores, VIEW_DISTANCE + 600, 18);
+            }
             if (includeStaticState) {
                 payload.minimapOrbs = minimapOrbs;
                 payload.minimapEnergyCells = minimapEnergyCells;
@@ -2141,10 +2154,10 @@ let GameGateway = class GameGateway {
         if (includeStaticState) {
             room.lastStaticStateAt = now;
         }
-        let leaderboard = [];
-        let minimapOrbs = [];
-        let minimapEnergyCells = [];
-        let minimapCores = [];
+        let leaderboard;
+        let minimapOrbs;
+        let minimapEnergyCells;
+        let minimapCores;
         if (includeStaticState) {
             leaderboard = players
                 .slice()
@@ -2209,6 +2222,8 @@ let GameGateway = class GameGateway {
                 player.killedById = null;
             }
             const viewAnchor = spectatorTarget || player;
+            const includeWorldView = !player.lastWorldViewAt ||
+                now - player.lastWorldViewAt >= ZONE_WORLD_VIEW_INTERVAL_MS;
             const playerCandidates = this.querySpatialIndex(playerIndex, viewAnchor.x, viewAnchor.y, player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE);
             const visiblePlayers = this.filterNear(viewAnchor, playerCandidates.filter((other) => other.id !== player.id && (player.alive !== false || other.alive !== false)), player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE, ZONE_PVP_VISIBLE_PLAYERS_LIMIT).map((other) => this.serializePlayer(other));
             const payload = {
@@ -2235,19 +2250,22 @@ let GameGateway = class GameGateway {
                 spectatingPlayer: spectatorTarget
                     ? this.serializePlayer(spectatorTarget)
                     : null,
-                orbs: room.orbSpatialIndex
-                    ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, 140)
-                    : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, 140),
-                energyCells: room.energySpatialIndex
-                    ? this.filterNearIndexed(viewAnchor, room.energySpatialIndex, VIEW_DISTANCE, 30)
-                    : this.filterNear(viewAnchor, room.energyCells, VIEW_DISTANCE, 30),
-                cores: room.coreSpatialIndex
-                    ? this.filterNearIndexed(viewAnchor, room.coreSpatialIndex, VIEW_DISTANCE + 600, 8)
-                    : this.filterNear(viewAnchor, room.cores, VIEW_DISTANCE + 600, 8),
                 projectiles: room.projectileSpatialIndex
                     ? this.filterNearIndexed(viewAnchor, room.projectileSpatialIndex, VIEW_DISTANCE + 400, 45)
                     : this.filterNear(viewAnchor, room.projectiles, VIEW_DISTANCE + 400, 45),
             };
+            if (includeWorldView) {
+                player.lastWorldViewAt = now;
+                payload.orbs = room.orbSpatialIndex
+                    ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, 140)
+                    : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, 140);
+                payload.energyCells = room.energySpatialIndex
+                    ? this.filterNearIndexed(viewAnchor, room.energySpatialIndex, VIEW_DISTANCE, 30)
+                    : this.filterNear(viewAnchor, room.energyCells, VIEW_DISTANCE, 30);
+                payload.cores = room.coreSpatialIndex
+                    ? this.filterNearIndexed(viewAnchor, room.coreSpatialIndex, VIEW_DISTANCE + 600, 8)
+                    : this.filterNear(viewAnchor, room.cores, VIEW_DISTANCE + 600, 8);
+            }
             if (includeStaticState) {
                 payload.minimapOrbs = minimapOrbs;
                 payload.minimapEnergyCells = minimapEnergyCells;

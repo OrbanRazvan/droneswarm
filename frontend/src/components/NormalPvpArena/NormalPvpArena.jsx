@@ -54,7 +54,7 @@ const MOBILE_RENDER_LIMITS = Object.freeze({
 const REMOTE_SMOOTHING = 24;
 const REMOTE_PREDICTION = 1.0;
 const REMOTE_HARD_SNAP_DISTANCE = 360;
-const REMOTE_MAX_EXTRAPOLATE_MS = 80;
+const REMOTE_MAX_EXTRAPOLATE_MS = 120;
 
 const PROJECTILE_SMOOTHING = 18;
 const PROJECTILE_FRAME_SCALE = 60;
@@ -82,7 +82,7 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 // latest input. It cuts mobile/network pressure roughly in half vs 60 Hz.
 const INPUT_SEND_INTERVAL_MS = 33;
 const INPUT_HEARTBEAT_MS = 100;
-const SNAPSHOT_INTERPOLATION_DELAY_MS = 110;
+const SNAPSHOT_INTERPOLATION_DELAY_MS = 65;
 const SNAPSHOT_BUFFER_TTL_MS = 700;
 
 const MAX_VISIBLE_REMOTE_PLAYERS = 60;
@@ -839,12 +839,22 @@ function predictUnitFromInput(
 
   const move = getMoveVectorFromInput(input);
   const safeDt = Math.min(0.05, Math.max(0, dt || 0));
-  let nextX = unit.x || 0;
-  let nextY = unit.y || 0;
+  const frameScale = safeDt * 60;
+  let nextX = Number(unit.x || 0);
+  let nextY = Number(unit.y || 0);
 
   if (move.moving && (unit.energy ?? 1) > 0) {
     nextX += move.nx * CLIENT_SPEED * safeDt;
     nextY += move.ny * CLIENT_SPEED * safeDt;
+  }
+
+  // Knockback is server-authoritative but it is part of the replicated player
+  // state. Advancing it locally removes the visual gap when two drones touch.
+  const knockbackX = Number(unit.knockbackX || 0);
+  const knockbackY = Number(unit.knockbackY || 0);
+  if (knockbackX || knockbackY) {
+    nextX += knockbackX * frameScale;
+    nextY += knockbackY * frameScale;
   }
 
   const safe = keepInsideSafeZone(
@@ -857,10 +867,14 @@ function predictUnitFromInput(
     true,
   );
 
+  const knockbackDecay = Math.pow(0.66, frameScale);
+
   return {
     ...unit,
     x: safe.x,
     y: safe.y,
+    knockbackX: knockbackX * knockbackDecay,
+    knockbackY: knockbackY * knockbackDecay,
     moveX: move.moving ? move.nx : 0,
     moveY: move.moving ? move.ny : 0,
     isMoving: move.moving,
@@ -892,14 +906,20 @@ const LOCAL_IDLE_SETTLE_ALPHA = 0.16;
 const LOCAL_IDLE_SETTLE_DEADZONE = 1.25;
 const LOCAL_HARD_RESYNC_DISTANCE = 900;
 
-function reconcileHeldInputUnit(local, server, now = performance.now(), lastLocalMoveAt = 0) {
+function reconcileHeldInputUnit(
+  local,
+  server,
+  now = performance.now(),
+  lastLocalMoveAt = 0,
+) {
   if (!server) return local;
   if (!local || local.alive === false || server.alive === false) {
     return { ...(local || {}), ...server };
   }
 
-  const locallyPredicted = Boolean(local.isMoving) || now - Number(lastLocalMoveAt || 0) < LOCAL_RELEASE_GRACE_MS;
-  const serverStillMoving = Boolean(server.isMoving);
+  const locallyPredicted =
+    Boolean(local.isMoving) ||
+    now - Number(lastLocalMoveAt || 0) < LOCAL_RELEASE_GRACE_MS;
   const dx = Number(server.x || 0) - Number(local.x || 0);
   const dy = Number(server.y || 0) - Number(local.y || 0);
   const distance = Math.hypot(dx, dy);
@@ -907,15 +927,15 @@ function reconcileHeldInputUnit(local, server, now = performance.now(), lastLoca
   let x = Number(local.x || 0);
   let y = Number(local.y || 0);
 
-  if (distance >= LOCAL_HARD_RESYNC_DISTANCE) {
-    // Respawn, teleport, server correction after an authoritative collision.
-    x = Number(server.x || 0);
-    y = Number(server.y || 0);
-  } else if (!locallyPredicted && !serverStillMoving && distance > LOCAL_IDLE_SETTLE_DEADZONE) {
-    // Never snap on key/joystick release. Blend the final resting position over
-    // a few frames, after the server has confirmed that it also stopped.
-    x += dx * LOCAL_IDLE_SETTLE_ALPHA;
-    y += dy * LOCAL_IDLE_SETTLE_ALPHA;
+  // A snapshot is already one network trip old. Do not overwrite the local
+  // prediction with it. Instead, correct a bounded number of pixels on every
+  // packet. Normal latency is corrected completely; a real hiccup converges
+  // smoothly rather than teleporting the drone backward.
+  if (distance > LOCAL_IDLE_SETTLE_DEADZONE) {
+    const maxStep = locallyPredicted ? 7 : 16;
+    const step = Math.min(distance, maxStep);
+    x += (dx / distance) * step;
+    y += (dy / distance) * step;
   }
 
   return {
@@ -926,7 +946,9 @@ function reconcileHeldInputUnit(local, server, now = performance.now(), lastLoca
     moveX: locallyPredicted ? local.moveX : server.moveX,
     moveY: locallyPredicted ? local.moveY : server.moveY,
     moveAngle: locallyPredicted ? local.moveAngle : server.moveAngle,
-    isMoving: locallyPredicted ? Boolean(local.isMoving) : Boolean(server.isMoving),
+    isMoving: locallyPredicted
+      ? Boolean(local.isMoving)
+      : Boolean(server.isMoving),
     serverX: server.x,
     serverY: server.y,
   };
@@ -1025,6 +1047,9 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const sendInputRef = useRef(() => {});
   const inputSeqRef = useRef(0);
   const lastInputSentAtRef = useRef(performance.now());
+  // Guard against a stalled network/server: never let local prediction run
+  // seconds ahead and later snap backward.
+  const lastServerStateAtRef = useRef(performance.now());
   const lastLocalMovementAtRef = useRef(performance.now());
   const lastInputSignatureRef = useRef("");
   const remoteSnapshotBufferRef = useRef(new Map());
@@ -1119,6 +1144,9 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const applyState = (state) => {
       const now = performance.now();
+      if (state?.you) {
+        lastServerStateAtRef.current = now;
+      }
 
       cleanupHiddenCollected(hiddenOrbIdsRef.current, now);
       cleanupHiddenCollected(hiddenEnergyIdsRef.current, now);
@@ -1619,10 +1647,16 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           lastLocalMovementAtRef.current = now;
         }
 
+        // If no authoritative state arrives for a moment, stop advancing
+        // position after a short grace window. A tiny pause is far better than
+        // predicting two seconds into the future and then teleporting backward.
+        const networkSilenceMs = now - lastServerStateAtRef.current;
+        const predictionDt = networkSilenceMs > 320 ? 0 : dt;
+
         predictedYouRef.current = predictUnitFromInput(
           current,
           input,
-          dt,
+          predictionDt,
           worldWidth,
           worldHeight,
           zoneRadius,
