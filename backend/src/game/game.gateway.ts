@@ -859,6 +859,26 @@ export class GameGateway {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: any,
   ) {
+    // A duplicate join event on the same socket must be idempotent. Removing
+    // that player from a live room would otherwise create a fresh lobby and
+    // make the client see MATCH STARTS IN again.
+    const existingZoneRoom = this.getZonePvpRoomBySocket(client.id);
+    const existingZonePlayer = existingZoneRoom?.players.get(client.id);
+    if (existingZoneRoom && existingZonePlayer) {
+      existingZonePlayer.userId = data?.isGuest ? null : data?.userId;
+      existingZonePlayer.isGuest = Boolean(data?.isGuest);
+      existingZonePlayer.username = String(
+        data?.username || (data?.isGuest ? "Guest" : "Player"),
+      ).slice(0, 18);
+      existingZonePlayer.skin = normalizeSkin(data?.isGuest ? "cyan" : data?.skin);
+      existingZonePlayer.lastSeenAt = Date.now();
+      existingZonePlayer.lastInputReceivedAt = Date.now();
+      this.markRoomOccupied(existingZoneRoom);
+      client.join(existingZoneRoom.id);
+      this.broadcastZonePvpRoomState(existingZoneRoom, Date.now(), true);
+      return;
+    }
+
     this.removePlayer(client.id);
     this.removeNormalPlayer(client.id);
     this.removeBattleRoyaleOnlinePlayer(client.id);
@@ -929,6 +949,8 @@ export class GameGateway {
       room.status = "countdown";
       room.countdownStartedAt = Date.now();
       room.locked = false;
+      room.roundId = `zone-round-${crypto.randomUUID()}`;
+      room.phaseVersion = Number(room.phaseVersion || 0) + 1;
     }
 
     const zonePvpCountdown =
@@ -944,6 +966,9 @@ export class GameGateway {
         : null;
 
     client.emit("zone-pvp:joined", {
+      roomId: room.id,
+      roundId: room.roundId || null,
+      phaseVersion: Number(room.phaseVersion || 0),
       status: room.status,
       countdown: zonePvpCountdown,
       playerId: client.id,
@@ -1198,12 +1223,17 @@ export class GameGateway {
     }
   }
   updateZonePvpRoomStatus(room, now) {
+    // Zone PvP is one-way: waiting -> countdown -> playing -> finished.
+    // A live round never re-enters countdown or waiting.
     if (room.status !== "countdown") return;
 
     if (room.players.size < ZONE_PVP_ROOM_MIN_PLAYERS) {
       room.status = "waiting";
       room.locked = false;
       room.countdownStartedAt = null;
+      room.roundId = null;
+      room.phaseVersion = Number(room.phaseVersion || 0) + 1;
+      this.broadcastZonePvpRoomState(room, now, true);
       return;
     }
 
@@ -1215,7 +1245,11 @@ export class GameGateway {
       room.battlePrepareUntil = now + ZONE_PVP_BATTLE_PREPARE_DURATION;
       room.battleBeginFlashUntil = room.battlePrepareUntil + 1800;
       room.matchHadMultiplePlayers = true;
+      room.phaseVersion = Number(room.phaseVersion || 0) + 1;
       room.lastCoreWaveAt = now - CORE_RESPAWN_DELAY + CORE_WARNING_DELAY;
+
+      // Reliable boundary packet: both clients receive PLAYING immediately.
+      this.broadcastZonePvpRoomState(room, now, true);
     }
   }
 
@@ -2413,27 +2447,39 @@ export class GameGateway {
     }
   }
 
+  finishZonePvpMatch(room, winner, now = Date.now()) {
+    if (!room || room.status === "finished") return;
+
+    room.status = "finished";
+    room.locked = true;
+    room.countdownStartedAt = null;
+    room.battlePrepareUntil = null;
+    room.battleBeginFlashUntil = null;
+    room.winnerId = winner?.id || null;
+    room.winnerName = winner?.username || null;
+    room.finishedAt = now;
+    room.phaseVersion = Number(room.phaseVersion || 0) + 1;
+    room.projectiles = [];
+
+    for (const player of room.players.values()) {
+      player.input = {};
+      player.shieldActive = false;
+      player.shieldUntil = 0;
+    }
+
+    this.broadcastZonePvpRoomState(room, now, true);
+  }
+
   updateZonePvpWinCondition(room, now) {
-    if (room.status !== "playing") return;
+    if (room.status !== "playing" || !room.matchHadMultiplePlayers) return;
 
     const alive = this.getAlivePlayers(room);
 
-    // Camera declara castigator doar dupa ce meciul a pornit valid cu minim 2 jucatori.
-    // Daca unul moare, devine spectator sau se deconecteaza, ultimul ramas viu castiga.
-    //if (room.matchHadMultiplePlayers && alive.length <= 1) {
-    //   const winner = alive[0] || null;
-    //   room.status = 'finished';
-    //   room.locked = true;
-    //   room.winnerId = winner?.id || null;
-    //   room.winnerName = winner?.username || null;
-    //   room.finishedAt = now;
-    //  room.projectiles = [];
-    //  for (const player of room.players.values()) {
-    //      player.input = {};
-    //      player.shieldActive = false;
-    //      player.shieldUntil = 0;
-    //  }
-    // }
+    // Last alive wins. A disconnect goes through removeZonePvpPlayer,
+    // which calls this function instead of restarting matchmaking.
+    if (alive.length <= 1) {
+      this.finishZonePvpMatch(room, alive[0] || null, now);
+    }
   }
   broadcastRoomState(room, now) {
     const players = [...room.players.values()];
@@ -3218,6 +3264,9 @@ export class GameGateway {
       id: `zone-pvp-${crypto.randomUUID()}`,
       status: "waiting",
       locked: false,
+      // Monotonic version lets the client discard stale volatile countdown packets.
+      phaseVersion: 0,
+      roundId: null,
       players: new Map(),
       orbs: Array.from({ length: MAX_ORBS }, () =>
         this.createOrb(ZONE_START_RADIUS),
@@ -3268,6 +3317,19 @@ export class GameGateway {
       room.players.delete(socketId);
       this.server.sockets.sockets.get(socketId)?.leave(roomId);
       this.markRoomEmptyIfNeeded(room);
+
+      // Only a lobby can be returned to waiting. During PLAYING the remaining
+      // alive player wins; the room never starts another countdown.
+      if (room.status === "countdown" && room.players.size < ZONE_PVP_ROOM_MIN_PLAYERS) {
+        room.status = "waiting";
+        room.locked = false;
+        room.countdownStartedAt = null;
+        room.roundId = null;
+        room.phaseVersion = Number(room.phaseVersion || 0) + 1;
+        this.broadcastZonePvpRoomState(room, Date.now(), true);
+      } else if (room.status === "playing") {
+        this.updateZonePvpWinCondition(room, Date.now());
+      }
     }
 
     this.zonePvpSocketRoom.delete(socketId);
@@ -3437,6 +3499,9 @@ export class GameGateway {
 
       const payload: any = {
         serverNow: now,
+        roomId: room.id,
+        roundId: room.roundId || null,
+        phaseVersion: Number(room.phaseVersion || 0),
         status: room.status,
         countdown: zonePvpCountdown,
         coreDropCountdown,

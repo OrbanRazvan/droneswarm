@@ -654,6 +654,20 @@ let GameGateway = class GameGateway {
         player.lastSeenAt = Date.now();
     }
     handleZonePvpJoin(client, data) {
+        const existingZoneRoom = this.getZonePvpRoomBySocket(client.id);
+        const existingZonePlayer = existingZoneRoom?.players.get(client.id);
+        if (existingZoneRoom && existingZonePlayer) {
+            existingZonePlayer.userId = data?.isGuest ? null : data?.userId;
+            existingZonePlayer.isGuest = Boolean(data?.isGuest);
+            existingZonePlayer.username = String(data?.username || (data?.isGuest ? "Guest" : "Player")).slice(0, 18);
+            existingZonePlayer.skin = normalizeSkin(data?.isGuest ? "cyan" : data?.skin);
+            existingZonePlayer.lastSeenAt = Date.now();
+            existingZonePlayer.lastInputReceivedAt = Date.now();
+            this.markRoomOccupied(existingZoneRoom);
+            client.join(existingZoneRoom.id);
+            this.broadcastZonePvpRoomState(existingZoneRoom, Date.now(), true);
+            return;
+        }
         this.removePlayer(client.id);
         this.removeNormalPlayer(client.id);
         this.removeBattleRoyaleOnlinePlayer(client.id);
@@ -715,6 +729,8 @@ let GameGateway = class GameGateway {
             room.status = "countdown";
             room.countdownStartedAt = Date.now();
             room.locked = false;
+            room.roundId = `zone-round-${crypto.randomUUID()}`;
+            room.phaseVersion = Number(room.phaseVersion || 0) + 1;
         }
         const zonePvpCountdown = room.status === "countdown" && room.countdownStartedAt
             ? Math.max(1, Math.ceil((ZONE_PVP_START_COUNTDOWN_MS -
@@ -722,6 +738,9 @@ let GameGateway = class GameGateway {
                 1000))
             : null;
         client.emit("zone-pvp:joined", {
+            roomId: room.id,
+            roundId: room.roundId || null,
+            phaseVersion: Number(room.phaseVersion || 0),
             status: room.status,
             countdown: zonePvpCountdown,
             playerId: client.id,
@@ -930,6 +949,9 @@ let GameGateway = class GameGateway {
             room.status = "waiting";
             room.locked = false;
             room.countdownStartedAt = null;
+            room.roundId = null;
+            room.phaseVersion = Number(room.phaseVersion || 0) + 1;
+            this.broadcastZonePvpRoomState(room, now, true);
             return;
         }
         if (now - room.countdownStartedAt >= ZONE_PVP_START_COUNTDOWN_MS) {
@@ -940,7 +962,9 @@ let GameGateway = class GameGateway {
             room.battlePrepareUntil = now + ZONE_PVP_BATTLE_PREPARE_DURATION;
             room.battleBeginFlashUntil = room.battlePrepareUntil + 1800;
             room.matchHadMultiplePlayers = true;
+            room.phaseVersion = Number(room.phaseVersion || 0) + 1;
             room.lastCoreWaveAt = now - CORE_RESPAWN_DELAY + CORE_WARNING_DELAY;
+            this.broadcastZonePvpRoomState(room, now, true);
         }
     }
     isBattlePrepareLocked(room, now = Date.now()) {
@@ -1904,10 +1928,33 @@ let GameGateway = class GameGateway {
             }
         }
     }
+    finishZonePvpMatch(room, winner, now = Date.now()) {
+        if (!room || room.status === "finished")
+            return;
+        room.status = "finished";
+        room.locked = true;
+        room.countdownStartedAt = null;
+        room.battlePrepareUntil = null;
+        room.battleBeginFlashUntil = null;
+        room.winnerId = winner?.id || null;
+        room.winnerName = winner?.username || null;
+        room.finishedAt = now;
+        room.phaseVersion = Number(room.phaseVersion || 0) + 1;
+        room.projectiles = [];
+        for (const player of room.players.values()) {
+            player.input = {};
+            player.shieldActive = false;
+            player.shieldUntil = 0;
+        }
+        this.broadcastZonePvpRoomState(room, now, true);
+    }
     updateZonePvpWinCondition(room, now) {
-        if (room.status !== "playing")
+        if (room.status !== "playing" || !room.matchHadMultiplePlayers)
             return;
         const alive = this.getAlivePlayers(room);
+        if (alive.length <= 1) {
+            this.finishZonePvpMatch(room, alive[0] || null, now);
+        }
     }
     broadcastRoomState(room, now) {
         const players = [...room.players.values()];
@@ -2462,6 +2509,8 @@ let GameGateway = class GameGateway {
             id: `zone-pvp-${crypto.randomUUID()}`,
             status: "waiting",
             locked: false,
+            phaseVersion: 0,
+            roundId: null,
             players: new Map(),
             orbs: Array.from({ length: MAX_ORBS }, () => this.createOrb(ZONE_START_RADIUS)),
             energyCells: Array.from({ length: MAX_ENERGY_CELLS }, () => this.createEnergyCell(ZONE_START_RADIUS)),
@@ -2505,6 +2554,17 @@ let GameGateway = class GameGateway {
             room.players.delete(socketId);
             this.server.sockets.sockets.get(socketId)?.leave(roomId);
             this.markRoomEmptyIfNeeded(room);
+            if (room.status === "countdown" && room.players.size < ZONE_PVP_ROOM_MIN_PLAYERS) {
+                room.status = "waiting";
+                room.locked = false;
+                room.countdownStartedAt = null;
+                room.roundId = null;
+                room.phaseVersion = Number(room.phaseVersion || 0) + 1;
+                this.broadcastZonePvpRoomState(room, Date.now(), true);
+            }
+            else if (room.status === "playing") {
+                this.updateZonePvpWinCondition(room, Date.now());
+            }
         }
         this.zonePvpSocketRoom.delete(socketId);
     }
@@ -2618,6 +2678,9 @@ let GameGateway = class GameGateway {
             const visiblePlayers = this.filterNear(viewAnchor, playerCandidates.filter((other) => other.id !== player.id && (player.alive !== false || other.alive !== false)), player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE, ZONE_PVP_VISIBLE_PLAYERS_LIMIT).map((other) => this.serializePlayer(other));
             const payload = {
                 serverNow: now,
+                roomId: room.id,
+                roundId: room.roundId || null,
+                phaseVersion: Number(room.phaseVersion || 0),
                 status: room.status,
                 countdown: zonePvpCountdown,
                 coreDropCountdown,

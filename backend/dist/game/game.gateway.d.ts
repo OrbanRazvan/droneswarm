@@ -89,6 +89,7 @@ export declare class GameGateway {
     maintainWorldItems(room: any, zoneRadius: any, now: any): void;
     updateWinCondition(room: any, now: any): void;
     updateBattleRoyaleOnlineWinCondition(room: any, now: any): void;
+    finishZonePvpMatch(room: any, winner: any, now?: number): void;
     updateZonePvpWinCondition(room: any, now: any): void;
     broadcastRoomState(room: any, now: any): void;
     serializePlayer(player: any): {

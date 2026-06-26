@@ -768,6 +768,47 @@ function getBattleBeginFlashActive(data = {}) {
   return Date.now() < Number(data.battleBeginFlashUntil);
 }
 
+// Zone PvP state packets are frequent and can be volatile. A stale countdown
+// packet arriving after PLAYING must never put a live match back behind the
+// matchmaking overlay. The backend supplies phaseVersion; the rank guard is a
+// second safety net for any packet missing that field.
+const ZONE_STATUS_RANK = Object.freeze({
+  connecting: -1,
+  waiting: 0,
+  countdown: 1,
+  playing: 2,
+  finished: 3,
+});
+
+function getZoneStatusRank(status) {
+  return ZONE_STATUS_RANK[String(status || "connecting")] ?? -1;
+}
+
+function shouldAcceptZonePhase(current, incoming = {}) {
+  const incomingRoomId = incoming?.roomId ? String(incoming.roomId) : "";
+  const currentRoomId = current?.roomId ? String(current.roomId) : "";
+  const incomingVersion = Number(incoming?.phaseVersion || 0);
+  const currentVersion = Number(current?.phaseVersion ?? -1);
+  const incomingRank = getZoneStatusRank(incoming?.status);
+  const currentRank = getZoneStatusRank(current?.status);
+
+  // A real new room is a new match and must be accepted.
+  if (incomingRoomId && currentRoomId && incomingRoomId !== currentRoomId) {
+    return true;
+  }
+
+  if (incomingVersion < currentVersion) return false;
+  if (incomingVersion === currentVersion && incomingRank < currentRank) return false;
+
+  // Extra protection for packets produced by an older server without a
+  // phaseVersion. Once PLAYING/FINISHED is seen, never accept lobby states.
+  if (currentRank >= ZONE_STATUS_RANK.playing && incomingRank < ZONE_STATUS_RANK.playing) {
+    return false;
+  }
+
+  return true;
+}
+
 function FlyingAttackDrone({ projectile }) {
   const skin = normalizeSkin(projectile.skin || "cyan");
   const angle = projectile.angle || Math.atan2(projectile.vy || 0, projectile.vx || 1);
@@ -826,6 +867,12 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const battlePrepareWasVisibleRef = useRef(false);
   const battleBeginTimerRef = useRef(null);
   const lastArenaStatusRef = useRef("connecting");
+  const zonePhaseRef = useRef({
+    roomId: null,
+    roundId: null,
+    phaseVersion: -1,
+    status: "connecting",
+  });
   const combatEventMapRef = useRef(new Map());
   // Last authoritative self snapshot. This is visual-only fallback state for
   // the same instant WebGL combat feedback used by Battle Royale.
@@ -843,6 +890,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const mobileAimArrowRef = useRef(null);
 
   const worldRef = useRef({
+    roomId: null,
+    roundId: null,
+    phaseVersion: -1,
     status: "connecting",
     playerCount: 0,
     minPlayers: 2,
@@ -906,6 +956,36 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     socketRef.current = socket;
 
     const applyState = (state) => {
+      if (!state || !shouldAcceptZonePhase(zonePhaseRef.current, state)) {
+        return;
+      }
+
+      const incomingRoomId = state?.roomId ? String(state.roomId) : "";
+      const currentRoomId = zonePhaseRef.current?.roomId ? String(zonePhaseRef.current.roomId) : "";
+      if (incomingRoomId && currentRoomId && incomingRoomId !== currentRoomId) {
+        // Socket reconnected into a genuinely different room. Clear only
+        // visual caches; the new authoritative state below repopulates them.
+        combatEventMapRef.current.clear();
+        selfCombatSnapshotRef.current = null;
+        stableOrbMapRef.current.clear();
+        stableEnergyMapRef.current.clear();
+        stableMinimapOrbMapRef.current.clear();
+        stableMinimapEnergyMapRef.current.clear();
+        stableCoreMapRef.current.clear();
+        remoteSnapshotBufferRef.current.clear();
+        predictedYouRef.current = null;
+      }
+
+      zonePhaseRef.current = {
+        roomId: incomingRoomId || zonePhaseRef.current.roomId || null,
+        roundId: state?.roundId ? String(state.roundId) : zonePhaseRef.current.roundId || null,
+        phaseVersion: Math.max(
+          Number(zonePhaseRef.current.phaseVersion ?? -1),
+          Number(state?.phaseVersion || 0),
+        ),
+        status: state?.status || zonePhaseRef.current.status || "connecting",
+      };
+
       const now = performance.now();
       const nowWall = Date.now();
       const combatViewerId = state?.you?.id || worldRef.current.you?.id || socket.id;
