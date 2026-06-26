@@ -763,6 +763,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const battleBeginTimerRef = useRef(null);
   const lastArenaStatusRef = useRef("connecting");
   const combatEventMapRef = useRef(new Map());
+  // Last authoritative self snapshot. This is visual-only fallback state for
+  // the same instant WebGL combat feedback used by Battle Royale.
+  const selfCombatSnapshotRef = useRef(null);
 
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
   const joystickPointerRef = useRef(null);
@@ -848,6 +851,25 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         combatViewerId,
         nowWall,
       );
+
+      const fallbackCombatEvents = buildSelfCombatFallbackEvents(
+        selfCombatSnapshotRef.current,
+        state?.you,
+        combatViewerId,
+        nowWall,
+        combatEventMapRef.current,
+      );
+      if (state?.you) {
+        selfCombatSnapshotRef.current = { ...state.you };
+      }
+      if (fallbackCombatEvents.length > 0) {
+        combatEventMapRef.current = mergePrivateCombatEvents(
+          combatEventMapRef.current,
+          fallbackCombatEvents,
+          combatViewerId,
+          nowWall,
+        );
+      }
 
       // Sincronizare locala pentru PREPARE PHASE / BATTLE BEGIN.
       // Serverul ramane autoritar, dar tinem si un fallback local ca HUD-ul sa nu dispara
@@ -1038,6 +1060,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     const handleConnect = () => {
       setConnectionError("");
       combatEventMapRef.current.clear();
+      selfCombatSnapshotRef.current = null;
       socket.emit("zone-pvp:join", {
         userId: user?.isGuest ? null : user?.id,
         isGuest: Boolean(user?.isGuest),
@@ -1090,17 +1113,16 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const applyPrivateCombatEvent = (event) => {
       const viewerId = String(worldRef.current.you?.id || socket.id || "");
-      if (
-        !event?.id ||
-        !viewerId ||
-        String(event.viewerId || "") !== viewerId
-      ) {
-        return;
-      }
+      if (!event?.id || !viewerId) return;
+      const normalizedEvent = {
+        ...event,
+        viewerId: String(event.viewerId || viewerId),
+      };
+      if (normalizedEvent.viewerId !== viewerId) return;
 
       combatEventMapRef.current = mergePrivateCombatEvents(
         combatEventMapRef.current,
-        [event],
+        [normalizedEvent],
         viewerId,
         Date.now(),
       );
@@ -1481,7 +1503,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         combatEvents: (data.combatEvents || []).filter(
           (event) =>
             Boolean(data.you?.id || worldRef.current.you?.id) &&
-            event?.viewerId === (data.you?.id || worldRef.current.you?.id),
+            String(event?.viewerId || "") === String(data.you?.id || worldRef.current.you?.id || ""),
         ),
         combatViewerId: data.you?.id || worldRef.current.you?.id || null,
         combatEventsPrivate: true,
@@ -1493,7 +1515,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldWidth,
         worldHeight,
         // Exact same cached premium space theme already used in BattleRoyaleMode.
-        worldTheme: "battle-royale-pixel-terrain",
+        worldTheme: "premium-space-battle",
         safeZoneRadius: zoneRadius,
         showZone: true,
         coreColorMap: coreColorMapRef.current,
@@ -2046,7 +2068,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         combatEvents={(renderData.combatEvents || []).filter(
           (event) =>
             Boolean(renderData.you?.id || worldRef.current.you?.id) &&
-            event?.viewerId === (renderData.you?.id || worldRef.current.you?.id),
+            String(event?.viewerId || "") === String(renderData.you?.id || worldRef.current.you?.id || ""),
         )}
         combatViewerId={renderData.you?.id || worldRef.current.you?.id || null}
         combatEventsPrivate
@@ -2062,7 +2084,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         forceLowQuality={graphicsQuality === "low" || isMobileControls}
         worldWidth={worldWidth}
         worldHeight={worldHeight}
-        worldTheme="battle-royale-pixel-terrain"
+        worldTheme="premium-space-battle"
         safeZoneRadius={safeZoneRadius}
         showZone={true}
       />

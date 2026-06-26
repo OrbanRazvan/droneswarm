@@ -268,8 +268,7 @@ let GameGateway = class GameGateway {
                 ? "zone-pvp:combat"
                 : null;
         if (privateEventName) {
-            const recipient = this.server?.sockets?.sockets?.get(String(unit.id));
-            recipient?.emit(privateEventName, event);
+            this.server?.to(String(unit.id)).emit(privateEventName, event);
         }
         if (room.combatEvents.length > 96) {
             room.combatEvents.splice(0, room.combatEvents.length - 96);
@@ -1599,7 +1598,12 @@ let GameGateway = class GameGateway {
                 collectedIds.add(cell.id);
                 collected += 1;
                 collectedEnergyIds.push(cell.id);
-                player.energy = Math.min(100, player.energy + 25);
+                const energyBefore = Number(player.energy || 0);
+                player.energy = Math.min(100, energyBefore + 25);
+                const energyGained = Math.max(0, Number(player.energy || 0) - energyBefore);
+                if (energyGained > 0 && this.usesProgressionPvpCombat(room)) {
+                    this.pushCombatEvent(room, player, `ENERGY +${energyGained}`, "heal", Date.now());
+                }
             }
             if (collected > 0) {
                 this.emitCollectSync(room, player, {

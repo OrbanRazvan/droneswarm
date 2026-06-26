@@ -227,12 +227,12 @@ const BOT_COUNT = 99;
 // - se retrag mai devreme cand au HP mic;
 // - ataca puternic doar cand au avantaj de drone/HP/core-uri.
 const BOT_SPEED = PLAYER_SPEED * 1.02;
-const BOT_VIEW_RANGE = 2300;
-const BOT_ATTACK_RANGE = 980;
-const BOT_FIRE_COOLDOWN = 1450;
+const BOT_VIEW_RANGE = 3200;
+const BOT_ATTACK_RANGE = 1380;
+const BOT_FIRE_COOLDOWN = 920;
 const BOT_LOW_HP = 45;
 
-const BOT_FARM_UNTIL_DRONES = 3;
+const BOT_FARM_UNTIL_DRONES = 1;
 const BOT_SAFE_DISTANCE = 760;
 const BOT_ZONE_MEMORY_TIME = 18000;
 const BOT_ZONE_EDGE_BUFFER = 720;
@@ -240,13 +240,17 @@ const BOT_ZONE_EDGE_BUFFER = 720;
 // Battle Royale adaptive AI profile. The opening minute is intentionally
 // non-combat: bots spread out and race for orbs before the tactical phase.
 const BOT_OPENING_ORB_FARM_MS = 60000;
-const BOT_MIN_SPAWN_DISTANCE = 1250;
-const BOT_SPAWN_CANDIDATES = 520;
+const BOT_MIN_SPAWN_DISTANCE = 1450;
+const BOT_SPAWN_CANDIDATES = 760;
 const BOT_FARM_AVOID_RADIUS = 660;
 const BOT_TACTICAL_AVOID_RADIUS = 430;
 const BOT_ENDGAME_AVOID_RADIUS = 330;
-const BOT_THREAT_RADIUS = 1350;
-const BOT_MULTI_THREAT_RADIUS = 1050;
+const BOT_THREAT_RADIUS = 1750;
+const BOT_MULTI_THREAT_RADIUS = 1250;
+// After the opening minute bots can pick a long-range hunt target and converge
+// into real fights instead of endlessly orbiting their own escort drones.
+const BOT_GLOBAL_HUNT_RANGE = 8500;
+const BOT_HUNT_REPLAN_MS = 850;
 const PLAYER_BOT_SPAWN_DISTANCE = 1700;
 const SPAWN_SAFE_ZONE_MARGIN = 1500;
 
@@ -1456,25 +1460,46 @@ function findClosestOrbForBot(
 }
 
 function findBotEnemy(bot, player, bots, phase = "skirmish") {
+  if (!bot?.alive || (bot.drones || 0) <= 0) return null;
+
   const enemies = [];
   if (player?.alive) {
     enemies.push({
-      id: "player", x: player.x, y: player.y, hp: player.hp, maxHp: player.maxHp,
-      drones: player.drones, mass: player.mass, totalCollected: player.totalCollected || 0,
-      kills: player.kills || 0, energy: player.energy, alive: true, type: "player",
+      id: "player",
+      x: player.x,
+      y: player.y,
+      hp: player.hp,
+      maxHp: player.maxHp,
+      drones: player.drones,
+      mass: player.mass,
+      totalCollected: player.totalCollected || 0,
+      kills: player.kills || 0,
+      energy: player.energy,
+      alive: true,
+      type: "player",
     });
   }
+
   bots.forEach((otherBot) => {
     if (!otherBot.alive || otherBot.id === bot.id) return;
     enemies.push({
-      id: otherBot.id, x: otherBot.x, y: otherBot.y, hp: otherBot.hp, maxHp: otherBot.maxHp,
-      drones: otherBot.drones, mass: otherBot.mass, totalCollected: otherBot.totalCollected || 0,
-      kills: otherBot.kills || 0, energy: otherBot.energy, alive: true, type: "bot",
+      id: otherBot.id,
+      x: otherBot.x,
+      y: otherBot.y,
+      hp: otherBot.hp,
+      maxHp: otherBot.maxHp,
+      drones: otherBot.drones,
+      mass: otherBot.mass,
+      totalCollected: otherBot.totalCollected || 0,
+      kills: otherBot.kills || 0,
+      energy: otherBot.energy,
+      alive: true,
+      type: "bot",
     });
   });
 
   const ownPower = getBotPower(bot);
-  const desiredRange = phase === "endgame" ? BOT_VIEW_RANGE : Math.min(BOT_VIEW_RANGE, 1900);
+  const localEngagementRange = phase === "endgame" ? 5200 : 3600;
   let nearbyEnemyCount = 0;
   let strongerEnemyCount = 0;
   let weakEnemyCount = 0;
@@ -1484,38 +1509,68 @@ function findBotEnemy(bot, player, bots, phase = "skirmish") {
 
   enemies.forEach((enemy) => {
     const distance = Math.hypot(enemy.x - bot.x, enemy.y - bot.y);
-    const enemyPower = getBotPower(enemy);
+    if (distance > BOT_GLOBAL_HUNT_RANGE) return;
 
+    const enemyPower = getBotPower(enemy);
     if (distance <= BOT_THREAT_RADIUS) {
       nearbyEnemyCount += 1;
       nearestThreatDistance = Math.min(nearestThreatDistance, distance);
-      if (enemyPower > ownPower * 1.08) strongerEnemyCount += 1;
-      if (enemyPower < ownPower * 0.82 || enemy.hp <= 45 || enemy.drones <= 1) weakEnemyCount += 1;
+      if (enemyPower > ownPower * 1.10) strongerEnemyCount += 1;
+      if (enemyPower < ownPower * 0.84 || enemy.hp <= 52 || enemy.drones <= 1) weakEnemyCount += 1;
     }
 
-    if (distance > desiredRange || bot.drones <= 0) return;
+    const enemyWeak = enemy.hp <= 58 || enemy.drones <= 1 || enemy.energy <= 18;
+    const hasDroneAdvantage = (bot.drones || 0) >= (enemy.drones || 0) + 1;
+    const canWin =
+      hasDroneAdvantage ||
+      enemyWeak ||
+      ownPower * (bot.aiCourage || 1) >= enemyPower * (phase === "endgame" ? 0.82 : 0.92);
 
-    const enemyWeak = enemy.hp <= 55 || enemy.drones <= 1 || enemy.energy <= 20;
-    const hasDroneAdvantage = bot.drones >= enemy.drones + 1;
-    const canWin = hasDroneAdvantage || enemyWeak || ownPower * (bot.aiCourage || 1) >= enemyPower * (phase === "endgame" ? 0.86 : 0.96);
-
+    // Close enemies are preferred, but a bot with a drone will still choose a
+    // distant hunt target after the opening phase and actively travel to it.
     let score = distance;
-    if (enemy.type === "player") score -= phase === "endgame" ? 170 : 70;
-    if (enemyWeak) score -= 360;
-    if (hasDroneAdvantage) score -= 330;
+    if (distance > localEngagementRange) score += 260 + (distance - localEngagementRange) * 0.08;
+
+    if (enemy.type === "player") {
+      if (bot.aiArchetype === "hunter") score -= 820;
+      else if (bot.aiArchetype === "raider") score -= 360;
+      else if (bot.aiArchetype === "opportunist") score -= 190;
+      else score -= 90;
+    } else if (bot.aiArchetype === "opportunist" && enemyWeak) {
+      score -= 260;
+    }
+
+    if (bot.targetEnemyId === enemy.id) score -= 190;
+    if (enemyWeak) score -= 420;
+    if (hasDroneAdvantage) score -= 300;
     if (canWin) score -= 220;
-    if (enemy.hp < bot.hp) score -= 110;
-    if (enemyPower > ownPower * 1.22) score += 520;
-    if (phase === "endgame" && enemy.drones === 0) score -= 210;
+    if (enemy.hp < bot.hp) score -= 95;
+    if (enemyPower > ownPower * 1.35 && !enemyWeak) score += 280;
+    if (phase === "endgame" && enemy.drones === 0) score -= 260;
 
     if (score < bestScore) {
       bestScore = score;
-      bestEnemy = { ...enemy, distance, botPower: ownPower, enemyPower, enemyWeak, hasDroneAdvantage, canWin };
+      bestEnemy = {
+        ...enemy,
+        distance,
+        botPower: ownPower,
+        enemyPower,
+        enemyWeak,
+        hasDroneAdvantage,
+        canWin,
+        isDistantHunt: distance > localEngagementRange,
+      };
     }
   });
 
   return bestEnemy
-    ? { ...bestEnemy, nearbyEnemyCount, strongerEnemyCount, weakEnemyCount, nearestThreatDistance }
+    ? {
+        ...bestEnemy,
+        nearbyEnemyCount,
+        strongerEnemyCount,
+        weakEnemyCount,
+        nearestThreatDistance,
+      }
     : null;
 }
 
@@ -4068,37 +4123,41 @@ function BattleRoyale({ user, onExitToMenu }) {
           const botPower = getBotPower(bot) * (bot.aiCourage || 1);
           const enemyPower = enemyTarget ? Number(enemyTarget.enemyPower || getBotPower(enemyTarget)) : 0;
           const hasDroneAdvantage = Boolean(enemyTarget && bot.drones >= enemyTarget.drones + 1);
-          const enemyWeak = Boolean(enemyTarget && (enemyTarget.hp <= 55 || enemyTarget.drones <= 1));
+          const enemyWeak = Boolean(enemyTarget && (enemyTarget.hp <= 58 || enemyTarget.drones <= 1));
           const nearbyEnemyCount = Number(enemyTarget?.nearbyEnemyCount || 0);
           const strongerEnemyCount = Number(enemyTarget?.strongerEnemyCount || 0);
           const beingThreatened = Boolean(
             enemyTarget &&
-              enemyTarget.distance < 560 &&
-              (enemyPower > botPower * 0.82 || nearbyEnemyCount >= 2),
+              enemyTarget.distance < 760 &&
+              (enemyPower > botPower * 0.88 || nearbyEnemyCount >= 3),
           );
 
-          const phaseFarmThreshold = battlePhase === "skirmish" ? Math.max(2, desiredStock - 1) : desiredStock;
-          const shouldKeepFarming = !openingOrbFarm &&
-            bot.drones < phaseFarmThreshold &&
+          // After the opening minute, a bot farms only when it has no ammo.
+          // One escort drone is enough to begin a hunt; it no longer waits for
+          // 3-5 drones and freezes into a passive orbit.
+          const needsEmergencyFarm = (bot.drones || 0) <= 0;
+          const shouldKeepFarming =
+            !openingOrbFarm &&
+            needsEmergencyFarm &&
             !beingThreatened &&
-            !(enemyWeak && bot.drones >= 1);
+            !enemyWeak;
 
-          const lowHpThreshold = battlePhase === "endgame" ? 52 : BOT_LOW_HP;
+          const lowHpThreshold = battlePhase === "endgame" ? 34 : 38;
           const shouldFlee = Boolean(
             enemyTarget &&
               !openingOrbFarm &&
               (
                 bot.hp <= lowHpThreshold ||
-                bot.energy <= 14 ||
-                (strongerEnemyCount >= 2 && !hasDroneAdvantage) ||
-                (enemyPower > botPower * (nearbyEnemyCount >= 2 ? 1.05 : 1.28) && !hasDroneAdvantage)
+                bot.energy <= 6 ||
+                (strongerEnemyCount >= 3 && !hasDroneAdvantage) ||
+                (enemyPower > botPower * 1.45 && !hasDroneAdvantage && nearbyEnemyCount >= 2)
               ),
           );
 
-          const aggressionMultiplier = battlePhase === "endgame" ? 1.28 : battlePhase === "midgame" ? 1.12 : 1;
+          const aggressionMultiplier = battlePhase === "endgame" ? 1.32 : battlePhase === "midgame" ? 1.18 : 1.08;
           const pursuitRange = Math.min(
-            PROJECTILE_MAX_DISTANCE * 0.92,
-            BOT_ATTACK_RANGE * aggressionMultiplier + (bot.aiAggression || 1) * 150,
+            PROJECTILE_MAX_DISTANCE * 0.96,
+            BOT_ATTACK_RANGE * aggressionMultiplier + (bot.aiAggression || 1) * 170,
           );
           const shouldAttack = Boolean(
             enemyTarget &&
@@ -4106,16 +4165,18 @@ function BattleRoyale({ user, onExitToMenu }) {
               !shouldKeepFarming &&
               !shouldFlee &&
               bot.drones >= 1 &&
-              enemyTarget.distance < pursuitRange &&
-              (
-                hasDroneAdvantage ||
-                enemyWeak ||
-                bot.drones >= enemyTarget.drones ||
-                botPower >= enemyPower * (battlePhase === "endgame" ? 0.84 : 0.93)
-              ),
+              enemyTarget.distance < pursuitRange,
+          );
+          const shouldHunt = Boolean(
+            enemyTarget &&
+              !openingOrbFarm &&
+              !shouldKeepFarming &&
+              !shouldFlee &&
+              bot.drones >= 1 &&
+              enemyTarget.distance < BOT_GLOBAL_HUNT_RANGE,
           );
 
-          if (enemyTarget && (shouldAttack || shouldFlee || beingThreatened)) {
+          if (enemyTarget && (shouldAttack || shouldHunt || shouldFlee || beingThreatened)) {
             const angle = Math.atan2(
               enemyTarget.y - bot.y,
               enemyTarget.x - bot.x
@@ -4159,21 +4220,37 @@ function BattleRoyale({ user, onExitToMenu }) {
               move,
               botDelta,
               currentZoneRadius,
-              shouldAttack ? (battlePhase === "endgame" ? 1.22 : 1.12) : 1.32,
+              shouldAttack
+                ? (battlePhase === "endgame" ? 1.28 : 1.18)
+                : shouldHunt
+                  ? 1.34
+                  : 1.38,
               {
                 attacking: shouldAttack,
-                state: shouldFlee || beingThreatened ? "defend-flee" : "attack-strafe",
+                state: shouldFlee || beingThreatened
+                  ? "defend-flee"
+                  : shouldAttack
+                    ? "attack-strafe"
+                    : "hunt-target",
                 targetEnemyId: enemyTarget.id,
                 mouseX: enemyTarget.x,
                 mouseY: enemyTarget.y,
                 aiStrafeDir: bot.aiPlanUntil > nowAi ? bot.aiStrafeDir : (Math.random() > 0.5 ? 1 : -1),
-                aiPlanUntil: nowAi + 720 + Math.random() * 700,
+                aiPlanUntil: nowAi + (shouldHunt ? BOT_HUNT_REPLAN_MS : 720) + Math.random() * (shouldHunt ? 420 : 700),
                 dangerMemory,
               }
             );
 
+            // Shield is defensive, not an automatic loop at preferred range.
+            // Before, every bot could recast shield merely because it was close
+            // to a target, which prevented firing and made groups orbit forever.
             combatBot = maybeActivateBotShield(combatBot, nowAi, {
-              incomingThreat: beingThreatened || enemyTarget.distance < 620,
+              incomingThreat:
+                beingThreatened ||
+                (
+                  enemyTarget.distance < 470 &&
+                  (enemyPower > botPower * 1.05 || enemyTarget.drones >= bot.drones + 1)
+                ),
               nearbyEnemyCount,
               lowHpThreshold,
             });

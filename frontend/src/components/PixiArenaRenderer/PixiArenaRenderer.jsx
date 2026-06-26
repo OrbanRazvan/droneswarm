@@ -74,6 +74,12 @@ const COMBAT_EVENT_MAX_RENDERED = 32;
 // sampling. It is visual-only: no collision, spawn, loot or game-rule code
 // reads this layer.
 const PIXEL_TERRAIN_THEME = "battle-royale-pixel-terrain";
+// Battle Royale keeps the legacy name; Normal / Zone use the explicit alias.
+// Both resolve to the same cached premium space-battle visual.
+const SPACE_BATTLE_THEMES = new Set([
+  PIXEL_TERRAIN_THEME,
+  "premium-space-battle",
+]);
 const WORLD_TERRAIN_TEXTURE_CACHE = new Map();
 const PIXEL_TERRAIN_TEXTURE_SIZE = 1536;
 const PIXEL_TERRAIN_CELL_SIZE = 3;
@@ -1583,7 +1589,7 @@ function syncWorldTerrain(layer, state, theme, worldWidth, worldHeight) {
   previous.forEach(destroyTerrainChild);
   state.key = key;
 
-  if (normalizedTheme !== PIXEL_TERRAIN_THEME) return;
+  if (!SPACE_BATTLE_THEMES.has(normalizedTheme)) return;
 
   try {
     layer.addChild(createPixelTerrainTexture(width, height));
@@ -1728,25 +1734,28 @@ function PixiArenaRenderer({
       const terrainLayer = new PIXI.Container();
       terrainLayer.eventMode = "none";
       terrainLayer.interactiveChildren = false;
-      terrainLayer.zIndex = -1;
+      // The terrain must sit above the plain fallback background and below every
+      // gameplay layer. A non-negative zIndex also avoids browser/Pixi edge
+      // cases where negative children could be skipped after a context restore.
+      terrainLayer.zIndex = 0;
 
       const zone = new PIXI.Graphics(resources.zoneContext);
       zone.eventMode = "none";
       zone.visible = false;
-      zone.zIndex = 0;
+      zone.zIndex = 1;
 
       const itemsLayer = new PIXI.Container();
       itemsLayer.eventMode = "none";
-      itemsLayer.zIndex = 1;
+      itemsLayer.zIndex = 2;
       const projectilesLayer = new PIXI.Container();
       projectilesLayer.eventMode = "none";
-      projectilesLayer.zIndex = 2;
+      projectilesLayer.zIndex = 3;
       const entitiesLayer = new PIXI.Container();
       entitiesLayer.eventMode = "none";
-      entitiesLayer.zIndex = 3;
+      entitiesLayer.zIndex = 4;
       const combatLayer = new PIXI.Container();
       combatLayer.eventMode = "none";
-      combatLayer.zIndex = 4;
+      combatLayer.zIndex = 5;
 
       world.addChild(
         terrainLayer,
@@ -1961,20 +1970,25 @@ function PixiArenaRenderer({
         // renderer modes keep their own existing combat-event behavior.
         const resolvedCombatViewerId =
           data?.combatViewerId || data?.player?.id || data?.you?.id || null;
+        const resolvedCombatViewerKey = resolvedCombatViewerId
+          ? String(resolvedCombatViewerId)
+          : "";
         const combatSource = data.combatEvents || [];
         const visibleCombatEvents = data?.combatEventsPrivate
           ? (
-              resolvedCombatViewerId
+              resolvedCombatViewerKey
                 ? combatSource.filter(
-                    (event) => event?.viewerId === resolvedCombatViewerId,
+                    (event) =>
+                      String(event?.viewerId || resolvedCombatViewerKey) ===
+                      resolvedCombatViewerKey,
                   )
                 : []
             )
           : combatSource.filter(
               (event) =>
                 !event?.viewerId ||
-                !resolvedCombatViewerId ||
-                event.viewerId === resolvedCombatViewerId,
+                !resolvedCombatViewerKey ||
+                String(event.viewerId) === resolvedCombatViewerKey,
             );
         syncCombatTextLayer({
           map: combatTextMap,

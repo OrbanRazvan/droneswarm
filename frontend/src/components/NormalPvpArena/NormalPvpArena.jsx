@@ -608,13 +608,19 @@ function mergePrivateCombatEvents(previousMap, incoming = [], viewerId, now = Da
   const activeViewerId = viewerId ? String(viewerId) : "";
 
   for (const event of incoming || []) {
-    if (!event?.id || !activeViewerId || String(event.viewerId || "") !== activeViewerId) {
-      continue;
-    }
+    if (!event?.id || !activeViewerId) continue;
+    const eventViewerId = String(event.viewerId || activeViewerId);
+    if (eventViewerId !== activeViewerId) continue;
+
     const createdAt = Number(event.createdAt || now);
     const ttl = Math.max(300, Number(event.ttl || 2000));
     if (now - createdAt >= ttl) continue;
-    previousMap.set(event.id, { ...event, createdAt, ttl });
+    previousMap.set(event.id, {
+      ...event,
+      viewerId: activeViewerId,
+      createdAt,
+      ttl,
+    });
   }
 
   for (const [id, event] of previousMap.entries()) {
@@ -624,6 +630,70 @@ function mergePrivateCombatEvents(previousMap, incoming = [], viewerId, now = Da
   }
 
   return previousMap;
+}
+
+// Battle Royale is local, so it can create feedback directly from the changed
+// player object. Multiplayer normally uses reliable backend events, but this
+// fallback guarantees the exact same WebGL feedback even if one network event
+// arrives late or a volatile snapshot is skipped.
+function buildSelfCombatFallbackEvents(previous, current, viewerId, now, existingEvents) {
+  const activeViewerId = viewerId ? String(viewerId) : "";
+  if (!previous || !current || !activeViewerId) return [];
+
+  const hasRecent = (text) => {
+    for (const event of existingEvents?.values?.() || []) {
+      if (
+        String(event?.text || "") === text &&
+        now - Number(event?.createdAt || 0) < 650
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const events = [];
+  const add = (text, kind, offsetY = 0) => {
+    if (!text || hasRecent(text)) return;
+    events.push({
+      id: `local-combat-${now}-${events.length}-${Math.random().toString(36).slice(2, 8)}`,
+      viewerId: activeViewerId,
+      x: Number(current.x || previous.x || 0),
+      y: Number(current.y || previous.y || 0) + offsetY,
+      text,
+      kind,
+      side: events.length % 2 === 0 ? 1 : -1,
+      lane: events.length % 3,
+      createdAt: now,
+      ttl: 2000,
+    });
+  };
+
+  const hpDelta = Math.round(Number(current.hp || 0) - Number(previous.hp || 0));
+  const droneDelta = Math.round(Number(current.drones || 0) - Number(previous.drones || 0));
+  const energyDelta = Math.round(Number(current.energy || 0) - Number(previous.energy || 0));
+  const killsIncreased = Number(current.kills || 0) > Number(previous.kills || 0);
+  const moveDelta = Number(current.moveSpeedMultiplier || 1) - Number(previous.moveSpeedMultiplier || 1);
+  const attackSpeedDelta = Number(current.attackDroneSpeedMultiplier || 1) - Number(previous.attackDroneSpeedMultiplier || 1);
+
+  if (hpDelta < 0) add(`-${Math.abs(hpDelta)} HP`, "damage", -4);
+  if (droneDelta < 0) add(`-${Math.abs(droneDelta)} DRONE`, "drone-loss", -28);
+
+  const shieldWasBlocked =
+    Boolean(previous.shieldActive) &&
+    !current.shieldActive &&
+    Number(previous.shieldUntil || 0) > now &&
+    hpDelta === 0 &&
+    droneDelta === 0;
+  if (shieldWasBlocked) add("SHIELD BLOCKED", "shield", -18);
+
+  if (energyDelta > 0) add(`ENERGY +${energyDelta}`, "heal", -8);
+  if (killsIncreased && hpDelta > 0) add(`+${hpDelta} HP`, "heal", -4);
+  if (killsIncreased && droneDelta > 0) add(`+${droneDelta} DRONE`, "drone-reward", -28);
+  if (killsIncreased && moveDelta >= 0.1) add("+15% MOVE SPEED", "move-reward", -52);
+  if (killsIncreased && attackSpeedDelta >= 0.04) add("+5% ATTACK DRONE SPEED", "attack-reward", -76);
+
+  return events;
 }
 
 function cleanupHiddenCollected(hiddenMap, now) {
@@ -1080,6 +1150,9 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const lastConfirmedHpRef = useRef(null);
   const lastCollectionSeqRef = useRef(0);
   const combatEventMapRef = useRef(new Map());
+  // Last authoritative self snapshot. Used only as a client-side visual
+  // fallback, never for gameplay or damage decisions.
+  const selfCombatSnapshotRef = useRef(null);
 
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
   const joystickPointerRef = useRef(null);
@@ -1182,6 +1255,25 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         combatViewerId,
         wallNow,
       );
+
+      const fallbackCombatEvents = buildSelfCombatFallbackEvents(
+        selfCombatSnapshotRef.current,
+        state?.you,
+        combatViewerId,
+        wallNow,
+        combatEventMapRef.current,
+      );
+      if (state?.you) {
+        selfCombatSnapshotRef.current = { ...state.you };
+      }
+      if (fallbackCombatEvents.length > 0) {
+        combatEventMapRef.current = mergePrivateCombatEvents(
+          combatEventMapRef.current,
+          fallbackCombatEvents,
+          combatViewerId,
+          wallNow,
+        );
+      }
 
       cleanupHiddenCollected(hiddenOrbIdsRef.current, now);
       cleanupHiddenCollected(hiddenEnergyIdsRef.current, now);
@@ -1431,6 +1523,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       clearJoinRetry();
       combatEventMapRef.current.clear();
+      selfCombatSnapshotRef.current = null;
       socket.emit("normal-pvp:join", {
         userId: user?.isGuest ? null : user?.id,
         isGuest: Boolean(user?.isGuest),
@@ -1585,17 +1678,16 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const applyPrivateCombatEvent = (event) => {
       const viewerId = String(worldRef.current.you?.id || socket.id || "");
-      if (
-        !event?.id ||
-        !viewerId ||
-        String(event.viewerId || "") !== viewerId
-      ) {
-        return;
-      }
+      if (!event?.id || !viewerId) return;
+      const normalizedEvent = {
+        ...event,
+        viewerId: String(event.viewerId || viewerId),
+      };
+      if (normalizedEvent.viewerId !== viewerId) return;
 
       combatEventMapRef.current = mergePrivateCombatEvents(
         combatEventMapRef.current,
-        [event],
+        [normalizedEvent],
         viewerId,
         Date.now(),
       );
@@ -2109,7 +2201,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         combatEvents: (data.combatEvents || []).filter(
           (event) =>
             Boolean(data.you?.id || worldRef.current.you?.id) &&
-            event?.viewerId === (data.you?.id || worldRef.current.you?.id),
+            String(event?.viewerId || "") === String(data.you?.id || worldRef.current.you?.id || ""),
         ),
         combatViewerId: data.you?.id || worldRef.current.you?.id || null,
         combatEventsPrivate: true,
@@ -2121,7 +2213,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldWidth,
         worldHeight,
         // Exact same cached premium space theme already used in BattleRoyaleMode.
-        worldTheme: "battle-royale-pixel-terrain",
+        worldTheme: "premium-space-battle",
         safeZoneRadius: null,
         showZone: false,
         coreColorMap: coreColorMapRef.current,
@@ -2716,7 +2808,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         combatEvents={(renderData.combatEvents || []).filter(
           (event) =>
             Boolean(renderData.you?.id || worldRef.current.you?.id) &&
-            event?.viewerId === (renderData.you?.id || worldRef.current.you?.id),
+            String(event?.viewerId || "") === String(renderData.you?.id || worldRef.current.you?.id || ""),
         )}
         combatViewerId={renderData.you?.id || worldRef.current.you?.id || null}
         combatEventsPrivate
@@ -2733,7 +2825,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         forceLowQuality={graphicsQuality === "low" || isMobileControls}
         worldWidth={worldWidth}
         worldHeight={worldHeight}
-        worldTheme="battle-royale-pixel-terrain"
+        worldTheme="premium-space-battle"
         showZone={false}
       />
 
