@@ -57,6 +57,7 @@ const NORMAL_HIGH_POPULATION_THRESHOLD = 16;
 const NORMAL_CROWDED_ORB_TARGET = 24;
 const NORMAL_CROWDED_ORB_ADD_LIMIT = 12;
 const NORMAL_CROWDED_ORB_EXTRA_CAP = 30;
+const SPECTATOR_KILL_CREDIT_WINDOW_MS = 6000;
 const ROOM_START_COUNTDOWN_MS = 5000;
 const MAP_MIN_SIZE = Math.min(WORLD_WIDTH, WORLD_HEIGHT);
 const ZONE_START_RADIUS = MAP_MIN_SIZE * 0.47;
@@ -282,6 +283,12 @@ let GameGateway = class GameGateway {
             pendingInputSeq: 0,
             lastInputReceivedAt: Date.now(),
             lastDamageEventAt: 0,
+            killedById: null,
+            spectatorTargetId: null,
+            lastDamageById: null,
+            lastDamageAt: 0,
+            eliminatedAt: 0,
+            eliminationReason: null,
         };
         room.players.set(client.id, player);
         this.normalSocketRoom.set(client.id, room.id);
@@ -387,6 +394,12 @@ let GameGateway = class GameGateway {
             pendingInputSeq: 0,
             lastInputReceivedAt: Date.now(),
             lastDamageEventAt: 0,
+            killedById: null,
+            spectatorTargetId: null,
+            lastDamageById: null,
+            lastDamageAt: 0,
+            eliminatedAt: 0,
+            eliminationReason: null,
         };
         room.players.set(client.id, player);
         this.battleRoyaleOnlineSocketRoom.set(client.id, room.id);
@@ -480,6 +493,12 @@ let GameGateway = class GameGateway {
             pendingInputSeq: 0,
             lastInputReceivedAt: Date.now(),
             lastDamageEventAt: 0,
+            killedById: null,
+            spectatorTargetId: null,
+            lastDamageById: null,
+            lastDamageAt: 0,
+            eliminatedAt: 0,
+            eliminationReason: null,
         };
         room.players.set(client.id, player);
         this.zonePvpSocketRoom.set(client.id, room.id);
@@ -820,6 +839,84 @@ let GameGateway = class GameGateway {
             killer.attackCooldownMultiplier = killer.killStreak >= 5 ? 0.5 : 0.65;
         }
     }
+    getRecentKiller(room, victim, now = Date.now()) {
+        if (!room || !victim?.lastDamageById)
+            return null;
+        if (now - Number(victim.lastDamageAt || 0) > SPECTATOR_KILL_CREDIT_WINDOW_MS) {
+            return null;
+        }
+        const candidate = room.players.get(victim.lastDamageById);
+        return candidate && candidate.id !== victim.id && candidate.alive !== false
+            ? candidate
+            : null;
+    }
+    getStableSpectatorTarget(room, victim, preferred = null) {
+        if (!room || !victim)
+            return null;
+        const alive = [...room.players.values()]
+            .filter((player) => player.id !== victim.id && player.alive !== false)
+            .sort((a, b) => {
+            const aDistance = Math.hypot((a.x || 0) - (victim.x || 0), (a.y || 0) - (victim.y || 0));
+            const bDistance = Math.hypot((b.x || 0) - (victim.x || 0), (b.y || 0) - (victim.y || 0));
+            return aDistance - bDistance || String(a.id).localeCompare(String(b.id));
+        });
+        const isValid = (candidate) => candidate && candidate.id !== victim.id && candidate.alive !== false;
+        if (isValid(preferred))
+            return preferred;
+        const killer = victim.killedById ? room.players.get(victim.killedById) : null;
+        if (isValid(killer))
+            return killer;
+        const lockedTarget = victim.spectatorTargetId
+            ? room.players.get(victim.spectatorTargetId)
+            : null;
+        if (isValid(lockedTarget))
+            return lockedTarget;
+        return alive[0] || null;
+    }
+    eliminatePlayer(room, victim, killer = null, now = Date.now(), reason = "unknown", forceEmit = false) {
+        if (!room || !victim)
+            return null;
+        const wasAlive = victim.alive !== false || forceEmit;
+        const recentKiller = this.getRecentKiller(room, victim, now);
+        const validKiller = killer && killer.id !== victim.id && killer.alive !== false
+            ? killer
+            : recentKiller;
+        victim.alive = false;
+        victim.hp = 0;
+        victim.input = {};
+        victim.isMoving = false;
+        victim.moveX = 0;
+        victim.moveY = 0;
+        victim.knockbackX = 0;
+        victim.knockbackY = 0;
+        victim.killStreak = 0;
+        victim.rapidFireUntil = 0;
+        victim.attackCooldownMultiplier = 1;
+        victim.shieldActive = false;
+        victim.shieldUntil = 0;
+        victim.killedById = validKiller?.id || null;
+        victim.eliminatedAt = now;
+        victim.eliminationReason = reason;
+        const spectatorTarget = this.getStableSpectatorTarget(room, victim, validKiller);
+        victim.spectatorTargetId = spectatorTarget?.id || null;
+        victim.lastSeenAt = now;
+        if (wasAlive) {
+            const socket = this.server.sockets.sockets.get(victim.id);
+            if (socket) {
+                const prefix = this.getRoomEventPrefix(room);
+                socket.emit(`${prefix}:eliminated`, {
+                    serverTime: now,
+                    reason,
+                    you: this.serializePlayer(victim),
+                    spectatorTargetId: spectatorTarget?.id || null,
+                    spectatingPlayer: spectatorTarget
+                        ? this.serializePlayer(spectatorTarget)
+                        : null,
+                });
+            }
+        }
+        return spectatorTarget;
+    }
     getCollisionKey(a, b) {
         return a < b ? `${a}:${b}` : `${b}:${a}`;
     }
@@ -984,6 +1081,12 @@ let GameGateway = class GameGateway {
             this.addSmoothKnockback(a, -dirX, -dirY, outcome.push);
             this.addSmoothKnockback(b, dirX, dirY, outcome.push);
         }
+        if (aWasAlive && !a.alive) {
+            this.eliminatePlayer(room, a, b.alive !== false ? b : null, now, "collision", aWasAlive);
+        }
+        if (bWasAlive && !b.alive) {
+            this.eliminatePlayer(room, b, a.alive !== false ? a : null, now, "collision", bWasAlive);
+        }
         if (aWasAlive && !a.alive && b.alive)
             this.applyKillReward(b);
         if (bWasAlive && !b.alive && a.alive)
@@ -1067,20 +1170,15 @@ let GameGateway = class GameGateway {
                 const damageBlocked = target.shieldActive && !projectile.shieldBreaker;
                 if (!damageBlocked) {
                     target.hp = Math.max(0, target.hp - projectile.damage);
+                    if (owner && owner.id !== target.id) {
+                        target.lastDamageById = owner.id;
+                        target.lastDamageAt = now;
+                    }
                     if (owner && owner.vampireUntil && owner.vampireUntil > now) {
                         owner.hp = Math.min(owner.maxHp, owner.hp + Math.floor(projectile.damage * VAMPIRE_HEAL_RATIO));
                     }
                     if (target.hp <= 0) {
-                        target.alive = false;
-                        target.input = {};
-                        target.killStreak = 0;
-                        target.rapidFireUntil = 0;
-                        target.attackCooldownMultiplier = 1;
-                        target.shieldActive = false;
-                        target.shieldUntil = 0;
-                        target.killedById = owner?.id || null;
-                        target.spectatorTargetId =
-                            owner?.alive !== false ? owner?.id || null : null;
+                        this.eliminatePlayer(room, target, owner, now, "projectile");
                         if (owner) {
                             this.applyKillReward(owner);
                         }
@@ -1110,13 +1208,7 @@ let GameGateway = class GameGateway {
             player.lastZoneDamageAt = now;
             player.hp = Math.max(0, player.hp - ZONE_DAMAGE);
             if (player.hp <= 0) {
-                player.alive = false;
-                player.input = {};
-                player.killStreak = 0;
-                player.rapidFireUntil = 0;
-                player.attackCooldownMultiplier = 1;
-                player.shieldActive = false;
-                player.shieldUntil = 0;
+                this.eliminatePlayer(room, player, this.getRecentKiller(room, player, now), now, "zone");
             }
         }
     }
@@ -1134,15 +1226,7 @@ let GameGateway = class GameGateway {
             player.lastZoneDamageAt = now;
             player.hp = Math.max(0, player.hp - BR_ONLINE_ZONE_DAMAGE);
             if (player.hp <= 0) {
-                player.alive = false;
-                player.input = {};
-                player.killStreak = 0;
-                player.rapidFireUntil = 0;
-                player.attackCooldownMultiplier = 1;
-                player.shieldActive = false;
-                player.shieldUntil = 0;
-                player.killedById = null;
-                player.spectatorTargetId = null;
+                this.eliminatePlayer(room, player, this.getRecentKiller(room, player, now), now, "zone");
             }
         }
     }
@@ -1160,15 +1244,7 @@ let GameGateway = class GameGateway {
             player.lastZoneDamageAt = now;
             player.hp = Math.max(0, player.hp - ZONE_PVP_ZONE_DAMAGE);
             if (player.hp <= 0) {
-                player.alive = false;
-                player.input = {};
-                player.killStreak = 0;
-                player.rapidFireUntil = 0;
-                player.attackCooldownMultiplier = 1;
-                player.shieldActive = false;
-                player.shieldUntil = 0;
-                player.killedById = null;
-                player.spectatorTargetId = null;
+                this.eliminatePlayer(room, player, this.getRecentKiller(room, player, now), now, "zone");
             }
         }
     }
@@ -1618,6 +1694,10 @@ let GameGateway = class GameGateway {
             killAttackSpeedMultiplier: player.killAttackSpeedMultiplier || 1,
             skin: player.skin,
             alive: player.alive,
+            killedById: player.killedById || null,
+            spectatorTargetId: player.spectatorTargetId || null,
+            eliminatedAt: player.eliminatedAt || 0,
+            eliminationReason: player.eliminationReason || null,
             attacking: Boolean(player.input?.attacking),
             shieldActive: Boolean(player.shieldActive),
             mouseX: player.input?.mouseX || player.x,
@@ -1699,7 +1779,7 @@ let GameGateway = class GameGateway {
     cleanupNormalRoom(room, now) {
         for (const player of room.players.values()) {
             const socketOnline = this.server.sockets.sockets.has(player.id);
-            if (!socketOnline || now - player.lastSeenAt > 30000) {
+            if (!socketOnline || (player.alive !== false && now - player.lastSeenAt > 30000)) {
                 this.removeNormalPlayer(player.id);
             }
         }
@@ -1787,20 +1867,10 @@ let GameGateway = class GameGateway {
             if (!socket)
                 continue;
             const aliveOtherPlayers = aliveOthers.filter((other) => other.id !== player.id);
-            let spectatorTarget = null;
+            const spectatorTarget = player.alive === false
+                ? this.getStableSpectatorTarget(room, player)
+                : null;
             if (player.alive === false) {
-                spectatorTarget = player.killedById
-                    ? aliveOtherPlayers.find((other) => other.id === player.killedById) ||
-                        null
-                    : null;
-                if (!spectatorTarget && player.spectatorTargetId) {
-                    spectatorTarget =
-                        aliveOtherPlayers.find((other) => other.id === player.spectatorTargetId) || null;
-                }
-                if (!spectatorTarget && aliveOtherPlayers.length > 0) {
-                    spectatorTarget =
-                        aliveOtherPlayers[Math.floor(Math.random() * aliveOtherPlayers.length)];
-                }
                 player.spectatorTargetId = spectatorTarget?.id || null;
             }
             else {
@@ -1994,19 +2064,10 @@ let GameGateway = class GameGateway {
             if (!socket)
                 continue;
             const aliveOthers = players.filter((other) => other.id !== player.id && other.alive !== false);
-            let spectatorTarget = null;
+            const spectatorTarget = player.alive === false
+                ? this.getStableSpectatorTarget(room, player)
+                : null;
             if (player.alive === false) {
-                spectatorTarget = player.killedById
-                    ? aliveOthers.find((other) => other.id === player.killedById) || null
-                    : null;
-                if (!spectatorTarget && player.spectatorTargetId) {
-                    spectatorTarget =
-                        aliveOthers.find((other) => other.id === player.spectatorTargetId) || null;
-                }
-                if (!spectatorTarget && aliveOthers.length > 0) {
-                    spectatorTarget =
-                        aliveOthers[Math.floor(Math.random() * aliveOthers.length)];
-                }
                 player.spectatorTargetId = spectatorTarget?.id || null;
             }
             else {
@@ -2116,7 +2177,7 @@ let GameGateway = class GameGateway {
     cleanupZonePvpRoom(room, now) {
         for (const player of room.players.values()) {
             const socketOnline = this.server.sockets.sockets.has(player.id);
-            if (!socketOnline || now - player.lastSeenAt > 30000) {
+            if (!socketOnline || (player.alive !== false && now - player.lastSeenAt > 30000)) {
                 this.removeZonePvpPlayer(player.id);
             }
         }
@@ -2201,19 +2262,10 @@ let GameGateway = class GameGateway {
             if (!socket)
                 continue;
             const aliveOthers = players.filter((other) => other.id !== player.id && other.alive !== false);
-            let spectatorTarget = null;
+            const spectatorTarget = player.alive === false
+                ? this.getStableSpectatorTarget(room, player)
+                : null;
             if (player.alive === false) {
-                spectatorTarget = player.killedById
-                    ? aliveOthers.find((other) => other.id === player.killedById) || null
-                    : null;
-                if (!spectatorTarget && player.spectatorTargetId) {
-                    spectatorTarget =
-                        aliveOthers.find((other) => other.id === player.spectatorTargetId) || null;
-                }
-                if (!spectatorTarget && aliveOthers.length > 0) {
-                    spectatorTarget =
-                        aliveOthers[Math.floor(Math.random() * aliveOthers.length)];
-                }
                 player.spectatorTargetId = spectatorTarget?.id || null;
             }
             else {

@@ -60,9 +60,13 @@ const INPUT_HEARTBEAT_MS = 240;
 const SNAPSHOT_INTERPOLATION_DELAY_MS = 70;
 const SNAPSHOT_BUFFER_TTL_MS = 520;
 
-// PvP camera follows Battle Royale formula, but is intentionally a little
-// farther out on phones so more of the combat space is visible.
-const PVP_DESKTOP_CAMERA_SCALE = 0.72;
+// Keep PvP desktop framing exactly locked to BattleRoyaleMode.
+// BattleRoyaleMode uses 0.72 on desktop; do not change only one mode or the
+// perceived camera height will differ between PvE and PvP.
+const BATTLE_ROYALE_DESKTOP_CAMERA_SCALE = 0.72;
+const PVP_DESKTOP_CAMERA_SCALE = BATTLE_ROYALE_DESKTOP_CAMERA_SCALE;
+
+// Mobile remains intentionally farther out so controls do not hide the fight.
 const PVP_MOBILE_CAMERA_SCALE = 0.82;
 const MAX_PENDING_INPUTS = 90;
 
@@ -985,8 +989,47 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       setConnectionError("Nu ma pot conecta la serverul PvP. Verifica Render/WebSocket.");
     });
 
+    // Reliable elimination event: lock the spectator camera onto the killer
+    // immediately instead of waiting for the next volatile world snapshot.
+    const applyEliminated = (event) => {
+      if (!event?.you) return;
+
+      const now = performance.now();
+      const eliminatedYou = {
+        ...(predictedYouRef.current || worldRef.current.you || {}),
+        ...event.you,
+        alive: false,
+      };
+      const target =
+        event.spectatingPlayer?.alive !== false
+          ? { ...event.spectatingPlayer, __seenAt: now }
+          : null;
+
+      predictedYouRef.current = eliminatedYou;
+      spectatorTargetRef.current = target;
+      keysRef.current = {};
+      mobileMoveRef.current = { x: 0, y: 0, active: false };
+      mobileJoystickActiveRef.current = false;
+      setMobileAttackActive(false);
+      setMobileShieldActive(false);
+
+      worldRef.current = {
+        ...worldRef.current,
+        you: eliminatedYou,
+        spectatorTargetId: event.spectatorTargetId || target?.id || null,
+        spectatingPlayer: target,
+      };
+
+      setHudData({
+        ...worldRef.current,
+        you: eliminatedYou,
+        fps: fpsRef.current.value,
+      });
+    };
+
     socket.on("zone-pvp:joined", applyState);
     socket.on("zone-pvp:state", applyState);
+    socket.on("zone-pvp:eliminated", applyEliminated);
     socket.on("zone-pvp:error", (message) => setConnectionError(typeof message === "string" ? message : "Eroare Zone PvP."));
 
     const sendInputNow = (force = false) => {
@@ -997,6 +1040,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       if (!force && elapsed < INPUT_SEND_INTERVAL_MS) return;
 
       const you = predictedYouRef.current || worldRef.current.you;
+      // Once eliminated this client only receives spectator snapshots; do not
+      // send stale movement input that could compete with the camera state.
+      if (you?.alive === false) return;
       const mouse = mouseRef.current;
       const mouseWorldX = you ? you.x + (mouse.x - window.innerWidth / 2) : 0;
       const mouseWorldY = you ? you.y + (mouse.y - window.innerHeight / 2) : 0;
@@ -1732,9 +1778,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
   const cameraSubject = isDead ? (spectatorTarget || you) : you;
 
-  // CAMERA / ZOOM - identic cu BattleRoyaleMode:
-  // Desktop/laptop: 0.72 = vezi harta mai de sus.
-  // Telefon/tableta touch: 1 = ramane aproape pentru controale si lizibilitate.
+  // CAMERA / ZOOM - exactly the BattleRoyaleMode desktop framing.
+  // Desktop: 0.72; mobile keeps its dedicated 0.82 combat framing.
   const cameraScale = isMobileControls ? PVP_MOBILE_CAMERA_SCALE : PVP_DESKTOP_CAMERA_SCALE;
 
   const cameraX = cameraSubject ? viewport.width / 2 - cameraSubject.x * cameraScale : 0;

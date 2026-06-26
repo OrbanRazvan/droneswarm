@@ -35,6 +35,9 @@ export declare class GameGateway {
     getNextDroneAt(currentDrones?: number): number;
     resetDroneProgress(player: any): void;
     applyKillReward(killer: any): void;
+    getRecentKiller(room: any, victim: any, now?: number): any;
+    getStableSpectatorTarget(room: any, victim: any, preferred?: any): any;
+    eliminatePlayer(room: any, victim: any, killer?: any, now?: number, reason?: string, forceEmit?: boolean): any;
     getCollisionKey(a: any, b: any): string;
     getBodyCollisionOutcome(a: any, b: any): {
         aHpDamage: number;
@@ -93,6 +96,10 @@ export declare class GameGateway {
         killAttackSpeedMultiplier: any;
         skin: any;
         alive: any;
+        killedById: any;
+        spectatorTargetId: any;
+        eliminatedAt: any;
+        eliminationReason: any;
         attacking: boolean;
         shieldActive: boolean;
         mouseX: any;

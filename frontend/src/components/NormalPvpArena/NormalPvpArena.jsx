@@ -85,9 +85,13 @@ const INPUT_HEARTBEAT_MS = 240;
 const SNAPSHOT_INTERPOLATION_DELAY_MS = 70;
 const SNAPSHOT_BUFFER_TTL_MS = 520;
 
-// PvP camera follows Battle Royale formula, but is intentionally a little
-// farther out on phones so more of the combat space is visible.
-const PVP_DESKTOP_CAMERA_SCALE = 0.72;
+// Keep PvP desktop framing exactly locked to BattleRoyaleMode.
+// BattleRoyaleMode uses 0.72 on desktop; do not change only one mode or the
+// perceived camera height will differ between PvE and PvP.
+const BATTLE_ROYALE_DESKTOP_CAMERA_SCALE = 0.72;
+const PVP_DESKTOP_CAMERA_SCALE = BATTLE_ROYALE_DESKTOP_CAMERA_SCALE;
+
+// Mobile remains intentionally farther out so controls do not hide the fight.
 const PVP_MOBILE_CAMERA_SCALE = 0.82;
 
 const MAX_VISIBLE_REMOTE_PLAYERS = 60;
@@ -1442,8 +1446,47 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
     };
 
+    // Sent reliably by the server at the exact death tick. This prevents a
+    // one-snapshot delay before the camera begins following the killer.
+    const applyEliminated = (event) => {
+      if (!event?.you) return;
+
+      const now = performance.now();
+      const eliminatedYou = {
+        ...(predictedYouRef.current || worldRef.current.you || {}),
+        ...event.you,
+        alive: false,
+      };
+      const target =
+        event.spectatingPlayer?.alive !== false
+          ? { ...event.spectatingPlayer, __seenAt: now }
+          : null;
+
+      predictedYouRef.current = eliminatedYou;
+      spectatorTargetRef.current = target;
+      keysRef.current = {};
+      mobileMoveRef.current = { x: 0, y: 0, active: false };
+      mobileJoystickActiveRef.current = false;
+      setMobileAttackActive(false);
+      setMobileShieldActive(false);
+
+      worldRef.current = {
+        ...worldRef.current,
+        you: eliminatedYou,
+        spectatorTargetId: event.spectatorTargetId || target?.id || null,
+        spectatingPlayer: target,
+      };
+
+      setHudData({
+        ...worldRef.current,
+        you: eliminatedYou,
+        fps: fpsRef.current.value,
+      });
+    };
+
     socket.on("normal-pvp:joined", applyState);
     socket.on("normal-pvp:state", applyState);
+    socket.on("normal-pvp:eliminated", applyEliminated);
     socket.on("normal-pvp:collect", applyCollectSync);
     socket.on("normal-pvp:error", (message) =>
       setConnectionError(
@@ -1464,6 +1507,9 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       if (!force && elapsed < minInterval) return;
 
       const you = predictedYouRef.current || worldRef.current.you;
+      // A dead player is a spectator. Do not keep sending stale movement
+      // packets while their camera follows the killer.
+      if (you?.alive === false) return;
       const mouse = mouseRef.current;
       const mouseWorldX = you ? you.x + (mouse.x - window.innerWidth / 2) : 0;
       const mouseWorldY = you ? you.y + (mouse.y - window.innerHeight / 2) : 0;
@@ -2362,9 +2408,8 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
   const cameraSubject = isDead ? spectatorTarget || you : you;
 
-  // CAMERA / ZOOM - identic cu BattleRoyaleMode:
-  // Desktop/laptop: 0.72 = vezi harta mai de sus.
-  // Telefon/tableta touch: 1 = ramane aproape pentru controale si lizibilitate.
+  // CAMERA / ZOOM - exactly the BattleRoyaleMode desktop framing.
+  // Desktop: 0.72; mobile keeps its dedicated 0.82 combat framing.
   const cameraScale = isMobileControls
     ? PVP_MOBILE_CAMERA_SCALE
     : PVP_DESKTOP_CAMERA_SCALE;

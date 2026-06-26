@@ -419,17 +419,6 @@ function createCoreContext(color) {
   return ctx;
 }
 
-function createProjectileContext(colors) {
-  const [primary, secondary, dark, highlight] = colors;
-  const ctx = new PIXI.GraphicsContext();
-  ctx.moveTo(-26, 0).lineTo(15, 0).stroke({ color: primary, width: 6, alpha: 0.28 });
-  ctx.circle(0, 0, 16).fill({ color: dark, alpha: 1 });
-  ctx.circle(0, 0, 13).fill({ color: primary, alpha: 1 });
-  ctx.circle(-4, -5, 5).fill({ color: secondary, alpha: 0.78 });
-  ctx.circle(-5, -6, 2.5).fill({ color: highlight, alpha: 0.9 });
-  return ctx;
-}
-
 function createShieldShellContext(colors) {
   const [primary, secondary] = colors;
   const ctx = new PIXI.GraphicsContext();
@@ -603,8 +592,23 @@ function createSimpleVisual(resources) {
 }
 
 function createProjectileVisual(resources) {
-  const root = new PIXI.Graphics(resources.projectileContexts.cyan);
-  return { root, skin: "cyan", lastSeenAt: 0 };
+  // Attack drones deliberately reuse the *same* shared mini-drone geometry
+  // as the drones orbiting a carrier. This keeps the visual language identical
+  // in every mode while still being a single pooled WebGL object per projectile.
+  const root = new PIXI.Container();
+  root.eventMode = "none";
+
+  const body = new PIXI.Graphics(resources.miniContexts.cyan);
+  body.eventMode = "none";
+  root.addChild(body);
+
+  return {
+    root,
+    body,
+    skin: "cyan",
+    flightSeed: Math.random() * Math.PI * 2,
+    lastSeenAt: 0,
+  };
 }
 
 function createStaticVisual(context) {
@@ -819,12 +823,25 @@ function updateProjectileVisual(visual, projectile, resources, now) {
   const skin = normalizeSkin(projectile.skin);
   if (visual.skin !== skin) {
     visual.skin = skin;
-    visual.root.context = resources.projectileContexts[skin] || resources.projectileContexts.cyan;
+    visual.body.context = resources.miniContexts[skin] || resources.miniContexts.cyan;
   }
+
+  const heading = Number(
+    projectile.angle ??
+      Math.atan2(Number(projectile.vy || 0), Number(projectile.vx || 1)),
+  );
+
+  // Mini drone artwork faces up in local space; add 90° so its nose points
+  // precisely along its real flight vector (angle 0 = moving right).
+  const flightScale = projectile.pierceLeft > 1 ? 1.24 : 1.12;
+  const hover = Math.sin(now * 0.018 + visual.flightSeed) * 0.7;
+
   visual.root.visible = true;
   visual.root.position.set(Number(projectile.x || 0), Number(projectile.y || 0));
-  visual.root.rotation = Number(projectile.angle ?? Math.atan2(Number(projectile.vy || 0), Number(projectile.vx || 1)));
-  visual.root.alpha = projectile.localOnly ? 0.88 : 1;
+  visual.root.rotation = heading + Math.PI * 0.5;
+  visual.root.scale.set(flightScale);
+  visual.root.alpha = projectile.localOnly ? 0.9 : 1;
+  visual.body.position.set(0, hover);
   visual.lastSeenAt = now;
 }
 
@@ -891,7 +908,6 @@ function syncProjectilePool({ pool, source, resources, parent, bounds, max, now 
 function createResources(coreTypes = []) {
   const droneContexts = {};
   const miniContexts = {};
-  const projectileContexts = {};
   const simpleContexts = {};
   const rotorSpinContexts = {};
   const shieldShellContexts = {};
@@ -902,7 +918,6 @@ function createResources(coreTypes = []) {
   Object.entries(SKIN_THEMES).forEach(([skin, colors]) => {
     droneContexts[skin] = createDroneContext(colors);
     miniContexts[skin] = createMiniDroneContext(colors);
-    projectileContexts[skin] = createProjectileContext(colors);
     rotorSpinContexts[skin] = createRotorSpinContext(colors);
     shieldShellContexts[skin] = createShieldShellContext(colors);
     shieldRingContexts[skin] = createShieldRingContext(colors);
@@ -922,7 +937,6 @@ function createResources(coreTypes = []) {
   return {
     droneContexts,
     miniContexts,
-    projectileContexts,
     simpleContexts,
     rotorSpinContexts,
     shieldShellContexts,
