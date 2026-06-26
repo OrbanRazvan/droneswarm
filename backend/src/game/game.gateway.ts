@@ -101,6 +101,13 @@ const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
 const ZONE_STATE_INTERVAL_MS = 25; // 40 Hz in small PvP rooms
 const ZONE_STATE_INTERVAL_CROWDED_MS = 33; // 30 Hz at 12+ players
 const ZONE_STATE_INTERVAL_HEAVY_MS = 50; // 20 Hz at 28+ players
+
+// Zone PvP keeps full snapshots compact, then sends a tiny transform-only
+// stream for nearby opponents. This decouples smooth remote motion from the
+// slower sender's render/input cadence and from heavier loot/HUD payloads.
+const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 20; // 50 Hz in small matches
+const ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS = 33; // 30 Hz at 12+ players
+const ZONE_MOVEMENT_STREAM_MAX_PLAYERS = 12;
 const STATIC_STATE_INTERVAL_MS = 500; // minimap + leaderboard
 const VIEWPORT_ITEM_STATE_INTERVAL_MS = 125; // static nearby loot, per player
 const PVP_CROWDED_STATE_THRESHOLD = 12;
@@ -1381,6 +1388,27 @@ export class GameGateway {
         ) {
           room.lastBroadcastAt = now;
           this.broadcastZonePvpRoomState(room, now);
+        }
+
+        // The transform stream is intentionally enabled only in small matches.
+        // In 1v1 / small lobbies it gives a good receiver 50 Hz remote motion;
+        // larger rooms keep the existing adaptive snapshot budget.
+        if (
+          room.status === "playing" &&
+          room.players.size <= ZONE_MOVEMENT_STREAM_MAX_PLAYERS
+        ) {
+          const movementInterval =
+            room.players.size >= PVP_CROWDED_STATE_THRESHOLD
+              ? ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS
+              : ZONE_MOVEMENT_STREAM_INTERVAL_MS;
+
+          if (
+            !room.lastMovementBroadcastAt ||
+            now - room.lastMovementBroadcastAt >= movementInterval
+          ) {
+            room.lastMovementBroadcastAt = now;
+            this.broadcastZonePvpMovement(room, now);
+          }
         }
 
         this.cleanupZonePvpRoom(room, now);
@@ -3587,6 +3615,61 @@ export class GameGateway {
     const elapsed = Math.max(0, Date.now() - room.matchStartedAt);
     const progress = Math.min(1, elapsed / ZONE_PVP_ZONE_SHRINK_DURATION);
     return ZONE_START_RADIUS + (ZONE_END_RADIUS - ZONE_START_RADIUS) * progress;
+  }
+
+  private serializeZonePvpMovement(player: any) {
+    return {
+      id: player.id,
+      x: Math.round(Number(player.x || 0)),
+      y: Math.round(Number(player.y || 0)),
+      moveX: Number(player.moveX || 0),
+      moveY: Number(player.moveY || 0),
+      velocityX: Number(player.velocityX || 0),
+      velocityY: Number(player.velocityY || 0),
+      moveAngle: Number(player.moveAngle || 0),
+      isMoving: Boolean(player.isMoving),
+      attacking: Boolean(player.input?.attacking),
+      shieldActive: Boolean(player.shieldActive),
+      alive: player.alive !== false,
+    };
+  }
+
+  private broadcastZonePvpMovement(room: any, now: number) {
+    if (!room?.zonePvpMode || room.status !== "playing") return;
+
+    const players = [...room.players.values()];
+    for (const viewer of players) {
+      const socket = this.server.sockets.sockets.get(viewer.id);
+      if (!socket) continue;
+
+      const spectatorTarget =
+        viewer.alive === false
+          ? this.getStableSpectatorTarget(room, viewer)
+          : null;
+      const viewAnchor = spectatorTarget || viewer;
+      const range = viewer.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE;
+
+      const movementPlayers = players
+        .filter(
+          (other) =>
+            other.id !== viewer.id &&
+            (viewer.alive !== false || other.alive !== false) &&
+            this.isNear(viewAnchor, other, range),
+        )
+        .slice(0, ZONE_PVP_VISIBLE_PLAYERS_LIMIT)
+        .map((other) => this.serializeZonePvpMovement(other));
+
+      // Volatile is correct for transforms: when a packet is skipped, the next
+      // packet supersedes it. It prevents stale queueing and keeps latency low.
+      socket.volatile.emit("zone-pvp:movement", {
+        serverNow: now,
+        roomId: room.id,
+        roundId: room.roundId || null,
+        phaseVersion: Number(room.phaseVersion || 0),
+        status: room.status,
+        players: movementPlayers,
+      });
+    }
   }
 
   broadcastZonePvpRoomState(room, now, reliable = false) {

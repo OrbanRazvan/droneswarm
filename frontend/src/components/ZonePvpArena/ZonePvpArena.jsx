@@ -34,7 +34,7 @@ const SELF_IDLE_FREEZE_DISTANCE = 360;
 const REMOTE_SMOOTHING = 24;
 const REMOTE_PREDICTION = 1.0;
 const REMOTE_HARD_SNAP_DISTANCE = 360;
-const REMOTE_MAX_EXTRAPOLATE_MS = 125;
+const REMOTE_MAX_EXTRAPOLATE_MS = 240;
 
 const PROJECTILE_SMOOTHING = 18;
 const PROJECTILE_FRAME_SCALE = 60;
@@ -61,7 +61,7 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 // Client-side prediction + server reconciliation + remote snapshot buffer.
 const INPUT_SEND_INTERVAL_MS = 20;
 const INPUT_HEARTBEAT_MS = 240;
-const SNAPSHOT_INTERPOLATION_DELAY_MS = 85;
+const SNAPSHOT_INTERPOLATION_DELAY_MS = 48;
 const SNAPSHOT_BUFFER_TTL_MS = 520;
 
 // Keep PvP desktop framing exactly locked to BattleRoyaleMode.
@@ -308,14 +308,50 @@ function mergeStableItems(previousMap, incoming = [], now, ttlMs) {
 function mergePrivateCombatEvents(previousMap, incoming = [], viewerId, now = Date.now()) {
   const activeViewerId = viewerId ? String(viewerId) : "";
 
-  for (const event of incoming || []) {
-    if (!event?.id || !activeViewerId || String(event.viewerId || "") !== activeViewerId) {
-      continue;
+  const hasEquivalentRecentEvent = (candidate) => {
+    const candidateText = String(candidate?.text || "");
+    const candidateKind = String(candidate?.kind || "");
+    const candidateAt = Number(candidate?.createdAt || now);
+
+    for (const existing of previousMap.values()) {
+      if (String(existing?.viewerId || activeViewerId) !== activeViewerId) continue;
+      if (String(existing?.text || "") !== candidateText) continue;
+      if (String(existing?.kind || "") !== candidateKind) continue;
+
+      const existingAt = Number(existing?.createdAt || now);
+      // A reliable combat event and its client-side fallback can arrive in
+      // either order. Treat them as one visual event when they describe the
+      // same action within this short network window.
+      if (Math.abs(candidateAt - existingAt) <= 900) return true;
     }
+
+    return false;
+  };
+
+  for (const event of incoming || []) {
+    if (!event?.id || !activeViewerId) continue;
+    const eventViewerId = String(event.viewerId || activeViewerId);
+    if (eventViewerId !== activeViewerId) continue;
+
     const createdAt = Number(event.createdAt || now);
     const ttl = Math.max(300, Number(event.ttl || 2000));
     if (now - createdAt >= ttl) continue;
-    previousMap.set(event.id, { ...event, createdAt, ttl });
+
+    const normalized = {
+      ...event,
+      viewerId: activeViewerId,
+      createdAt,
+      ttl,
+    };
+
+    // Snapshot copies keep the same id and are naturally deduplicated by the
+    // map. Fallback events use another id, so dedupe their semantic duplicate
+    // before adding it.
+    if (!previousMap.has(normalized.id) && hasEquivalentRecentEvent(normalized)) {
+      continue;
+    }
+
+    previousMap.set(normalized.id, normalized);
   }
 
   for (const [id, event] of previousMap.entries()) {
@@ -327,10 +363,6 @@ function mergePrivateCombatEvents(previousMap, incoming = [], viewerId, now = Da
   return previousMap;
 }
 
-
-// Multiplayer combat events normally arrive on a reliable private socket channel.
-// This local fallback mirrors BattleRoyaleMode feedback if a snapshot arrives first
-// or an event is delayed, without showing events belonging to another player.
 function buildSelfCombatFallbackEvents(previous, current, viewerId, now, existingEvents) {
   const activeViewerId = viewerId ? String(viewerId) : "";
   if (!previous || !current || !activeViewerId) return [];
@@ -382,7 +414,9 @@ function buildSelfCombatFallbackEvents(previous, current, viewerId, now, existin
     droneDelta === 0;
   if (shieldWasBlocked) add("SHIELD BLOCKED", "shield", -18);
 
-  if (energyDelta > 0) add(`ENERGY +${energyDelta}`, "heal", -8);
+  // Energy-cell feedback is emitted by the backend through the reliable
+  // `*:combat` socket event. Do not synthesize it again from the following
+  // state snapshot, otherwise a single pickup is rendered twice.
   if (killsIncreased && hpDelta > 0) add(`+${hpDelta} HP`, "heal", -4);
   if (killsIncreased && droneDelta > 0) add(`+${droneDelta} DRONE`, "drone-reward", -28);
   if (killsIncreased && moveDelta >= 0.1) add("+15% MOVE SPEED", "move-reward", -52);
@@ -738,6 +772,36 @@ function extrapolateRemoteSnapshot(snapshot, aheadMs = 0) {
     x: Number(snapshot.x || 0) + velocityX * seconds,
     y: Number(snapshot.y || 0) + velocityY * seconds,
   };
+}
+
+function appendRemoteSnapshot(buffer = [], snapshot, receivedAt, serverNow = 0) {
+  if (!snapshot?.id) return buffer;
+
+  const previous = buffer[buffer.length - 1] || null;
+  const incomingServerAt = Number(
+    snapshot?.__serverAt || snapshot?.serverTime || serverNow || 0,
+  );
+  const previousServerAt = Number(previous?.__serverAt || 0);
+
+  // Socket.IO volatile packets can be dropped and occasionally arrive after a
+  // newer movement packet. Never let an older server position pull a remote
+  // drone backward on a fast receiver.
+  if (incomingServerAt > 0 && previousServerAt > 0 && incomingServerAt < previousServerAt) {
+    return buffer;
+  }
+
+  const merged = {
+    ...(previous || {}),
+    ...snapshot,
+    __receivedAt: receivedAt,
+    __serverAt: incomingServerAt || previousServerAt || 0,
+  };
+
+  const next = [...buffer, merged].filter(
+    (entry) => receivedAt - Number(entry?.__receivedAt || receivedAt) <= SNAPSHOT_BUFFER_TTL_MS,
+  );
+
+  return next.slice(-24);
 }
 
 function interpolateSnapshotBuffer(buffer = [], renderTime) {
@@ -1201,15 +1265,15 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const snapshotsById = remoteSnapshotBufferRef.current;
       const incomingForSnapshots = Array.isArray(state.players) ? state.players : [];
       const activeRemoteIds = new Set();
+      const snapshotServerNow = Number(state?.serverNow || 0);
       incomingForSnapshots.forEach((player) => {
         if (!player?.id) return;
         activeRemoteIds.add(player.id);
         const oldBuffer = snapshotsById.get(player.id) || [];
-        const nextBuffer = [
-          ...oldBuffer,
-          { ...player, __receivedAt: now },
-        ].filter((snapshot) => now - (snapshot.__receivedAt || now) <= SNAPSHOT_BUFFER_TTL_MS);
-        snapshotsById.set(player.id, nextBuffer.slice(-12));
+        snapshotsById.set(
+          player.id,
+          appendRemoteSnapshot(oldBuffer, player, now, snapshotServerNow),
+        );
       });
 
       for (const id of snapshotsById.keys()) {
@@ -1297,6 +1361,30 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       });
     };
 
+    // Lightweight movement stream: the backend sends only transform data at a
+    // higher cadence than the full PvP snapshot. This keeps a player using a
+    // slower laptop visually fluid on a stronger receiver without increasing
+    // the cost of HUD, loot or minimap replication.
+    const applyMovementFrame = (packet = {}) => {
+      const currentRoomId = String(zonePhaseRef.current?.roomId || "");
+      const packetRoomId = String(packet?.roomId || "");
+      if (currentRoomId && packetRoomId && currentRoomId !== packetRoomId) return;
+      if (packet?.status && packet.status !== "playing") return;
+
+      const now = performance.now();
+      const serverNow = Number(packet?.serverNow || 0);
+      const snapshotsById = remoteSnapshotBufferRef.current;
+
+      for (const movement of packet?.players || []) {
+        if (!movement?.id) continue;
+        const oldBuffer = snapshotsById.get(movement.id) || [];
+        snapshotsById.set(
+          movement.id,
+          appendRemoteSnapshot(oldBuffer, movement, now, serverNow),
+        );
+      }
+    };
+
     const applyPrivateCombatEvent = (event) => {
       const viewerId = String(worldRef.current.you?.id || socket.id || "");
       if (!event?.id || !viewerId) return;
@@ -1333,6 +1421,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     socket.on("zone-pvp:joined", applyState);
     socket.on("zone-pvp:state", applyState);
+    socket.on("zone-pvp:movement", applyMovementFrame);
     socket.on("zone-pvp:combat", applyPrivateCombatEvent);
     socket.on("zone-pvp:eliminated", applyEliminated);
     socket.on("zone-pvp:error", (message) => setConnectionError(typeof message === "string" ? message : "Eroare Zone PvP."));
@@ -1411,6 +1500,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       window.clearInterval(inputTimer);
       window.clearInterval(hudTimer);
       socket.off("connect", handleConnect);
+      socket.off("zone-pvp:movement", applyMovementFrame);
       socket.off("zone-pvp:combat", applyPrivateCombatEvent);
       socket.emit("zone-pvp:leave");
       socket.disconnect();

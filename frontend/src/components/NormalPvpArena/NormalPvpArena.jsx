@@ -607,6 +607,26 @@ function mergeStableItems(previousMap, incoming = [], now, ttlMs) {
 function mergePrivateCombatEvents(previousMap, incoming = [], viewerId, now = Date.now()) {
   const activeViewerId = viewerId ? String(viewerId) : "";
 
+  const hasEquivalentRecentEvent = (candidate) => {
+    const candidateText = String(candidate?.text || "");
+    const candidateKind = String(candidate?.kind || "");
+    const candidateAt = Number(candidate?.createdAt || now);
+
+    for (const existing of previousMap.values()) {
+      if (String(existing?.viewerId || activeViewerId) !== activeViewerId) continue;
+      if (String(existing?.text || "") !== candidateText) continue;
+      if (String(existing?.kind || "") !== candidateKind) continue;
+
+      const existingAt = Number(existing?.createdAt || now);
+      // A reliable combat event and its client-side fallback can arrive in
+      // either order. Treat them as one visual event when they describe the
+      // same action within this short network window.
+      if (Math.abs(candidateAt - existingAt) <= 900) return true;
+    }
+
+    return false;
+  };
+
   for (const event of incoming || []) {
     if (!event?.id || !activeViewerId) continue;
     const eventViewerId = String(event.viewerId || activeViewerId);
@@ -615,12 +635,22 @@ function mergePrivateCombatEvents(previousMap, incoming = [], viewerId, now = Da
     const createdAt = Number(event.createdAt || now);
     const ttl = Math.max(300, Number(event.ttl || 2000));
     if (now - createdAt >= ttl) continue;
-    previousMap.set(event.id, {
+
+    const normalized = {
       ...event,
       viewerId: activeViewerId,
       createdAt,
       ttl,
-    });
+    };
+
+    // Snapshot copies keep the same id and are naturally deduplicated by the
+    // map. Fallback events use another id, so dedupe their semantic duplicate
+    // before adding it.
+    if (!previousMap.has(normalized.id) && hasEquivalentRecentEvent(normalized)) {
+      continue;
+    }
+
+    previousMap.set(normalized.id, normalized);
   }
 
   for (const [id, event] of previousMap.entries()) {
@@ -632,10 +662,6 @@ function mergePrivateCombatEvents(previousMap, incoming = [], viewerId, now = Da
   return previousMap;
 }
 
-// Battle Royale is local, so it can create feedback directly from the changed
-// player object. Multiplayer normally uses reliable backend events, but this
-// fallback guarantees the exact same WebGL feedback even if one network event
-// arrives late or a volatile snapshot is skipped.
 function buildSelfCombatFallbackEvents(previous, current, viewerId, now, existingEvents) {
   const activeViewerId = viewerId ? String(viewerId) : "";
   if (!previous || !current || !activeViewerId) return [];
@@ -687,7 +713,9 @@ function buildSelfCombatFallbackEvents(previous, current, viewerId, now, existin
     droneDelta === 0;
   if (shieldWasBlocked) add("SHIELD BLOCKED", "shield", -18);
 
-  if (energyDelta > 0) add(`ENERGY +${energyDelta}`, "heal", -8);
+  // Energy-cell feedback is emitted by the backend through the reliable
+  // `*:combat` socket event. Do not synthesize it again from the following
+  // state snapshot, otherwise a single pickup is rendered twice.
   if (killsIncreased && hpDelta > 0) add(`+${hpDelta} HP`, "heal", -4);
   if (killsIncreased && droneDelta > 0) add(`+${droneDelta} DRONE`, "drone-reward", -28);
   if (killsIncreased && moveDelta >= 0.1) add("+15% MOVE SPEED", "move-reward", -52);

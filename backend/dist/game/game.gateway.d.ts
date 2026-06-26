@@ -173,6 +173,8 @@ export declare class GameGateway {
     removeZonePvpPlayer(socketId: any): void;
     cleanupZonePvpRoom(room: any, now: any): void;
     getZonePvpZoneRadius(room: any): number;
+    private serializeZonePvpMovement;
+    private broadcastZonePvpMovement;
     broadcastZonePvpRoomState(room: any, now: any, reliable?: boolean): void;
     findOrCreateRoom(): any;
     getRoomBySocket(socketId: any): any;

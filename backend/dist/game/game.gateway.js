@@ -74,6 +74,9 @@ const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
 const ZONE_STATE_INTERVAL_MS = 25;
 const ZONE_STATE_INTERVAL_CROWDED_MS = 33;
 const ZONE_STATE_INTERVAL_HEAVY_MS = 50;
+const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 20;
+const ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS = 33;
+const ZONE_MOVEMENT_STREAM_MAX_PLAYERS = 12;
 const STATIC_STATE_INTERVAL_MS = 500;
 const VIEWPORT_ITEM_STATE_INTERVAL_MS = 125;
 const PVP_CROWDED_STATE_THRESHOLD = 12;
@@ -1041,6 +1044,17 @@ let GameGateway = class GameGateway {
                     now - room.lastBroadcastAt >= broadcastInterval) {
                     room.lastBroadcastAt = now;
                     this.broadcastZonePvpRoomState(room, now);
+                }
+                if (room.status === "playing" &&
+                    room.players.size <= ZONE_MOVEMENT_STREAM_MAX_PLAYERS) {
+                    const movementInterval = room.players.size >= PVP_CROWDED_STATE_THRESHOLD
+                        ? ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS
+                        : ZONE_MOVEMENT_STREAM_INTERVAL_MS;
+                    if (!room.lastMovementBroadcastAt ||
+                        now - room.lastMovementBroadcastAt >= movementInterval) {
+                        room.lastMovementBroadcastAt = now;
+                        this.broadcastZonePvpMovement(room, now);
+                    }
                 }
                 this.cleanupZonePvpRoom(room, now);
             }
@@ -2746,6 +2760,51 @@ let GameGateway = class GameGateway {
         const elapsed = Math.max(0, Date.now() - room.matchStartedAt);
         const progress = Math.min(1, elapsed / ZONE_PVP_ZONE_SHRINK_DURATION);
         return ZONE_START_RADIUS + (ZONE_END_RADIUS - ZONE_START_RADIUS) * progress;
+    }
+    serializeZonePvpMovement(player) {
+        return {
+            id: player.id,
+            x: Math.round(Number(player.x || 0)),
+            y: Math.round(Number(player.y || 0)),
+            moveX: Number(player.moveX || 0),
+            moveY: Number(player.moveY || 0),
+            velocityX: Number(player.velocityX || 0),
+            velocityY: Number(player.velocityY || 0),
+            moveAngle: Number(player.moveAngle || 0),
+            isMoving: Boolean(player.isMoving),
+            attacking: Boolean(player.input?.attacking),
+            shieldActive: Boolean(player.shieldActive),
+            alive: player.alive !== false,
+        };
+    }
+    broadcastZonePvpMovement(room, now) {
+        if (!room?.zonePvpMode || room.status !== "playing")
+            return;
+        const players = [...room.players.values()];
+        for (const viewer of players) {
+            const socket = this.server.sockets.sockets.get(viewer.id);
+            if (!socket)
+                continue;
+            const spectatorTarget = viewer.alive === false
+                ? this.getStableSpectatorTarget(room, viewer)
+                : null;
+            const viewAnchor = spectatorTarget || viewer;
+            const range = viewer.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE;
+            const movementPlayers = players
+                .filter((other) => other.id !== viewer.id &&
+                (viewer.alive !== false || other.alive !== false) &&
+                this.isNear(viewAnchor, other, range))
+                .slice(0, ZONE_PVP_VISIBLE_PLAYERS_LIMIT)
+                .map((other) => this.serializeZonePvpMovement(other));
+            socket.volatile.emit("zone-pvp:movement", {
+                serverNow: now,
+                roomId: room.id,
+                roundId: room.roundId || null,
+                phaseVersion: Number(room.phaseVersion || 0),
+                status: room.status,
+                players: movementPlayers,
+            });
+        }
     }
     broadcastZonePvpRoomState(room, now, reliable = false) {
         const players = [...room.players.values()];
