@@ -34,7 +34,7 @@ const SELF_IDLE_FREEZE_DISTANCE = 360;
 const REMOTE_SMOOTHING = 24;
 const REMOTE_PREDICTION = 1.0;
 const REMOTE_HARD_SNAP_DISTANCE = 360;
-const REMOTE_MAX_EXTRAPOLATE_MS = 80;
+const REMOTE_MAX_EXTRAPOLATE_MS = 125;
 
 const PROJECTILE_SMOOTHING = 18;
 const PROJECTILE_FRAME_SCALE = 60;
@@ -61,7 +61,7 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 // Client-side prediction + server reconciliation + remote snapshot buffer.
 const INPUT_SEND_INTERVAL_MS = 20;
 const INPUT_HEARTBEAT_MS = 240;
-const SNAPSHOT_INTERPOLATION_DELAY_MS = 70;
+const SNAPSHOT_INTERPOLATION_DELAY_MS = 85;
 const SNAPSHOT_BUFFER_TTL_MS = 520;
 
 // Keep PvP desktop framing exactly locked to BattleRoyaleMode.
@@ -711,12 +711,54 @@ function reconcileHeldInputUnit(local, server, now = performance.now(), lastLoca
   };
 }
 
+function extrapolateRemoteSnapshot(snapshot, aheadMs = 0) {
+  if (!snapshot) return snapshot;
+
+  const safeAheadMs = clamp(Number(aheadMs || 0), 0, REMOTE_MAX_EXTRAPOLATE_MS);
+  if (!snapshot.isMoving || safeAheadMs <= 0) return snapshot;
+
+  // v37 backend supplies exact server velocity. Older deployed backends are
+  // still supported through the move-vector fallback. This makes other
+  // players appear continuous on a good receiver even if the sender is on a
+  // 40–50 FPS laptop and snapshots arrive with small gaps.
+  const fallbackSpeed =
+    CLIENT_SPEED *
+    ZONE_BASE_MOVE_SPEED_MULTIPLIER *
+    Math.max(1, Number(snapshot.moveSpeedMultiplier || 1));
+  const velocityX = Number.isFinite(Number(snapshot.velocityX))
+    ? Number(snapshot.velocityX)
+    : Number(snapshot.moveX || 0) * fallbackSpeed;
+  const velocityY = Number.isFinite(Number(snapshot.velocityY))
+    ? Number(snapshot.velocityY)
+    : Number(snapshot.moveY || 0) * fallbackSpeed;
+  const seconds = (safeAheadMs / 1000) * REMOTE_PREDICTION;
+
+  return {
+    ...snapshot,
+    x: Number(snapshot.x || 0) + velocityX * seconds,
+    y: Number(snapshot.y || 0) + velocityY * seconds,
+  };
+}
+
 function interpolateSnapshotBuffer(buffer = [], renderTime) {
   if (!buffer.length) return null;
-  if (buffer.length === 1) return buffer[0];
+
+  const newest = buffer[buffer.length - 1];
+  const newestTime = Number(newest?.__receivedAt || renderTime);
+  if (buffer.length === 1) {
+    return extrapolateRemoteSnapshot(newest, renderTime - newestTime);
+  }
+
+  // When the renderer has caught up with the most recent packet, continue a
+  // tiny velocity prediction instead of freezing until the following packet.
+  // This is the specific source of the visible "step" on a fast laptop when
+  // another player is sending from slower hardware.
+  if (renderTime >= newestTime) {
+    return extrapolateRemoteSnapshot(newest, renderTime - newestTime);
+  }
 
   let older = buffer[0];
-  let newer = buffer[buffer.length - 1];
+  let newer = newest;
 
   for (let i = 0; i < buffer.length - 1; i += 1) {
     const a = buffer[i];

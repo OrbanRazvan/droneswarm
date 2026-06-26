@@ -24,6 +24,8 @@ export declare class GameGateway {
     private normalOrbJitter;
     private createNormalOrbAtGridSlot;
     private rebuildNormalOrbDistribution;
+    private ensureNormalOrbRespawnMaps;
+    private scheduleNormalOrbRespawn;
     private ensureNormalOrbDistribution;
     private createNormalOrb;
     private createNormalEnergyCell;
@@ -130,6 +132,8 @@ export declare class GameGateway {
         mouseY: any;
         moveX: any;
         moveY: any;
+        velocityX: number;
+        velocityY: number;
         moveAngle: any;
         isMoving: boolean;
         knockbackX: any;
