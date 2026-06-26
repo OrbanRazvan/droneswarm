@@ -255,6 +255,7 @@ let GameGateway = class GameGateway {
             y: Math.round(Number(unit.y || 0)),
             text: String(text).slice(0, 42),
             kind,
+            viewerId: unit.id,
             side: sequence % 2 === 0 ? 1 : -1,
             lane: sequence % 3,
             createdAt: now,
@@ -2179,6 +2180,8 @@ let GameGateway = class GameGateway {
                     const age = now - Number(event?.createdAt || 0);
                     if (age < 0 || age >= Number(event?.ttl || 2000))
                         return false;
+                    if (event?.viewerId && event.viewerId !== player.id)
+                        return false;
                     return this.isNear(viewAnchor, event, VIEW_DISTANCE + 800);
                 })
                     .slice(-32),
@@ -2585,6 +2588,8 @@ let GameGateway = class GameGateway {
                     .filter((event) => {
                     const age = now - Number(event?.createdAt || 0);
                     if (age < 0 || age >= Number(event?.ttl || 2000))
+                        return false;
+                    if (event?.viewerId && event.viewerId !== player.id)
                         return false;
                     return this.isNear(viewAnchor, event, VIEW_DISTANCE + 800);
                 })

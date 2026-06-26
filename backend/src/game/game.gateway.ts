@@ -346,6 +346,10 @@ export class GameGateway {
       y: Math.round(Number(unit.y || 0)),
       text: String(text).slice(0, 42),
       kind,
+      // Combat text belongs only to the affected/rewarded player. State
+      // serialization below sends it exclusively to this socket, so unrelated
+      // nearby fights do not clutter anyone else's screen.
+      viewerId: unit.id,
       side: sequence % 2 === 0 ? 1 : -1,
       lane: sequence % 3,
       createdAt: now,
@@ -2770,6 +2774,9 @@ export class GameGateway {
           .filter((event) => {
             const age = now - Number(event?.createdAt || 0);
             if (age < 0 || age >= Number(event?.ttl || 2000)) return false;
+            // A player receives only the text generated for their own drone:
+            // incoming damage / shield block, or their own kill rewards.
+            if (event?.viewerId && event.viewerId !== player.id) return false;
             return this.isNear(viewAnchor, event, VIEW_DISTANCE + 800);
           })
           .slice(-32),
@@ -3360,6 +3367,9 @@ export class GameGateway {
           .filter((event) => {
             const age = now - Number(event?.createdAt || 0);
             if (age < 0 || age >= Number(event?.ttl || 2000)) return false;
+            // A player receives only the text generated for their own drone:
+            // incoming damage / shield block, or their own kill rewards.
+            if (event?.viewerId && event.viewerId !== player.id) return false;
             return this.isNear(viewAnchor, event, VIEW_DISTANCE + 800);
           })
           .slice(-32),

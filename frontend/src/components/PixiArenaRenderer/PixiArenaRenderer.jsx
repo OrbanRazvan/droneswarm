@@ -1880,9 +1880,16 @@ function PixiArenaRenderer({
           max: Math.floor(config.maxProjectiles * 0.55),
           now,
         });
+        // Defensive client-side privacy filter. Multiplayer already receives
+        // only its own text from the server, but this also prevents a stale or
+        // legacy packet from showing another player's combat numbers.
+        const combatViewerId = data?.player?.id || data?.you?.id || null;
+        const visibleCombatEvents = (data.combatEvents || []).filter((event) =>
+          !event?.viewerId || !combatViewerId || event.viewerId === combatViewerId,
+        );
         syncCombatTextLayer({
           map: combatTextMap,
-          source: data.combatEvents,
+          source: visibleCombatEvents,
           resources,
           parent: combatLayer,
           bounds,
