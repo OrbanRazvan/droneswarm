@@ -47,18 +47,18 @@ const COLLISION_GRID_CELL_SIZE = 600;
 
 // Network / replication tuning. Simulation remains 60 Hz, but clients receive
 // compact snapshots at a rate that scales down in crowded rooms.
-const NORMAL_STATE_INTERVAL_MS = 33; // 30 Hz
-const NORMAL_STATE_INTERVAL_CROWDED_MS = 50; // 20 Hz at 24+ players
+const NORMAL_STATE_INTERVAL_MS = 25; // 40 Hz in small PvP rooms
+const NORMAL_STATE_INTERVAL_CROWDED_MS = 33; // 30 Hz at 12+ players
+const NORMAL_STATE_INTERVAL_HEAVY_MS = 50; // 20 Hz at 28+ players
 const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
 const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
-const ZONE_STATE_INTERVAL_MS = 33; // 30 Hz
-const ZONE_STATE_INTERVAL_CROWDED_MS = 50; // 20 Hz at 24+ players
+const ZONE_STATE_INTERVAL_MS = 25; // 40 Hz in small PvP rooms
+const ZONE_STATE_INTERVAL_CROWDED_MS = 33; // 30 Hz at 12+ players
+const ZONE_STATE_INTERVAL_HEAVY_MS = 50; // 20 Hz at 28+ players
 const STATIC_STATE_INTERVAL_MS = 500; // minimap + leaderboard
-// Orbs / energy / cores do not move. They are deliberately replicated at a
-// lower cadence than players so mobile WebSocket buffers never fill with the
-// same static map data 30 times per second.
-const NORMAL_WORLD_VIEW_INTERVAL_MS = 250; // 4 Hz
-const ZONE_WORLD_VIEW_INTERVAL_MS = 250; // 4 Hz
+const VIEWPORT_ITEM_STATE_INTERVAL_MS = 125; // static nearby loot, per player
+const PVP_CROWDED_STATE_THRESHOLD = 12;
+const PVP_HEAVY_STATE_THRESHOLD = 28;
 const ITEM_SPATIAL_CELL_SIZE = 1000;
 const ITEM_ZONE_PRUNE_INTERVAL_MS = 500;
 const NORMAL_HIGH_POPULATION_THRESHOLD = 16;
@@ -151,6 +151,13 @@ function normalizeSkin(skin) {
     origin: true,
     credentials: false,
   },
+  // The game always uses WebSocket. Disable compression for tiny high-frequency
+  // snapshots: compression costs more CPU/latency than it saves for this payload.
+  transports: ["websocket"],
+  perMessageDeflate: false,
+  httpCompression: false,
+  pingInterval: 10000,
+  pingTimeout: 20000,
 })
 export class GameGateway {
   @WebSocketServer()
@@ -675,12 +682,8 @@ export class GameGateway {
     if (this.loop) return;
     this.loop = setInterval(() => {
       const now = Date.now();
-      // Never discard elapsed simulation time. The old 2-frame cap meant that
-      // a brief Node/Render stall made the authoritative server fall seconds
-      // behind the locally predicted client, which caused the large rollback.
-      // 120 frames covers a two-second hiccup without changing normal 60 Hz ticks.
       const deltaFrames = Math.min(
-        120,
+        3,
         Math.max(0.35, (now - this.lastLoopAt) / (1000 / 60)),
       );
       this.lastLoopAt = now;
@@ -717,9 +720,11 @@ export class GameGateway {
         this.maintainWorldItems(room, zoneRadius, now);
 
         const broadcastInterval =
-          room.players.size >= 24
-            ? NORMAL_STATE_INTERVAL_CROWDED_MS
-            : NORMAL_STATE_INTERVAL_MS;
+          room.players.size >= PVP_HEAVY_STATE_THRESHOLD
+            ? NORMAL_STATE_INTERVAL_HEAVY_MS
+            : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
+              ? NORMAL_STATE_INTERVAL_CROWDED_MS
+              : NORMAL_STATE_INTERVAL_MS;
 
         if (
           !room.lastBroadcastAt ||
@@ -781,9 +786,11 @@ export class GameGateway {
         }
 
         const broadcastInterval =
-          room.players.size >= 24
-            ? ZONE_STATE_INTERVAL_CROWDED_MS
-            : ZONE_STATE_INTERVAL_MS;
+          room.players.size >= PVP_HEAVY_STATE_THRESHOLD
+            ? ZONE_STATE_INTERVAL_HEAVY_MS
+            : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
+              ? ZONE_STATE_INTERVAL_CROWDED_MS
+              : ZONE_STATE_INTERVAL_MS;
 
         if (
           !room.lastBroadcastAt ||
@@ -1157,29 +1164,11 @@ export class GameGateway {
     const dist = Math.hypot(dx, dy) || 1;
     if (dist > BODY_COLLISION_DISTANCE) return;
 
-    const dirX = dx / dist;
-    const dirY = dy / dist;
-    const networkPvp = Boolean(room?.normalMode || room?.zonePvpMode);
-
-    // In network PvP, continuously adding a strong push every 16 ms makes the
-    // server move a drone hundreds of pixels backward while the local client
-    // still predicts forward. That was the direct source of the huge
-    // "walk forward then jump back" effect near another real player.
-    //
-    // Keep contact damage authoritative, but apply only a small impact impulse
-    // on the collision cooldown. This feels like a bump, not a teleport, and
-    // the impulse is replicated to the client through knockbackX/Y.
-    if (!networkPvp) {
-      const overlap = BODY_COLLISION_DISTANCE - dist;
-      const separation = Math.min(
-        7,
-        Math.max(BODY_COLLISION_LIGHT_PUSH, overlap * 0.08),
-      );
-      this.addSmoothKnockback(a, -dirX, -dirY, separation);
-      this.addSmoothKnockback(b, dirX, dirY, separation);
-      this.applyKnockbackStep(a, zoneRadius, room);
-      this.applyKnockbackStep(b, zoneRadius, room);
-    }
+    // In remote PvP, a permanent server-only push makes each local prediction
+    // diverge whenever two drones touch. That is the source of the large visual
+    // rollback seen after approaching another human player. Keep contact damage
+    // authoritative, but do not apply an invisible continuous positional force.
+    const networkPvp = Boolean(room?.normalMode || room?.zonePvpMode || room?.battleRoyaleOnlineMode);
 
     if (this.isBattlePrepareLocked(room, now)) return;
     if (now - lastAt < BODY_COLLISION_COOLDOWN) return;
@@ -1191,12 +1180,14 @@ export class GameGateway {
     this.applyBodyCollisionDamage(a, outcome.aHpDamage, outcome.aDroneLoss);
     this.applyBodyCollisionDamage(b, outcome.bHpDamage, outcome.bDroneLoss);
 
-    const impactPush = networkPvp
-      ? Math.min(3.2, Math.max(1.25, outcome.push * 0.24))
-      : outcome.push;
-
-    this.addSmoothKnockback(a, -dirX, -dirY, impactPush);
-    this.addSmoothKnockback(b, dirX, dirY, impactPush);
+    // Preserve the original physical shove for local/PvE simulation only.
+    // Network PvP stays contact-based, so client/server positions remain aligned.
+    if (!networkPvp) {
+      const dirX = dx / dist;
+      const dirY = dy / dist;
+      this.addSmoothKnockback(a, -dirX, -dirY, outcome.push);
+      this.addSmoothKnockback(b, dirX, dirY, outcome.push);
+    }
 
     if (aWasAlive && !a.alive && b.alive) this.applyKillReward(b);
     if (bWasAlive && !b.alive && a.alive) this.applyKillReward(a);
@@ -2216,9 +2207,10 @@ export class GameGateway {
       }
 
       const viewAnchor = spectatorTarget || player;
-      const includeWorldView =
-        !player.lastWorldViewAt ||
-        now - player.lastWorldViewAt >= NORMAL_WORLD_VIEW_INTERVAL_MS;
+      const includeViewportItems =
+        !player.lastViewportItemStateAt ||
+        now - player.lastViewportItemStateAt >= VIEWPORT_ITEM_STATE_INTERVAL_MS;
+      if (includeViewportItems) player.lastViewportItemStateAt = now;
       const playerCandidates = this.querySpatialIndex(
         playerIndex,
         viewAnchor.x,
@@ -2282,23 +2274,12 @@ export class GameGateway {
             ),
       };
 
-      if (includeWorldView) {
-        player.lastWorldViewAt = now;
+      if (includeViewportItems) {
         payload.orbs = room.orbSpatialIndex
-          ? this.filterNearIndexed(
-              viewAnchor,
-              room.orbSpatialIndex,
-              VIEW_DISTANCE,
-              VISIBLE_ORB_LIMIT,
-            )
+          ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, VISIBLE_ORB_LIMIT)
           : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, VISIBLE_ORB_LIMIT);
         payload.energyCells = room.energySpatialIndex
-          ? this.filterNearIndexed(
-              viewAnchor,
-              room.energySpatialIndex,
-              VIEW_DISTANCE,
-              VISIBLE_ENERGY_LIMIT,
-            )
+          ? this.filterNearIndexed(viewAnchor, room.energySpatialIndex, VIEW_DISTANCE, VISIBLE_ENERGY_LIMIT)
           : this.filterNear(viewAnchor, room.energyCells, VIEW_DISTANCE, VISIBLE_ENERGY_LIMIT);
         payload.cores = room.coreSpatialIndex
           ? this.filterNearIndexed(viewAnchor, room.coreSpatialIndex, VIEW_DISTANCE + 600, 18)
@@ -2728,10 +2709,10 @@ export class GameGateway {
       room.lastStaticStateAt = now;
     }
 
-    let leaderboard: any[] | undefined;
-    let minimapOrbs: any[] | undefined;
-    let minimapEnergyCells: any[] | undefined;
-    let minimapCores: any[] | undefined;
+    let leaderboard: any[] = [];
+    let minimapOrbs: any[] = [];
+    let minimapEnergyCells: any[] = [];
+    let minimapCores: any[] = [];
 
     if (includeStaticState) {
       leaderboard = players
@@ -2817,9 +2798,10 @@ export class GameGateway {
       }
 
       const viewAnchor = spectatorTarget || player;
-      const includeWorldView =
-        !player.lastWorldViewAt ||
-        now - player.lastWorldViewAt >= ZONE_WORLD_VIEW_INTERVAL_MS;
+      const includeViewportItems =
+        !player.lastViewportItemStateAt ||
+        now - player.lastViewportItemStateAt >= VIEWPORT_ITEM_STATE_INTERVAL_MS;
+      if (includeViewportItems) player.lastViewportItemStateAt = now;
 
       const playerCandidates = this.querySpatialIndex(
         playerIndex,
@@ -2878,8 +2860,7 @@ export class GameGateway {
 
       };
 
-      if (includeWorldView) {
-        player.lastWorldViewAt = now;
+      if (includeViewportItems) {
         payload.orbs = room.orbSpatialIndex
           ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, 140)
           : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, 140);

@@ -39,15 +39,18 @@ const ZONE_PVP_ZONE_DAMAGE = 10;
 const ZONE_PVP_ZONE_DAMAGE_INTERVAL = 1000;
 const ZONE_PVP_VISIBLE_PLAYERS_LIMIT = 60;
 const COLLISION_GRID_CELL_SIZE = 600;
-const NORMAL_STATE_INTERVAL_MS = 33;
-const NORMAL_STATE_INTERVAL_CROWDED_MS = 50;
+const NORMAL_STATE_INTERVAL_MS = 25;
+const NORMAL_STATE_INTERVAL_CROWDED_MS = 33;
+const NORMAL_STATE_INTERVAL_HEAVY_MS = 50;
 const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
 const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
-const ZONE_STATE_INTERVAL_MS = 33;
-const ZONE_STATE_INTERVAL_CROWDED_MS = 50;
+const ZONE_STATE_INTERVAL_MS = 25;
+const ZONE_STATE_INTERVAL_CROWDED_MS = 33;
+const ZONE_STATE_INTERVAL_HEAVY_MS = 50;
 const STATIC_STATE_INTERVAL_MS = 500;
-const NORMAL_WORLD_VIEW_INTERVAL_MS = 250;
-const ZONE_WORLD_VIEW_INTERVAL_MS = 250;
+const VIEWPORT_ITEM_STATE_INTERVAL_MS = 125;
+const PVP_CROWDED_STATE_THRESHOLD = 12;
+const PVP_HEAVY_STATE_THRESHOLD = 28;
 const ITEM_SPATIAL_CELL_SIZE = 1000;
 const ITEM_ZONE_PRUNE_INTERVAL_MS = 500;
 const NORMAL_HIGH_POPULATION_THRESHOLD = 16;
@@ -561,7 +564,7 @@ let GameGateway = class GameGateway {
             return;
         this.loop = setInterval(() => {
             const now = Date.now();
-            const deltaFrames = Math.min(120, Math.max(0.35, (now - this.lastLoopAt) / (1000 / 60)));
+            const deltaFrames = Math.min(3, Math.max(0.35, (now - this.lastLoopAt) / (1000 / 60)));
             this.lastLoopAt = now;
             for (const room of this.rooms.values()) {
                 this.updateRoomStatus(room, now);
@@ -592,9 +595,11 @@ let GameGateway = class GameGateway {
                 this.collectCores(room, zoneRadius);
                 this.updateProjectiles(room, deltaFrames, now);
                 this.maintainWorldItems(room, zoneRadius, now);
-                const broadcastInterval = room.players.size >= 24
-                    ? NORMAL_STATE_INTERVAL_CROWDED_MS
-                    : NORMAL_STATE_INTERVAL_MS;
+                const broadcastInterval = room.players.size >= PVP_HEAVY_STATE_THRESHOLD
+                    ? NORMAL_STATE_INTERVAL_HEAVY_MS
+                    : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
+                        ? NORMAL_STATE_INTERVAL_CROWDED_MS
+                        : NORMAL_STATE_INTERVAL_MS;
                 if (!room.lastBroadcastAt ||
                     now - room.lastBroadcastAt >= broadcastInterval) {
                     room.lastBroadcastAt = now;
@@ -640,9 +645,11 @@ let GameGateway = class GameGateway {
                     this.maintainWorldItems(room, zoneRadius, now);
                     this.updateZonePvpWinCondition(room, now);
                 }
-                const broadcastInterval = room.players.size >= 24
-                    ? ZONE_STATE_INTERVAL_CROWDED_MS
-                    : ZONE_STATE_INTERVAL_MS;
+                const broadcastInterval = room.players.size >= PVP_HEAVY_STATE_THRESHOLD
+                    ? ZONE_STATE_INTERVAL_HEAVY_MS
+                    : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
+                        ? ZONE_STATE_INTERVAL_CROWDED_MS
+                        : ZONE_STATE_INTERVAL_MS;
                 if (!room.lastBroadcastAt ||
                     now - room.lastBroadcastAt >= broadcastInterval) {
                     room.lastBroadcastAt = now;
@@ -960,17 +967,7 @@ let GameGateway = class GameGateway {
         const dist = Math.hypot(dx, dy) || 1;
         if (dist > BODY_COLLISION_DISTANCE)
             return;
-        const dirX = dx / dist;
-        const dirY = dy / dist;
-        const networkPvp = Boolean(room?.normalMode || room?.zonePvpMode);
-        if (!networkPvp) {
-            const overlap = BODY_COLLISION_DISTANCE - dist;
-            const separation = Math.min(7, Math.max(BODY_COLLISION_LIGHT_PUSH, overlap * 0.08));
-            this.addSmoothKnockback(a, -dirX, -dirY, separation);
-            this.addSmoothKnockback(b, dirX, dirY, separation);
-            this.applyKnockbackStep(a, zoneRadius, room);
-            this.applyKnockbackStep(b, zoneRadius, room);
-        }
+        const networkPvp = Boolean(room?.normalMode || room?.zonePvpMode || room?.battleRoyaleOnlineMode);
         if (this.isBattlePrepareLocked(room, now))
             return;
         if (now - lastAt < BODY_COLLISION_COOLDOWN)
@@ -981,11 +978,12 @@ let GameGateway = class GameGateway {
         const bWasAlive = b.alive;
         this.applyBodyCollisionDamage(a, outcome.aHpDamage, outcome.aDroneLoss);
         this.applyBodyCollisionDamage(b, outcome.bHpDamage, outcome.bDroneLoss);
-        const impactPush = networkPvp
-            ? Math.min(3.2, Math.max(1.25, outcome.push * 0.24))
-            : outcome.push;
-        this.addSmoothKnockback(a, -dirX, -dirY, impactPush);
-        this.addSmoothKnockback(b, dirX, dirY, impactPush);
+        if (!networkPvp) {
+            const dirX = dx / dist;
+            const dirY = dy / dist;
+            this.addSmoothKnockback(a, -dirX, -dirY, outcome.push);
+            this.addSmoothKnockback(b, dirX, dirY, outcome.push);
+        }
         if (aWasAlive && !a.alive && b.alive)
             this.applyKillReward(b);
         if (bWasAlive && !b.alive && a.alive)
@@ -1810,8 +1808,10 @@ let GameGateway = class GameGateway {
                 player.killedById = null;
             }
             const viewAnchor = spectatorTarget || player;
-            const includeWorldView = !player.lastWorldViewAt ||
-                now - player.lastWorldViewAt >= NORMAL_WORLD_VIEW_INTERVAL_MS;
+            const includeViewportItems = !player.lastViewportItemStateAt ||
+                now - player.lastViewportItemStateAt >= VIEWPORT_ITEM_STATE_INTERVAL_MS;
+            if (includeViewportItems)
+                player.lastViewportItemStateAt = now;
             const playerCandidates = this.querySpatialIndex(playerIndex, viewAnchor.x, viewAnchor.y, player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE);
             const visiblePlayers = this.filterNear(viewAnchor, playerCandidates.filter((other) => other.id !== player.id &&
                 (player.alive !== false || other.alive !== false)), player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE, NORMAL_VISIBLE_PLAYERS_LIMIT).map((other) => snapshotsByPlayer.get(other.id));
@@ -1846,8 +1846,7 @@ let GameGateway = class GameGateway {
                     ? this.filterNearIndexed(viewAnchor, room.projectileSpatialIndex, VIEW_DISTANCE + 400, VISIBLE_PROJECTILE_LIMIT)
                     : this.filterNear(viewAnchor, room.projectiles, VIEW_DISTANCE + 400, VISIBLE_PROJECTILE_LIMIT),
             };
-            if (includeWorldView) {
-                player.lastWorldViewAt = now;
+            if (includeViewportItems) {
                 payload.orbs = room.orbSpatialIndex
                     ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, VISIBLE_ORB_LIMIT)
                     : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, VISIBLE_ORB_LIMIT);
@@ -2154,10 +2153,10 @@ let GameGateway = class GameGateway {
         if (includeStaticState) {
             room.lastStaticStateAt = now;
         }
-        let leaderboard;
-        let minimapOrbs;
-        let minimapEnergyCells;
-        let minimapCores;
+        let leaderboard = [];
+        let minimapOrbs = [];
+        let minimapEnergyCells = [];
+        let minimapCores = [];
         if (includeStaticState) {
             leaderboard = players
                 .slice()
@@ -2222,8 +2221,10 @@ let GameGateway = class GameGateway {
                 player.killedById = null;
             }
             const viewAnchor = spectatorTarget || player;
-            const includeWorldView = !player.lastWorldViewAt ||
-                now - player.lastWorldViewAt >= ZONE_WORLD_VIEW_INTERVAL_MS;
+            const includeViewportItems = !player.lastViewportItemStateAt ||
+                now - player.lastViewportItemStateAt >= VIEWPORT_ITEM_STATE_INTERVAL_MS;
+            if (includeViewportItems)
+                player.lastViewportItemStateAt = now;
             const playerCandidates = this.querySpatialIndex(playerIndex, viewAnchor.x, viewAnchor.y, player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE);
             const visiblePlayers = this.filterNear(viewAnchor, playerCandidates.filter((other) => other.id !== player.id && (player.alive !== false || other.alive !== false)), player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE, ZONE_PVP_VISIBLE_PLAYERS_LIMIT).map((other) => this.serializePlayer(other));
             const payload = {
@@ -2254,8 +2255,7 @@ let GameGateway = class GameGateway {
                     ? this.filterNearIndexed(viewAnchor, room.projectileSpatialIndex, VIEW_DISTANCE + 400, 45)
                     : this.filterNear(viewAnchor, room.projectiles, VIEW_DISTANCE + 400, 45),
             };
-            if (includeWorldView) {
-                player.lastWorldViewAt = now;
+            if (includeViewportItems) {
                 payload.orbs = room.orbSpatialIndex
                     ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, 140)
                     : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, 140);
@@ -2730,6 +2730,11 @@ exports.GameGateway = GameGateway = __decorate([
             origin: true,
             credentials: false,
         },
+        transports: ["websocket"],
+        perMessageDeflate: false,
+        httpCompression: false,
+        pingInterval: 10000,
+        pingTimeout: 20000,
     }),
     __metadata("design:paramtypes", [])
 ], GameGateway);

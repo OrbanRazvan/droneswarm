@@ -63,7 +63,7 @@ const SKIN_THEMES = {
 const MAX_MINI_DRONES = 5;
 const DEFAULT_WORLD_WIDTH = 15000;
 const DEFAULT_WORLD_HEIGHT = 15000;
-const STATIC_SYNC_INTERVAL_MS = 90;
+const STATIC_SYNC_INTERVAL_MS = 120;
 const ENTITY_STALE_MS = 500;
 const MAX_RENDERED_PLAYERS = 60;
 const MAX_RENDERED_PROJECTILES = 96;
@@ -151,20 +151,20 @@ function getRendererConfig(forceLowQuality) {
 
   // Dynamic resolution only reduces the number of pixels the GPU shades; the
   // simulation/ticker stays native rAF to avoid the old 30 FPS stair-step bug.
-  const resolution = forceLowQuality || weakMobile
+  // Multiplayer prioritizes stable frame time over extra mobile pixels.
+  // At 60 players, a 1x back buffer is far more reliable on Android GPUs.
+  const resolution = forceLowQuality || mobile
     ? 1
-    : mobile
-      ? Math.min(1.25, dpr)
-      : Math.min(1.5, dpr);
+    : Math.min(1.5, dpr);
 
   return {
     mobile,
     weakMobile,
     resolution,
-    antialias: !(forceLowQuality || weakMobile),
-    maxStaticItems: forceLowQuality || weakMobile ? 110 : 180,
+    antialias: !(forceLowQuality || mobile || weakMobile),
+    maxStaticItems: forceLowQuality || mobile || weakMobile ? 105 : 180,
     maxPlayers: forceLowQuality || weakMobile ? 42 : MAX_RENDERED_PLAYERS,
-    maxProjectiles: forceLowQuality || weakMobile ? 48 : MAX_RENDERED_PROJECTILES,
+    maxProjectiles: forceLowQuality || mobile || weakMobile ? 44 : MAX_RENDERED_PROJECTILES,
   };
 }
 
@@ -1131,7 +1131,8 @@ function PixiArenaRenderer({
           }
         }
 
-        if (now - lastStaticSync >= STATIC_SYNC_INTERVAL_MS) {
+        const staticSyncInterval = config.mobile ? 150 : STATIC_SYNC_INTERVAL_MS;
+        if (now - lastStaticSync >= staticSyncInterval) {
           lastStaticSync = now;
           const itemBudget = config.maxStaticItems;
           const orbBudget = Math.floor(itemBudget * 0.72);
