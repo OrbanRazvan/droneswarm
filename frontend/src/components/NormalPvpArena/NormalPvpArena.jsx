@@ -54,75 +54,316 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 
 // Multiplayer modern sync
 // Client-side prediction + server reconciliation + remote snapshot buffer.
-const INPUT_SEND_INTERVAL_MS = 16;
-const SNAPSHOT_INTERPOLATION_DELAY_MS = 90;
-const SNAPSHOT_BUFFER_TTL_MS = 600;
-const MAX_PENDING_INPUTS = 90;
+// 30 Hz input is enough because the server simulates continuously using the
+// latest input. It cuts mobile/network pressure roughly in half vs 60 Hz.
+const INPUT_SEND_INTERVAL_MS = 33;
+const INPUT_HEARTBEAT_MS = 250;
+const SNAPSHOT_INTERPOLATION_DELAY_MS = 110;
+const SNAPSHOT_BUFFER_TTL_MS = 700;
+const MAX_PENDING_INPUTS = 45;
 
 const MAX_VISIBLE_REMOTE_PLAYERS = 24;
 
 const CORE_TYPES = [
-  { type: "nano", name: "Nano Core", shortName: "Nano", color: "#00eaff", effect: "+10 MAX HP" },
-  { type: "rotor", name: "Rotor Core", shortName: "Rotor", color: "#ffae3d", effect: "+Attack drone speed" },
-  { type: "piercing", name: "Piercing Core", shortName: "Piercing", color: "#b45cff", effect: "Next 3 shots pierce" },
-  { type: "overclock", name: "Overclock Core", shortName: "Overclock", color: "#ff4040", effect: "25s rapid fire" },
-  { type: "berserk", name: "Berserk Core", shortName: "Berserk", color: "#ff7a18", effect: "10s 75 damage shots" },
-  { type: "shield-breaker", name: "Shield Breaker Core", shortName: "Shield Breaker", color: "#d946ef", effect: "Next shot ignores shield" },
-  { type: "swarm", name: "Swarm Core", shortName: "Swarm", color: "#00ffd5", effect: "+2 drones instantly" },
-  { type: "vampire", name: "Vampire Core", shortName: "Vampire", color: "#00c46a", effect: "15s lifesteal" },
-  { type: "emp", name: "EMP Core", shortName: "EMP", color: "#faff00", effect: "EMP burst around you" },
+  {
+    type: "nano",
+    name: "Nano Core",
+    shortName: "Nano",
+    color: "#00eaff",
+    effect: "+10 MAX HP",
+  },
+  {
+    type: "rotor",
+    name: "Rotor Core",
+    shortName: "Rotor",
+    color: "#ffae3d",
+    effect: "+Attack drone speed",
+  },
+  {
+    type: "piercing",
+    name: "Piercing Core",
+    shortName: "Piercing",
+    color: "#b45cff",
+    effect: "Next 3 shots pierce",
+  },
+  {
+    type: "overclock",
+    name: "Overclock Core",
+    shortName: "Overclock",
+    color: "#ff4040",
+    effect: "25s rapid fire",
+  },
+  {
+    type: "berserk",
+    name: "Berserk Core",
+    shortName: "Berserk",
+    color: "#ff7a18",
+    effect: "10s 75 damage shots",
+  },
+  {
+    type: "shield-breaker",
+    name: "Shield Breaker Core",
+    shortName: "Shield Breaker",
+    color: "#d946ef",
+    effect: "Next shot ignores shield",
+  },
+  {
+    type: "swarm",
+    name: "Swarm Core",
+    shortName: "Swarm",
+    color: "#00ffd5",
+    effect: "+2 drones instantly",
+  },
+  {
+    type: "vampire",
+    name: "Vampire Core",
+    shortName: "Vampire",
+    color: "#00c46a",
+    effect: "15s lifesteal",
+  },
+  {
+    type: "emp",
+    name: "EMP Core",
+    shortName: "EMP",
+    color: "#faff00",
+    effect: "EMP burst around you",
+  },
 ];
 
 const DRONE_SKIN_THEMES = {
   cyan: ["#00eaff", "#78f7ff", "#003140", "#ffffff", "rgba(0, 234, 255, 0.78)"],
   red: ["#ff4040", "#ff9a9a", "#380000", "#ffffff", "rgba(255, 64, 64, 0.72)"],
-  purple: ["#9b5cff", "#d5b6ff", "#180034", "#ffffff", "rgba(155, 92, 255, 0.74)"],
-  orange: ["#ff9f1c", "#ffd166", "#4b2100", "#fff7e6", "rgba(255, 159, 28, 0.72)"],
-  green: ["#19ff8a", "#8cffc4", "#00391f", "#ffffff", "rgba(25, 255, 138, 0.72)"],
-  pink: ["#ff4fd8", "#ffb8ef", "#4d003c", "#ffffff", "rgba(255, 79, 216, 0.72)"],
-  "ice-blue": ["#7de7ff", "#e7fbff", "#07314a", "#ffffff", "rgba(125, 231, 255, 0.78)"],
-  "solar-gold": ["#ffd447", "#fff0a8", "#513a00", "#ffffff", "rgba(255, 212, 71, 0.75)"],
-  "shadow-black": ["#2e3440", "#6b7280", "#05070c", "#bdeeff", "rgba(75, 85, 99, 0.82)"],
-  "toxic-lime": ["#b6ff00", "#e8ff8a", "#284000", "#ffffff", "rgba(182, 255, 0, 0.76)"],
-  "royal-violet": ["#6d28d9", "#c4b5fd", "#14002e", "#f8f5ff", "rgba(109, 40, 217, 0.78)"],
-  "crimson-white": ["#dc143c", "#ffffff", "#43000d", "#fff5f7", "rgba(220, 20, 60, 0.75)"],
-  "neon-teal": ["#00ffcc", "#a7ffee", "#003c33", "#ffffff", "rgba(0, 255, 204, 0.76)"],
-  "ember-red": ["#ff5a1f", "#ffb86b", "#451100", "#fff0e6", "rgba(255, 90, 31, 0.78)"],
-  "arctic-silver": ["#c7d2fe", "#f8fafc", "#1e293b", "#ffffff", "rgba(199, 210, 254, 0.78)"],
-  "void-purple": ["#4c1d95", "#a78bfa", "#070012", "#e9d5ff", "rgba(76, 29, 149, 0.84)"],
-  "plasma-pink": ["#ff00aa", "#ff7adf", "#3f0030", "#ffffff", "rgba(255, 0, 170, 0.8)"],
-  "jade-black": ["#00a86b", "#86efac", "#001e14", "#eafff5", "rgba(0, 168, 107, 0.78)"],
-  "azure-white": ["#38bdf8", "#ffffff", "#082f49", "#ffffff", "rgba(56, 189, 248, 0.78)"],
-  "inferno-orange": ["#ff6b00", "#ffcf33", "#4a1300", "#fff4df", "rgba(255, 107, 0, 0.82)"],
-  "midnight-blue": ["#1e3a8a", "#60a5fa", "#020617", "#dbeafe", "rgba(30, 58, 138, 0.84)"],
-  "acid-green": ["#39ff14", "#c6ff8a", "#0f2b00", "#ffffff", "rgba(57, 255, 20, 0.8)"],
-  "ruby-black": ["#e11d48", "#fb7185", "#09090b", "#ffe4e6", "rgba(225, 29, 72, 0.82)"],
-  "ghost-white": ["#e5e7eb", "#ffffff", "#334155", "#ffffff", "rgba(229, 231, 235, 0.76)"],
-  "cyber-yellow": ["#faff00", "#fff7ad", "#3a3800", "#ffffff", "rgba(250, 255, 0, 0.76)"],
-  "deep-ocean": ["#006994", "#67e8f9", "#001b2e", "#e0ffff", "rgba(0, 105, 148, 0.82)"],
-  "magenta-cyan": ["#ff00ff", "#00ffff", "#250033", "#ffffff", "rgba(255, 0, 255, 0.78)"],
-  "bronze-steel": ["#b87333", "#d1d5db", "#2b1605", "#fff7ed", "rgba(184, 115, 51, 0.72)"],
-  "electric-indigo": ["#4f46e5", "#93c5fd", "#0b102f", "#eef2ff", "rgba(79, 70, 229, 0.82)"],
-  "dark-emerald": ["#047857", "#34d399", "#001f16", "#d1fae5", "rgba(4, 120, 87, 0.82)"],
+  purple: [
+    "#9b5cff",
+    "#d5b6ff",
+    "#180034",
+    "#ffffff",
+    "rgba(155, 92, 255, 0.74)",
+  ],
+  orange: [
+    "#ff9f1c",
+    "#ffd166",
+    "#4b2100",
+    "#fff7e6",
+    "rgba(255, 159, 28, 0.72)",
+  ],
+  green: [
+    "#19ff8a",
+    "#8cffc4",
+    "#00391f",
+    "#ffffff",
+    "rgba(25, 255, 138, 0.72)",
+  ],
+  pink: [
+    "#ff4fd8",
+    "#ffb8ef",
+    "#4d003c",
+    "#ffffff",
+    "rgba(255, 79, 216, 0.72)",
+  ],
+  "ice-blue": [
+    "#7de7ff",
+    "#e7fbff",
+    "#07314a",
+    "#ffffff",
+    "rgba(125, 231, 255, 0.78)",
+  ],
+  "solar-gold": [
+    "#ffd447",
+    "#fff0a8",
+    "#513a00",
+    "#ffffff",
+    "rgba(255, 212, 71, 0.75)",
+  ],
+  "shadow-black": [
+    "#2e3440",
+    "#6b7280",
+    "#05070c",
+    "#bdeeff",
+    "rgba(75, 85, 99, 0.82)",
+  ],
+  "toxic-lime": [
+    "#b6ff00",
+    "#e8ff8a",
+    "#284000",
+    "#ffffff",
+    "rgba(182, 255, 0, 0.76)",
+  ],
+  "royal-violet": [
+    "#6d28d9",
+    "#c4b5fd",
+    "#14002e",
+    "#f8f5ff",
+    "rgba(109, 40, 217, 0.78)",
+  ],
+  "crimson-white": [
+    "#dc143c",
+    "#ffffff",
+    "#43000d",
+    "#fff5f7",
+    "rgba(220, 20, 60, 0.75)",
+  ],
+  "neon-teal": [
+    "#00ffcc",
+    "#a7ffee",
+    "#003c33",
+    "#ffffff",
+    "rgba(0, 255, 204, 0.76)",
+  ],
+  "ember-red": [
+    "#ff5a1f",
+    "#ffb86b",
+    "#451100",
+    "#fff0e6",
+    "rgba(255, 90, 31, 0.78)",
+  ],
+  "arctic-silver": [
+    "#c7d2fe",
+    "#f8fafc",
+    "#1e293b",
+    "#ffffff",
+    "rgba(199, 210, 254, 0.78)",
+  ],
+  "void-purple": [
+    "#4c1d95",
+    "#a78bfa",
+    "#070012",
+    "#e9d5ff",
+    "rgba(76, 29, 149, 0.84)",
+  ],
+  "plasma-pink": [
+    "#ff00aa",
+    "#ff7adf",
+    "#3f0030",
+    "#ffffff",
+    "rgba(255, 0, 170, 0.8)",
+  ],
+  "jade-black": [
+    "#00a86b",
+    "#86efac",
+    "#001e14",
+    "#eafff5",
+    "rgba(0, 168, 107, 0.78)",
+  ],
+  "azure-white": [
+    "#38bdf8",
+    "#ffffff",
+    "#082f49",
+    "#ffffff",
+    "rgba(56, 189, 248, 0.78)",
+  ],
+  "inferno-orange": [
+    "#ff6b00",
+    "#ffcf33",
+    "#4a1300",
+    "#fff4df",
+    "rgba(255, 107, 0, 0.82)",
+  ],
+  "midnight-blue": [
+    "#1e3a8a",
+    "#60a5fa",
+    "#020617",
+    "#dbeafe",
+    "rgba(30, 58, 138, 0.84)",
+  ],
+  "acid-green": [
+    "#39ff14",
+    "#c6ff8a",
+    "#0f2b00",
+    "#ffffff",
+    "rgba(57, 255, 20, 0.8)",
+  ],
+  "ruby-black": [
+    "#e11d48",
+    "#fb7185",
+    "#09090b",
+    "#ffe4e6",
+    "rgba(225, 29, 72, 0.82)",
+  ],
+  "ghost-white": [
+    "#e5e7eb",
+    "#ffffff",
+    "#334155",
+    "#ffffff",
+    "rgba(229, 231, 235, 0.76)",
+  ],
+  "cyber-yellow": [
+    "#faff00",
+    "#fff7ad",
+    "#3a3800",
+    "#ffffff",
+    "rgba(250, 255, 0, 0.76)",
+  ],
+  "deep-ocean": [
+    "#006994",
+    "#67e8f9",
+    "#001b2e",
+    "#e0ffff",
+    "rgba(0, 105, 148, 0.82)",
+  ],
+  "magenta-cyan": [
+    "#ff00ff",
+    "#00ffff",
+    "#250033",
+    "#ffffff",
+    "rgba(255, 0, 255, 0.78)",
+  ],
+  "bronze-steel": [
+    "#b87333",
+    "#d1d5db",
+    "#2b1605",
+    "#fff7ed",
+    "rgba(184, 115, 51, 0.72)",
+  ],
+  "electric-indigo": [
+    "#4f46e5",
+    "#93c5fd",
+    "#0b102f",
+    "#eef2ff",
+    "rgba(79, 70, 229, 0.82)",
+  ],
+  "dark-emerald": [
+    "#047857",
+    "#34d399",
+    "#001f16",
+    "#d1fae5",
+    "rgba(4, 120, 87, 0.82)",
+  ],
 };
 
 function normalizeSkin(skin) {
-  const clean = String(skin || "cyan").trim().toLowerCase().replace(/_/g, "-").replace(/\s+/g, "-");
+  const clean = String(skin || "cyan")
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, "-")
+    .replace(/\s+/g, "-");
   if (!clean || clean === "basic" || clean === "basic-drone") return "cyan";
   return clean;
 }
 
 function getSelectedSkin(user) {
   if (user?.isGuest) return "cyan";
-  return normalizeSkin(user?.selectedSkin || user?.selectedDroneSkin || user?.selectedDrone || user?.skin || "cyan");
+  return normalizeSkin(
+    user?.selectedSkin ||
+      user?.selectedDroneSkin ||
+      user?.selectedDrone ||
+      user?.skin ||
+      "cyan",
+  );
 }
 
 function getDisplayName(user) {
-  return user?.username || user?.firstName || user?.email?.split("@")?.[0] || "Player";
+  return (
+    user?.username ||
+    user?.firstName ||
+    user?.email?.split("@")?.[0] ||
+    "Player"
+  );
 }
 
 function isRealMobileDevice() {
-  if (typeof window === "undefined" || typeof navigator === "undefined") return false;
+  if (typeof window === "undefined" || typeof navigator === "undefined")
+    return false;
 
   const ua = navigator.userAgent || "";
   const isPhoneUa = /Android.*Mobile|iPhone|iPod|IEMobile|Opera Mini/i.test(ua);
@@ -133,11 +374,7 @@ function isRealMobileDevice() {
   const longSide = Math.max(window.innerWidth, window.innerHeight);
 
   return Boolean(
-    isPhoneUa &&
-    hasTouch &&
-    isPortrait &&
-    shortSide <= 980 &&
-    longSide <= 2600
+    isPhoneUa && hasTouch && isPortrait && shortSide <= 980 && longSide <= 2600,
   );
 }
 
@@ -194,7 +431,16 @@ function damp(current, target, lambda, dt) {
   return lerp(current, target, t);
 }
 
-function dampPoint(currentX, currentY, targetX, targetY, lambda, dt, snapDistance = 0, hardSnapDistance = Infinity) {
+function dampPoint(
+  currentX,
+  currentY,
+  targetX,
+  targetY,
+  lambda,
+  dt,
+  snapDistance = 0,
+  hardSnapDistance = Infinity,
+) {
   const distance = Math.hypot(targetX - currentX, targetY - currentY);
 
   if (distance <= snapDistance || distance >= hardSnapDistance) {
@@ -211,7 +457,17 @@ function dampPoint(currentX, currentY, targetX, targetY, lambda, dt, snapDistanc
 // cu o viteza maxima de corectie (px/sec). Asta garanteaza ca, indiferent cat de mare e
 // diferenta momentana fata de server (sub hardSnapDistance), drona ta nu "salta" niciodata
 // vizibil - se aliniaza mereu treptat, la o viteza perceptibila dar nu brusca.
-function dampPointCapped(currentX, currentY, targetX, targetY, lambda, dt, snapDistance, hardSnapDistance, maxSpeed) {
+function dampPointCapped(
+  currentX,
+  currentY,
+  targetX,
+  targetY,
+  lambda,
+  dt,
+  snapDistance,
+  hardSnapDistance,
+  maxSpeed,
+) {
   const distance = Math.hypot(targetX - currentX, targetY - currentY);
 
   if (distance <= snapDistance) {
@@ -222,8 +478,20 @@ function dampPointCapped(currentX, currentY, targetX, targetY, lambda, dt, snapD
     return { x: targetX, y: targetY };
   }
 
-  const damped = dampPoint(currentX, currentY, targetX, targetY, lambda, dt, 0, Infinity);
-  const dampedStepDistance = Math.hypot(damped.x - currentX, damped.y - currentY);
+  const damped = dampPoint(
+    currentX,
+    currentY,
+    targetX,
+    targetY,
+    lambda,
+    dt,
+    0,
+    Infinity,
+  );
+  const dampedStepDistance = Math.hypot(
+    damped.x - currentX,
+    damped.y - currentY,
+  );
   const maxStepDistance = maxSpeed * Math.max(0, dt || 0);
 
   if (dampedStepDistance <= maxStepDistance || dampedStepDistance === 0) {
@@ -237,7 +505,15 @@ function dampPointCapped(currentX, currentY, targetX, targetY, lambda, dt, snapD
   };
 }
 
-function keepInsideSafeZone(x, y, radius, worldWidth, worldHeight, margin = 70, allowOutsideZone = false) {
+function keepInsideSafeZone(
+  x,
+  y,
+  radius,
+  worldWidth,
+  worldHeight,
+  margin = 70,
+  allowOutsideZone = false,
+) {
   // Pentru Normal PvP vrem ca playerul sa poata intra in zona periculoasa.
   // Clientul limiteaza doar marginile hartii; serverul aplica damage-ul autoritar.
   if (allowOutsideZone) {
@@ -322,7 +598,8 @@ function locallyCollectItems(mapRef, hiddenRef, player, distance, now) {
 }
 
 function getProjectileSkinStyle(skin = "cyan") {
-  const [primary, secondary, dark, highlight, glow] = DRONE_SKIN_THEMES[normalizeSkin(skin)] || DRONE_SKIN_THEMES.cyan;
+  const [primary, secondary, dark, highlight, glow] =
+    DRONE_SKIN_THEMES[normalizeSkin(skin)] || DRONE_SKIN_THEMES.cyan;
   return {
     "--drone-primary": primary,
     "--drone-secondary": secondary,
@@ -341,15 +618,27 @@ function getActiveEffectBadges(unit, now = Date.now()) {
   const badges = [];
   const addTimed = (key, label, until, className) => {
     if (!until || until <= now) return;
-    badges.push({ key, label, seconds: Math.ceil((until - now) / 1000), className });
+    badges.push({
+      key,
+      label,
+      seconds: Math.ceil((until - now) / 1000),
+      className,
+    });
   };
-  const addReady = (key, label, className) => badges.push({ key, label, seconds: null, className });
+  const addReady = (key, label, className) =>
+    badges.push({ key, label, seconds: null, className });
 
   if (unit.nanoCoreActive) addReady("nano", "NANO CORE", "nano");
   if (unit.rotorCoreActive) addReady("rotor", "ROTOR CORE", "rotor");
   if (unit.swarmCoreActive) addReady("swarm", "SWARM CORE", "swarm");
-  if ((unit.piercingShots || 0) > 0) addReady("piercing", `PIERCING x${unit.piercingShots}`, "piercing");
-  if ((unit.shieldBreakerShots || 0) > 0) addReady("shield-breaker", `SHIELD BREAKER x${unit.shieldBreakerShots}`, "shield-breaker");
+  if ((unit.piercingShots || 0) > 0)
+    addReady("piercing", `PIERCING x${unit.piercingShots}`, "piercing");
+  if ((unit.shieldBreakerShots || 0) > 0)
+    addReady(
+      "shield-breaker",
+      `SHIELD BREAKER x${unit.shieldBreakerShots}`,
+      "shield-breaker",
+    );
 
   addTimed("overclock", "OVERCLOCK", unit.overclockUntil, "overclock");
   addTimed("berserk", "BERSERK", unit.berserkUntil, "berserk");
@@ -360,7 +649,13 @@ function getActiveEffectBadges(unit, now = Date.now()) {
   return badges.slice(0, 2);
 }
 
-function getViewportBounds(cameraX, cameraY, viewport, padding = 650, scale = 1) {
+function getViewportBounds(
+  cameraX,
+  cameraY,
+  viewport,
+  padding = 650,
+  scale = 1,
+) {
   const safeScale = Math.max(0.2, Number(scale || 1));
 
   return {
@@ -372,7 +667,13 @@ function getViewportBounds(cameraX, cameraY, viewport, padding = 650, scale = 1)
 }
 
 function isVisible(item, bounds, radius = 0) {
-  return item && item.x + radius >= bounds.left && item.x - radius <= bounds.right && item.y + radius >= bounds.top && item.y - radius <= bounds.bottom;
+  return (
+    item &&
+    item.x + radius >= bounds.left &&
+    item.x - radius <= bounds.right &&
+    item.y + radius >= bounds.top &&
+    item.y - radius <= bounds.bottom
+  );
 }
 
 function collectVisible(source, predicate, limit, mapFn) {
@@ -421,21 +722,32 @@ function getLocalFireCooldown(unit, now = performance.now()) {
 }
 
 function getLocalProjectileSpeed(unit) {
-  const rapidBonus = unit?.rapidFireUntil && unit.rapidFireUntil > Date.now() ? 0.75 : 0;
-  const overclockBonus = unit?.overclockUntil && unit.overclockUntil > Date.now() ? 1.25 : 0;
-  return LOCAL_PROJECTILE_SPEED + (unit?.projectileSpeedBonus || 0) + rapidBonus + overclockBonus;
+  const rapidBonus =
+    unit?.rapidFireUntil && unit.rapidFireUntil > Date.now() ? 0.75 : 0;
+  const overclockBonus =
+    unit?.overclockUntil && unit.overclockUntil > Date.now() ? 1.25 : 0;
+  return (
+    LOCAL_PROJECTILE_SPEED +
+    (unit?.projectileSpeedBonus || 0) +
+    rapidBonus +
+    overclockBonus
+  );
 }
 
 function projectileHitsAnyTarget(projectile, targets = []) {
   if (!projectile) return false;
 
   for (const target of targets) {
-    if (!target || target.alive === false || target.id === projectile.ownerId) continue;
+    if (!target || target.alive === false || target.id === projectile.ownerId)
+      continue;
 
     const dx = (target.x || 0) - (projectile.x || 0);
     const dy = (target.y || 0) - (projectile.y || 0);
 
-    if (dx * dx + dy * dy <= PROJECTILE_HIT_VISUAL_RADIUS * PROJECTILE_HIT_VISUAL_RADIUS) {
+    if (
+      dx * dx + dy * dy <=
+      PROJECTILE_HIT_VISUAL_RADIUS * PROJECTILE_HIT_VISUAL_RADIUS
+    ) {
       return true;
     }
   }
@@ -468,7 +780,6 @@ function createLocalProjectile(unit, mouseWorldX, mouseWorldY, now) {
   };
 }
 
-
 function getMoveVectorFromInput(input = {}) {
   let dx = 0;
   let dy = 0;
@@ -493,7 +804,14 @@ function getMoveVectorFromInput(input = {}) {
   };
 }
 
-function predictUnitFromInput(unit, input, dt, worldWidth, worldHeight, zoneRadius) {
+function predictUnitFromInput(
+  unit,
+  input,
+  dt,
+  worldWidth,
+  worldHeight,
+  zoneRadius,
+) {
   if (!unit || unit.alive === false) return unit;
 
   const move = getMoveVectorFromInput(input);
@@ -513,7 +831,7 @@ function predictUnitFromInput(unit, input, dt, worldWidth, worldHeight, zoneRadi
     worldWidth || WORLD_WIDTH_FALLBACK,
     worldHeight || WORLD_HEIGHT_FALLBACK,
     70,
-    true
+    true,
   );
 
   return {
@@ -523,7 +841,9 @@ function predictUnitFromInput(unit, input, dt, worldWidth, worldHeight, zoneRadi
     moveX: move.moving ? move.nx : 0,
     moveY: move.moving ? move.ny : 0,
     isMoving: move.moving,
-    moveAngle: move.moving ? Math.atan2(move.dy, move.dx) : unit.moveAngle ?? 0,
+    moveAngle: move.moving
+      ? Math.atan2(move.dy, move.dx)
+      : (unit.moveAngle ?? 0),
     attacking: Boolean(input.attacking),
     shieldActive: Boolean(unit.shieldActive || input.shield),
     mouseX: input.mouseX ?? unit.mouseX ?? safe.x,
@@ -541,7 +861,10 @@ function interpolateSnapshotBuffer(buffer = [], renderTime) {
   for (let i = 0; i < buffer.length - 1; i += 1) {
     const a = buffer[i];
     const b = buffer[i + 1];
-    if ((a.__receivedAt || 0) <= renderTime && (b.__receivedAt || 0) >= renderTime) {
+    if (
+      (a.__receivedAt || 0) <= renderTime &&
+      (b.__receivedAt || 0) >= renderTime
+    ) {
       older = a;
       newer = b;
       break;
@@ -566,7 +889,8 @@ function interpolateSnapshotBuffer(buffer = [], renderTime) {
 
 function FlyingAttackDrone({ projectile }) {
   const skin = normalizeSkin(projectile.skin || "cyan");
-  const angle = projectile.angle || Math.atan2(projectile.vy || 0, projectile.vx || 1);
+  const angle =
+    projectile.angle || Math.atan2(projectile.vy || 0, projectile.vx || 1);
 
   return (
     <div
@@ -581,10 +905,18 @@ function FlyingAttackDrone({ projectile }) {
       <div className="fad-trail" />
       <div className="fad-arm fad-arm-x" />
       <div className="fad-arm fad-arm-y" />
-      <div className="fad-rotor fad-tl"><span /></div>
-      <div className="fad-rotor fad-tr"><span /></div>
-      <div className="fad-rotor fad-bl"><span /></div>
-      <div className="fad-rotor fad-br"><span /></div>
+      <div className="fad-rotor fad-tl">
+        <span />
+      </div>
+      <div className="fad-rotor fad-tr">
+        <span />
+      </div>
+      <div className="fad-rotor fad-bl">
+        <span />
+      </div>
+      <div className="fad-rotor fad-br">
+        <span />
+      </div>
       <div className="fad-shell" />
       <div className="fad-light" />
     </div>
@@ -594,7 +926,10 @@ function FlyingAttackDrone({ projectile }) {
 function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const socketRef = useRef(null);
   const keysRef = useRef({});
-  const mouseRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+  const mouseRef = useRef({
+    x: window.innerWidth / 2,
+    y: window.innerHeight / 2,
+  });
   const lastFrameRef = useRef(performance.now());
   const fpsRef = useRef({ frames: 0, lastAt: performance.now(), value: 60 });
   const lastRenderSyncRef = useRef(0);
@@ -603,7 +938,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     CORE_TYPES.reduce((acc, core) => {
       acc[core.type] = core.color;
       return acc;
-    }, {})
+    }, {}),
   );
   const worldElementRef = useRef(null);
   const zoneElementRef = useRef(null);
@@ -611,6 +946,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const sendInputRef = useRef(() => {});
   const inputSeqRef = useRef(0);
   const lastInputSentAtRef = useRef(performance.now());
+  const lastInputSignatureRef = useRef("");
   const pendingInputsRef = useRef([]);
   const remoteSnapshotBufferRef = useRef(new Map());
   const lastConfirmedHpRef = useRef(null);
@@ -621,6 +957,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const attackPointerRef = useRef(null);
   const shieldPointerRef = useRef(null);
   const mobileAimDirRef = useRef({ x: 1, y: 0 });
+  const lastJoystickUiAtRef = useRef(0);
 
   const worldRef = useRef({
     status: "connecting",
@@ -661,12 +998,27 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const hiddenEnergyIdsRef = useRef(new Map());
   const hiddenCoreIdsRef = useRef(new Map());
 
-  const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
-  const [isMobileControls, setIsMobileControls] = useState(() => isRealMobileDevice());
-  const [renderData, setRenderData] = useState(() => ({ ...worldRef.current, fps: 60 }));
-  const [hudData, setHudData] = useState(() => ({ ...worldRef.current, fps: 60 }));
+  const [viewport, setViewport] = useState({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  });
+  const [isMobileControls, setIsMobileControls] = useState(() =>
+    isRealMobileDevice(),
+  );
+  const [renderData, setRenderData] = useState(() => ({
+    ...worldRef.current,
+    fps: 60,
+  }));
+  const [hudData, setHudData] = useState(() => ({
+    ...worldRef.current,
+    fps: 60,
+  }));
   const [connectionError, setConnectionError] = useState("");
-  const [mobileJoystick, setMobileJoystick] = useState({ active: false, knobX: 0, knobY: 0 });
+  const [mobileJoystick, setMobileJoystick] = useState({
+    active: false,
+    knobX: 0,
+    knobY: 0,
+  });
   const [mobileAttackActive, setMobileAttackActive] = useState(false);
   const [mobileShieldActive, setMobileShieldActive] = useState(false);
 
@@ -688,85 +1040,134 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       cleanupHiddenCollected(hiddenEnergyIdsRef.current, now);
       cleanupHiddenCollected(hiddenCoreIdsRef.current, now);
 
-      stableOrbMapRef.current = mergeStableItems(stableOrbMapRef.current, state.orbs || [], now, ORB_STABLE_TTL);
-      stableEnergyMapRef.current = mergeStableItems(stableEnergyMapRef.current, state.energyCells || [], now, ORB_STABLE_TTL);
-
-      stableMinimapOrbMapRef.current = mergeStableItems(
-        stableMinimapOrbMapRef.current,
-        state.minimapOrbs?.length ? state.minimapOrbs : state.orbs || [],
+      stableOrbMapRef.current = mergeStableItems(
+        stableOrbMapRef.current,
+        state.orbs || [],
         now,
-        MINIMAP_STABLE_TTL
+        ORB_STABLE_TTL,
+      );
+      stableEnergyMapRef.current = mergeStableItems(
+        stableEnergyMapRef.current,
+        state.energyCells || [],
+        now,
+        ORB_STABLE_TTL,
       );
 
-      stableMinimapEnergyMapRef.current = mergeStableItems(
-        stableMinimapEnergyMapRef.current,
-        state.minimapEnergyCells?.length ? state.minimapEnergyCells : state.energyCells || [],
-        now,
-        MINIMAP_STABLE_TTL
-      );
+      // Minimap data now arrives at a lower cadence. Do not merge every local
+      // viewport item into the minimap cache between those updates.
+      if (state.minimapOrbs !== undefined) {
+        stableMinimapOrbMapRef.current = mergeStableItems(
+          stableMinimapOrbMapRef.current,
+          state.minimapOrbs || [],
+          now,
+          MINIMAP_STABLE_TTL,
+        );
+      }
 
-      stableCoreMapRef.current = mergeStableItems(
-        stableCoreMapRef.current,
-        state.minimapCores?.length ? state.minimapCores : state.cores || [],
-        now,
-        MINIMAP_STABLE_TTL
-      );
+      if (state.minimapEnergyCells !== undefined) {
+        stableMinimapEnergyMapRef.current = mergeStableItems(
+          stableMinimapEnergyMapRef.current,
+          state.minimapEnergyCells || [],
+          now,
+          MINIMAP_STABLE_TTL,
+        );
+      }
+
+      if (state.minimapCores !== undefined) {
+        stableCoreMapRef.current = mergeStableItems(
+          stableCoreMapRef.current,
+          state.minimapCores || [],
+          now,
+          MINIMAP_STABLE_TTL,
+        );
+      }
 
       worldRef.current = {
         ...worldRef.current,
         ...state,
         safeZoneRadius: state.safeZoneRadius || ZONE_RADIUS_FALLBACK,
         you: state.you || worldRef.current.you,
-        players: Array.isArray(state.players) ? state.players.map((p) => ({ ...p, __seenAt: now })) : worldRef.current.players,
+        players: Array.isArray(state.players)
+          ? state.players.map((p) => ({ ...p, __seenAt: now }))
+          : worldRef.current.players,
         spectatingPlayer: state.spectatingPlayer
           ? { ...state.spectatingPlayer, __seenAt: now }
           : state.spectatingPlayer === null
             ? null
             : worldRef.current.spectatingPlayer,
 
-        orbs: state.orbs !== undefined
-          ? [...stableOrbMapRef.current.values()].filter((orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id))
-          : worldRef.current.orbs,
+        orbs:
+          state.orbs !== undefined
+            ? [...stableOrbMapRef.current.values()].filter(
+                (orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id),
+              )
+            : worldRef.current.orbs,
 
-        minimapOrbs: (state.minimapOrbs !== undefined || state.orbs !== undefined)
-          ? [...stableMinimapOrbMapRef.current.values()]
-          : worldRef.current.minimapOrbs,
+        minimapOrbs:
+          state.minimapOrbs !== undefined
+            ? [...stableMinimapOrbMapRef.current.values()]
+            : worldRef.current.minimapOrbs,
 
-        minimapEnergyCells: (state.minimapEnergyCells !== undefined || state.energyCells !== undefined)
-          ? [...stableMinimapEnergyMapRef.current.values()]
-          : worldRef.current.minimapEnergyCells,
+        minimapEnergyCells:
+          state.minimapEnergyCells !== undefined
+            ? [...stableMinimapEnergyMapRef.current.values()]
+            : worldRef.current.minimapEnergyCells,
 
-        energyCells: state.energyCells !== undefined
-          ? [...stableEnergyMapRef.current.values()].filter((cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id))
-          : worldRef.current.energyCells,
+        energyCells:
+          state.energyCells !== undefined
+            ? [...stableEnergyMapRef.current.values()].filter(
+                (cell) =>
+                  !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id),
+              )
+            : worldRef.current.energyCells,
 
-        cores: state.cores !== undefined
-          ? state.cores.filter((core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id))
-          : worldRef.current.cores,
+        cores:
+          state.cores !== undefined
+            ? state.cores.filter(
+                (core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id),
+              )
+            : worldRef.current.cores,
 
-        minimapCores: (state.minimapCores !== undefined || state.cores !== undefined)
-          ? [...stableCoreMapRef.current.values()]
-          : worldRef.current.minimapCores,
+        minimapCores:
+          state.minimapCores !== undefined
+            ? [...stableCoreMapRef.current.values()]
+            : worldRef.current.minimapCores,
 
-        projectiles: Array.isArray(state.projectiles) ? state.projectiles : worldRef.current.projectiles,
-        leaderboard: Array.isArray(state.leaderboard) ? state.leaderboard : worldRef.current.leaderboard,
+        projectiles: Array.isArray(state.projectiles)
+          ? state.projectiles
+          : worldRef.current.projectiles,
+        leaderboard: Array.isArray(state.leaderboard)
+          ? state.leaderboard
+          : worldRef.current.leaderboard,
       };
 
       if (state.you) {
         const lastProcessedInputSeq = Number(
-          state.you.lastProcessedInputSeq ?? state.lastProcessedInputSeq ?? 0
+          state.you.lastProcessedInputSeq ?? state.lastProcessedInputSeq ?? 0,
         );
 
-        if (Number.isFinite(lastProcessedInputSeq) && lastProcessedInputSeq > 0) {
+        if (
+          Number.isFinite(lastProcessedInputSeq) &&
+          lastProcessedInputSeq > 0
+        ) {
           pendingInputsRef.current = pendingInputsRef.current.filter(
-            (input) => input.seq > lastProcessedInputSeq
+            (input) => input.seq > lastProcessedInputSeq,
           );
         }
 
         let reconciledYou = { ...state.you };
-        const worldWidth = state.worldWidth || worldRef.current.worldWidth || WORLD_WIDTH_FALLBACK;
-        const worldHeight = state.worldHeight || worldRef.current.worldHeight || WORLD_HEIGHT_FALLBACK;
-        const zoneRadius = state.safeZoneRadius || worldRef.current.safeZoneRadius || ZONE_RADIUS_FALLBACK;
+        const worldWidth =
+          state.worldWidth ||
+          worldRef.current.worldWidth ||
+          WORLD_WIDTH_FALLBACK;
+        const worldHeight =
+          state.worldHeight ||
+          worldRef.current.worldHeight ||
+          WORLD_HEIGHT_FALLBACK;
+        const zoneRadius =
+          state.safeZoneRadius ||
+          worldRef.current.safeZoneRadius ||
+          ZONE_RADIUS_FALLBACK;
 
         for (const pending of pendingInputsRef.current) {
           reconciledYou = predictUnitFromInput(
@@ -775,7 +1176,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
             Number(pending.dt || 16) / 1000,
             worldWidth,
             worldHeight,
-            zoneRadius
+            zoneRadius,
           );
         }
 
@@ -784,13 +1185,17 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
         const incomingCollectionSeq = Number(state.you.collectionSeq || 0);
         const localCollectionSeq = Number(lastCollectionSeqRef.current || 0);
-        const keepLocalCollectStats = localCollectionSeq > incomingCollectionSeq;
+        const keepLocalCollectStats =
+          localCollectionSeq > incomingCollectionSeq;
         const collectStatsSource = keepLocalCollectStats
-          ? (predictedYouRef.current || state.you)
+          ? predictedYouRef.current || state.you
           : state.you;
 
         if (!keepLocalCollectStats && incomingCollectionSeq > 0) {
-          lastCollectionSeqRef.current = Math.max(lastCollectionSeqRef.current || 0, incomingCollectionSeq);
+          lastCollectionSeqRef.current = Math.max(
+            lastCollectionSeqRef.current || 0,
+            incomingCollectionSeq,
+          );
         }
 
         predictedYouRef.current = {
@@ -823,17 +1228,26 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
 
       const snapshotsById = remoteSnapshotBufferRef.current;
-      const incomingForSnapshots = Array.isArray(state.players) ? state.players : [];
+      const incomingForSnapshots = Array.isArray(state.players)
+        ? state.players
+        : [];
       const activeRemoteIds = new Set();
       incomingForSnapshots.forEach((player) => {
         if (!player?.id) return;
         activeRemoteIds.add(player.id);
-        const oldBuffer = snapshotsById.get(player.id) || [];
-        const nextBuffer = [
-          ...oldBuffer,
-          { ...player, __receivedAt: now },
-        ].filter((snapshot) => now - (snapshot.__receivedAt || now) <= SNAPSHOT_BUFFER_TTL_MS);
-        snapshotsById.set(player.id, nextBuffer.slice(-12));
+        const buffer = snapshotsById.get(player.id) || [];
+        buffer.push({ ...player, __receivedAt: now });
+
+        while (
+          buffer.length > 0 &&
+          now - (buffer[0].__receivedAt || now) > SNAPSHOT_BUFFER_TTL_MS
+        ) {
+          buffer.shift();
+        }
+        if (buffer.length > 12) {
+          buffer.splice(0, buffer.length - 12);
+        }
+        snapshotsById.set(player.id, buffer);
       });
 
       for (const id of snapshotsById.keys()) {
@@ -841,23 +1255,38 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
 
       if (state.you?.alive === false) {
-        predictedYouRef.current = { ...(predictedYouRef.current || {}), ...state.you };
+        predictedYouRef.current = {
+          ...(predictedYouRef.current || {}),
+          ...state.you,
+        };
 
         const aliveSpectators = Array.isArray(worldRef.current.players)
           ? worldRef.current.players.filter((player) => player?.alive !== false)
           : [];
 
-        const directSpectator = state.spectatingPlayer?.alive !== false ? state.spectatingPlayer : null;
+        const directSpectator =
+          state.spectatingPlayer?.alive !== false
+            ? state.spectatingPlayer
+            : null;
 
         const preferredTarget = state.spectatorTargetId
-          ? aliveSpectators.find((player) => player.id === state.spectatorTargetId)
+          ? aliveSpectators.find(
+              (player) => player.id === state.spectatorTargetId,
+            )
           : null;
 
         const currentTargetStillAlive = spectatorTargetRef.current
-          ? aliveSpectators.find((player) => player.id === spectatorTargetRef.current.id)
+          ? aliveSpectators.find(
+              (player) => player.id === spectatorTargetRef.current.id,
+            )
           : null;
 
-        spectatorTargetRef.current = directSpectator || preferredTarget || currentTargetStillAlive || aliveSpectators[0] || null;
+        spectatorTargetRef.current =
+          directSpectator ||
+          preferredTarget ||
+          currentTargetStillAlive ||
+          aliveSpectators[0] ||
+          null;
       } else {
         spectatorTargetRef.current = null;
       }
@@ -878,15 +1307,22 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     });
 
     socket.on("connect_error", () => {
-      setConnectionError("Nu ma pot conecta la serverul PvP. Verifica Render/WebSocket.");
+      setConnectionError(
+        "Nu ma pot conecta la serverul PvP. Verifica Render/WebSocket.",
+      );
     });
 
     const applyCollectSync = (event = {}) => {
       const now = performance.now();
-      const collectionSeq = Number(event.collectionSeq || event.you?.collectionSeq || 0);
+      const collectionSeq = Number(
+        event.collectionSeq || event.you?.collectionSeq || 0,
+      );
 
       if (collectionSeq > 0) {
-        lastCollectionSeqRef.current = Math.max(lastCollectionSeqRef.current || 0, collectionSeq);
+        lastCollectionSeqRef.current = Math.max(
+          lastCollectionSeqRef.current || 0,
+          collectionSeq,
+        );
       }
 
       for (const id of event.collectedOrbIds || []) {
@@ -907,7 +1343,8 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
 
       if (event.you) {
-        const previous = predictedYouRef.current || worldRef.current.you || event.you;
+        const previous =
+          predictedYouRef.current || worldRef.current.you || event.you;
 
         // Evenimentul de collect este trimis non-volatile de backend imediat dupa colectare.
         // Nu mutam pozitia locala inapoi; luam doar stats autoritare.
@@ -923,7 +1360,8 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           kills: event.you.kills,
           alive: event.you.alive,
           collectionSeq: event.you.collectionSeq || collectionSeq,
-          lastProcessedInputSeq: event.you.lastProcessedInputSeq ?? previous.lastProcessedInputSeq,
+          lastProcessedInputSeq:
+            event.you.lastProcessedInputSeq ?? previous.lastProcessedInputSeq,
           serverX: event.you.x,
           serverY: event.you.y,
         };
@@ -931,11 +1369,17 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldRef.current = {
           ...worldRef.current,
           you: predictedYouRef.current,
-          orbs: [...stableOrbMapRef.current.values()].filter((orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id)),
+          orbs: [...stableOrbMapRef.current.values()].filter(
+            (orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id),
+          ),
           minimapOrbs: [...stableMinimapOrbMapRef.current.values()],
-          energyCells: [...stableEnergyMapRef.current.values()].filter((cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id)),
+          energyCells: [...stableEnergyMapRef.current.values()].filter(
+            (cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id),
+          ),
           minimapEnergyCells: [...stableMinimapEnergyMapRef.current.values()],
-          cores: (worldRef.current.cores || []).filter((core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id)),
+          cores: (worldRef.current.cores || []).filter(
+            (core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id),
+          ),
         };
 
         setHudData({
@@ -949,28 +1393,54 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     socket.on("normal-pvp:joined", applyState);
     socket.on("normal-pvp:state", applyState);
     socket.on("normal-pvp:collect", applyCollectSync);
-    socket.on("normal-pvp:error", (message) => setConnectionError(typeof message === "string" ? message : "Eroare Normal PvP."));
+    socket.on("normal-pvp:error", (message) =>
+      setConnectionError(
+        typeof message === "string" ? message : "Eroare Normal PvP.",
+      ),
+    );
 
-    const sendInputNow = () => {
+    const sendInputNow = (force = false) => {
       if (!socket.connected) return;
 
       const now = performance.now();
+      const minInterval =
+        typeof document !== "undefined" && document.hidden
+          ? INPUT_HEARTBEAT_MS
+          : INPUT_SEND_INTERVAL_MS;
+      const elapsed = now - lastInputSentAtRef.current;
+
+      if (!force && elapsed < minInterval) return;
+
       const you = predictedYouRef.current || worldRef.current.you;
       const mouse = mouseRef.current;
       const mouseWorldX = you ? you.x + (mouse.x - window.innerWidth / 2) : 0;
       const mouseWorldY = you ? you.y + (mouse.y - window.innerHeight / 2) : 0;
       const mobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
-      const dt = Math.min(50, Math.max(1, now - lastInputSentAtRef.current));
-      lastInputSentAtRef.current = now;
 
       const input = {
         seq: inputSeqRef.current + 1,
-        dt,
+        dt: Math.min(50, Math.max(1, elapsed)),
         clientSentAt: now,
-        w: Boolean(keysRef.current.w || keysRef.current.arrowup || (mobileMove.active && mobileMove.y < -0.22)),
-        a: Boolean(keysRef.current.a || keysRef.current.arrowleft || (mobileMove.active && mobileMove.x < -0.22)),
-        s: Boolean(keysRef.current.s || keysRef.current.arrowdown || (mobileMove.active && mobileMove.y > 0.22)),
-        d: Boolean(keysRef.current.d || keysRef.current.arrowright || (mobileMove.active && mobileMove.x > 0.22)),
+        w: Boolean(
+          keysRef.current.w ||
+          keysRef.current.arrowup ||
+          (mobileMove.active && mobileMove.y < -0.22),
+        ),
+        a: Boolean(
+          keysRef.current.a ||
+          keysRef.current.arrowleft ||
+          (mobileMove.active && mobileMove.x < -0.22),
+        ),
+        s: Boolean(
+          keysRef.current.s ||
+          keysRef.current.arrowdown ||
+          (mobileMove.active && mobileMove.y > 0.22),
+        ),
+        d: Boolean(
+          keysRef.current.d ||
+          keysRef.current.arrowright ||
+          (mobileMove.active && mobileMove.x > 0.22),
+        ),
         moveX: mobileMove.active ? mobileMove.x : 0,
         moveY: mobileMove.active ? mobileMove.y : 0,
         mobileMove: Boolean(mobileMove.active),
@@ -980,16 +1450,47 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         mouseY: mouseWorldY,
       };
 
+      const inputSignature = [
+        input.w,
+        input.a,
+        input.s,
+        input.d,
+        input.mobileMove,
+        Math.round(input.moveX * 100),
+        Math.round(input.moveY * 100),
+        input.attacking,
+        input.shield,
+        Math.round(input.mouseX / 8),
+        Math.round(input.mouseY / 8),
+      ].join("|");
+
+      // Idle state is sent only as a small heartbeat. Movement/aim changes keep
+      // the normal 30 Hz cadence; state transitions can still be forced.
+      if (
+        !force &&
+        inputSignature === lastInputSignatureRef.current &&
+        elapsed < INPUT_HEARTBEAT_MS
+      ) {
+        return;
+      }
+
       inputSeqRef.current = input.seq;
+      lastInputSentAtRef.current = now;
+      lastInputSignatureRef.current = inputSignature;
 
       if (worldRef.current.status === "playing" && you?.alive !== false) {
         pendingInputsRef.current.push(input);
         if (pendingInputsRef.current.length > MAX_PENDING_INPUTS) {
-          pendingInputsRef.current = pendingInputsRef.current.slice(-MAX_PENDING_INPUTS);
+          pendingInputsRef.current.splice(
+            0,
+            pendingInputsRef.current.length - MAX_PENDING_INPUTS,
+          );
         }
       }
 
-      socket.emit("normal-pvp:input", input);
+      // Input packets are replaceable. Dropping an outdated one under pressure
+      // is preferable to queueing it behind newer movement commands.
+      socket.volatile.emit("normal-pvp:input", input);
     };
 
     sendInputRef.current = sendInputNow;
@@ -998,7 +1499,11 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const hudTimer = window.setInterval(() => {
       const data = worldRef.current;
-      setHudData({ ...data, you: predictedYouRef.current || data.you, fps: fpsRef.current.value });
+      setHudData({
+        ...data,
+        you: predictedYouRef.current || data.you,
+        fps: fpsRef.current.value,
+      });
     }, 66);
 
     return () => {
@@ -1016,12 +1521,17 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const tick = (now) => {
       const data = worldRef.current;
-      const dt = Math.min(0.05, Math.max(0.001, (now - lastFrameRef.current) / 1000));
+      const dt = Math.min(
+        0.05,
+        Math.max(0.001, (now - lastFrameRef.current) / 1000),
+      );
       lastFrameRef.current = now;
 
       fpsRef.current.frames += 1;
       if (now - fpsRef.current.lastAt >= 500) {
-        fpsRef.current.value = Math.round((fpsRef.current.frames * 1000) / (now - fpsRef.current.lastAt));
+        fpsRef.current.value = Math.round(
+          (fpsRef.current.frames * 1000) / (now - fpsRef.current.lastAt),
+        );
         fpsRef.current.frames = 0;
         fpsRef.current.lastAt = now;
       }
@@ -1032,12 +1542,32 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       if (data.you) {
         const current = predictedYouRef.current || { ...data.you };
-        const mobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
+        const mobileMove = mobileMoveRef.current || {
+          x: 0,
+          y: 0,
+          active: false,
+        };
         const input = {
-          w: Boolean(keysRef.current.w || keysRef.current.arrowup || (mobileMove.active && mobileMove.y < -0.22)),
-          a: Boolean(keysRef.current.a || keysRef.current.arrowleft || (mobileMove.active && mobileMove.x < -0.22)),
-          s: Boolean(keysRef.current.s || keysRef.current.arrowdown || (mobileMove.active && mobileMove.y > 0.22)),
-          d: Boolean(keysRef.current.d || keysRef.current.arrowright || (mobileMove.active && mobileMove.x > 0.22)),
+          w: Boolean(
+            keysRef.current.w ||
+            keysRef.current.arrowup ||
+            (mobileMove.active && mobileMove.y < -0.22),
+          ),
+          a: Boolean(
+            keysRef.current.a ||
+            keysRef.current.arrowleft ||
+            (mobileMove.active && mobileMove.x < -0.22),
+          ),
+          s: Boolean(
+            keysRef.current.s ||
+            keysRef.current.arrowdown ||
+            (mobileMove.active && mobileMove.y > 0.22),
+          ),
+          d: Boolean(
+            keysRef.current.d ||
+            keysRef.current.arrowright ||
+            (mobileMove.active && mobileMove.x > 0.22),
+          ),
           moveX: mobileMove.active ? mobileMove.x : 0,
           moveY: mobileMove.active ? mobileMove.y : 0,
           mobileMove: Boolean(mobileMove.active),
@@ -1053,26 +1583,54 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           dt,
           worldWidth,
           worldHeight,
-          zoneRadius
+          zoneRadius,
         );
 
         const predicted = predictedYouRef.current;
 
         if (data.status === "playing" && predicted?.alive !== false) {
-          const collectedOrbs = locallyCollectItems(stableOrbMapRef, hiddenOrbIdsRef, predicted, LOCAL_ORB_COLLECT_DISTANCE, now);
-          const collectedEnergy = locallyCollectItems(stableEnergyMapRef, hiddenEnergyIdsRef, predicted, LOCAL_ENERGY_COLLECT_DISTANCE, now);
-          locallyCollectItems(stableCoreMapRef, hiddenCoreIdsRef, predicted, LOCAL_CORE_COLLECT_DISTANCE, now);
+          const collectedOrbs = locallyCollectItems(
+            stableOrbMapRef,
+            hiddenOrbIdsRef,
+            predicted,
+            LOCAL_ORB_COLLECT_DISTANCE,
+            now,
+          );
+          const collectedEnergy = locallyCollectItems(
+            stableEnergyMapRef,
+            hiddenEnergyIdsRef,
+            predicted,
+            LOCAL_ENERGY_COLLECT_DISTANCE,
+            now,
+          );
+          const collectedCores = locallyCollectItems(
+            stableCoreMapRef,
+            hiddenCoreIdsRef,
+            predicted,
+            LOCAL_CORE_COLLECT_DISTANCE,
+            now,
+          );
 
-          // Ascundem instant orb/energy/core vizual, dar NU mai incrementam HUD-ul local aici.
-          // Backend-ul trimite imediat normal-pvp:collect cu progress/drones/totalCollected autoritare.
-          // Asa nu mai apare intarzierea/flicker-ul si nu se strica logica 5/15/25/35/50.
-          worldRef.current = {
-            ...worldRef.current,
-            you: predictedYouRef.current || worldRef.current.you,
-            orbs: [...stableOrbMapRef.current.values()].filter((orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id)),
-            energyCells: [...stableEnergyMapRef.current.values()].filter((cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id)),
-            cores: (worldRef.current.cores || []).filter((core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id)),
-          };
+          // Keep the hot render loop allocation-free when nothing was collected.
+          // Item arrays are rebuilt only on a real visual collection event.
+          worldRef.current.you =
+            predictedYouRef.current || worldRef.current.you;
+          if (collectedOrbs > 0 || collectedEnergy > 0 || collectedCores > 0) {
+            worldRef.current = {
+              ...worldRef.current,
+              you: predictedYouRef.current || worldRef.current.you,
+              orbs: [...stableOrbMapRef.current.values()].filter(
+                (orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id),
+              ),
+              energyCells: [...stableEnergyMapRef.current.values()].filter(
+                (cell) =>
+                  !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id),
+              ),
+              cores: (worldRef.current.cores || []).filter(
+                (core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id),
+              ),
+            };
+          }
         }
 
         const wantsToAttack = Boolean(keysRef.current.mouseDown);
@@ -1085,9 +1643,16 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           (predicted?.drones || 0) > 0 &&
           now - lastLocalProjectileAtRef.current >= localCooldown
         ) {
-          const mouseWorldX = predicted.x + (mouseRef.current.x - window.innerWidth / 2);
-          const mouseWorldY = predicted.y + (mouseRef.current.y - window.innerHeight / 2);
-          const localProjectile = createLocalProjectile(predicted, mouseWorldX, mouseWorldY, now);
+          const mouseWorldX =
+            predicted.x + (mouseRef.current.x - window.innerWidth / 2);
+          const mouseWorldY =
+            predicted.y + (mouseRef.current.y - window.innerHeight / 2);
+          const localProjectile = createLocalProjectile(
+            predicted,
+            mouseWorldX,
+            mouseWorldY,
+            now,
+          );
 
           if (localProjectile) {
             projectilesRef.current.set(localProjectile.id, localProjectile);
@@ -1100,18 +1665,21 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const remoteMap = remotePlayersRef.current;
 
       const isSpectating = Boolean(me && me.alive === false);
-      const serverSpectatorTarget = data.spectatingPlayer?.alive !== false ? data.spectatingPlayer : null;
+      const serverSpectatorTarget =
+        data.spectatingPlayer?.alive !== false ? data.spectatingPlayer : null;
 
       const currentSpectatorTarget = isSpectating
-        ? (
-            serverSpectatorTarget ||
-            (data.spectatorTargetId
-              ? (data.players || []).find((p) => p?.id === data.spectatorTargetId && p?.alive !== false)
-              : null) ||
-            (spectatorTargetRef.current?.alive !== false ? spectatorTargetRef.current : null) ||
-            (data.players || []).find((p) => p?.alive !== false) ||
-            null
-          )
+        ? serverSpectatorTarget ||
+          (data.spectatorTargetId
+            ? (data.players || []).find(
+                (p) => p?.id === data.spectatorTargetId && p?.alive !== false,
+              )
+            : null) ||
+          (spectatorTargetRef.current?.alive !== false
+            ? spectatorTargetRef.current
+            : null) ||
+          (data.players || []).find((p) => p?.alive !== false) ||
+          null
         : null;
 
       if (currentSpectatorTarget) {
@@ -1141,7 +1709,9 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
 
       const projectileMap = projectilesRef.current;
-      const incomingProjectiles = new Map((data.projectiles || []).filter((p) => p?.id).map((p) => [p.id, p]));
+      const incomingProjectiles = new Map(
+        (data.projectiles || []).filter((p) => p?.id).map((p) => [p.id, p]),
+      );
 
       for (const [id, current] of projectileMap.entries()) {
         projectileMap.set(id, advanceProjectile(current, dt));
@@ -1171,7 +1741,10 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         const missingAge = now - (projectile.__seenAt || now);
         const traveled = getProjectileTravelDistance(projectile);
 
-        const visuallyHitTarget = projectileHitsAnyTarget(projectile, projectileTargets);
+        const visuallyHitTarget = projectileHitsAnyTarget(
+          projectile,
+          projectileTargets,
+        );
 
         if (projectile.localOnly) {
           if (
@@ -1199,22 +1772,34 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         ? remoteMap.get(currentSpectatorTarget.id) || currentSpectatorTarget
         : null;
 
-      const liveCameraSubject = isSpectating ? (spectatedFromRemote || currentSpectatorTarget || me) : me;
+      const liveCameraSubject = isSpectating
+        ? spectatedFromRemote || currentSpectatorTarget || me
+        : me;
 
       const liveYou = isSpectating
-        ? (
-            liveCameraSubject && liveCameraSubject.id !== me?.id
-              ? { ...liveCameraSubject, skin: normalizeSkin(liveCameraSubject.skin || getSelectedSkin(user)) }
-              : null
-          )
+        ? liveCameraSubject && liveCameraSubject.id !== me?.id
+          ? {
+              ...liveCameraSubject,
+              skin: normalizeSkin(
+                liveCameraSubject.skin || getSelectedSkin(user),
+              ),
+            }
+          : null
         : me?.alive !== false
           ? { ...me, skin: normalizeSkin(me?.skin || getSelectedSkin(user)) }
           : null;
 
-      const liveIsMobileLike = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(hover: none)").matches;
+      const liveIsMobileLike =
+        typeof window !== "undefined" &&
+        window.matchMedia &&
+        window.matchMedia("(hover: none)").matches;
       const liveCameraScale = liveIsMobileLike ? 1 : 0.72;
-      const liveCameraX = liveCameraSubject ? viewport.width / 2 - liveCameraSubject.x * liveCameraScale : 0;
-      const liveCameraY = liveCameraSubject ? viewport.height / 2 - liveCameraSubject.y * liveCameraScale : 0;
+      const liveCameraX = liveCameraSubject
+        ? viewport.width / 2 - liveCameraSubject.x * liveCameraScale
+        : 0;
+      const liveCameraY = liveCameraSubject
+        ? viewport.height / 2 - liveCameraSubject.y * liveCameraScale
+        : 0;
 
       if (worldElementRef.current) {
         worldElementRef.current.style.transformOrigin = "0 0";
@@ -1235,32 +1820,49 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         zoneSmokeElementRef.current.style.transform = zoneTransform;
       }
 
-      const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 980, liveCameraScale);
+      const liveBounds = getViewportBounds(
+        liveCameraX,
+        liveCameraY,
+        viewport,
+        980,
+        liveCameraScale,
+      );
       const livePlayers = collectVisible(
         remoteMap.values(),
-        (player) => player?.id !== liveYou?.id && isVisible(player, liveBounds, 380),
+        (player) =>
+          player?.id !== liveYou?.id && isVisible(player, liveBounds, 380),
         MAX_VISIBLE_REMOTE_PLAYERS,
-        (player) => ({ ...player, skin: normalizeSkin(player.skin), isBot: false })
+        (player) => ({
+          ...player,
+          skin: normalizeSkin(player.skin),
+          isBot: false,
+        }),
       );
       const liveOrbs = collectVisible(
         stableOrbMapRef.current.values(),
-        (orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id) && isVisible(orb, liveBounds, 45),
-        140
+        (orb) =>
+          !isHiddenCollected(hiddenOrbIdsRef.current, orb.id) &&
+          isVisible(orb, liveBounds, 45),
+        140,
       );
       const liveEnergyCells = collectVisible(
         stableEnergyMapRef.current.values(),
-        (cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id) && isVisible(cell, liveBounds, 70),
-        50
+        (cell) =>
+          !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id) &&
+          isVisible(cell, liveBounds, 70),
+        50,
       );
       const liveCores = collectVisible(
         data.cores || [],
-        (core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id) && isVisible(core, liveBounds, 130),
-        9
+        (core) =>
+          !isHiddenCollected(hiddenCoreIdsRef.current, core.id) &&
+          isVisible(core, liveBounds, 130),
+        9,
       );
       const liveProjectiles = collectVisible(
         projectileMap.values(),
         (projectile) => isVisible(projectile, liveBounds, 180),
-        45
+        45,
       );
 
       pixiLiveRef.current = {
@@ -1288,7 +1890,8 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         setRenderData({
           ...data,
           you: me,
-          spectatingPlayer: currentSpectatorTarget || data.spectatingPlayer || null,
+          spectatingPlayer:
+            currentSpectatorTarget || data.spectatingPlayer || null,
           players: Array.from(remoteMap.values()),
           projectiles: Array.from(projectileMap.values()),
           fps: fpsRef.current.value,
@@ -1303,14 +1906,23 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   }, []);
 
   useEffect(() => {
-    const movementKeys = new Set(["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"]);
+    const movementKeys = new Set([
+      "w",
+      "a",
+      "s",
+      "d",
+      "arrowup",
+      "arrowdown",
+      "arrowleft",
+      "arrowright",
+    ]);
 
     const onKeyDown = (event) => {
       const key = event.key.toLowerCase();
       if (!movementKeys.has(key)) return;
       event.preventDefault();
       keysRef.current[key] = true;
-      sendInputRef.current();
+      sendInputRef.current(true);
     };
 
     const onKeyUp = (event) => {
@@ -1322,14 +1934,14 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const mobileMove = mobileMoveRef.current || { active: false };
       const stillMoving = Boolean(
         mobileMove.active ||
-          keysRef.current.w ||
-          keysRef.current.a ||
-          keysRef.current.s ||
-          keysRef.current.d ||
-          keysRef.current.arrowup ||
-          keysRef.current.arrowdown ||
-          keysRef.current.arrowleft ||
-          keysRef.current.arrowright
+        keysRef.current.w ||
+        keysRef.current.a ||
+        keysRef.current.s ||
+        keysRef.current.d ||
+        keysRef.current.arrowup ||
+        keysRef.current.arrowdown ||
+        keysRef.current.arrowleft ||
+        keysRef.current.arrowright,
       );
 
       if (!stillMoving && predictedYouRef.current) {
@@ -1341,23 +1953,24 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         };
       }
 
-      sendInputRef.current();
+      sendInputRef.current(true);
     };
 
     const onMouseMove = (event) => {
-      mouseRef.current = { x: event.clientX, y: event.clientY };
+      mouseRef.current.x = event.clientX;
+      mouseRef.current.y = event.clientY;
     };
 
     const onMouseDown = (event) => {
       if (event.button === 0) keysRef.current.mouseDown = true;
       if (event.button === 2) keysRef.current.rightMouseDown = true;
-      sendInputRef.current();
+      sendInputRef.current(true);
     };
 
     const onMouseUp = (event) => {
       if (event.button === 0) keysRef.current.mouseDown = false;
       if (event.button === 2) keysRef.current.rightMouseDown = false;
-      sendInputRef.current();
+      sendInputRef.current(true);
     };
 
     const onBlur = () => {
@@ -1378,7 +1991,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           attacking: false,
         };
       }
-      sendInputRef.current();
+      sendInputRef.current(true);
     };
     const onContextMenu = (event) => event.preventDefault();
     const onResize = () => {
@@ -1440,7 +2053,10 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     let power = 0;
 
     if (distance > deadZonePx) {
-      const normalized = Math.min(1, (distance - deadZonePx) / (fullSpeedAt - deadZonePx));
+      const normalized = Math.min(
+        1,
+        (distance - deadZonePx) / (fullSpeedAt - deadZonePx),
+      );
       power = distance >= fullSpeedAt ? 1 : Math.pow(normalized, 0.35);
     }
 
@@ -1466,18 +2082,28 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       active,
     };
 
-    setMobileJoystick({
-      active,
-      knobX: vector.knobX,
-      knobY: vector.knobY,
-    });
+    const now = performance.now();
+    if (
+      !active ||
+      now - lastJoystickUiAtRef.current >= INPUT_SEND_INTERVAL_MS
+    ) {
+      lastJoystickUiAtRef.current = now;
+      setMobileJoystick({
+        active,
+        knobX: vector.knobX,
+        knobY: vector.knobY,
+      });
+    }
 
     sendInputRef.current();
   };
 
   const stopJoystick = (event) => {
     event.preventDefault();
-    if (joystickPointerRef.current !== null && event.currentTarget.releasePointerCapture) {
+    if (
+      joystickPointerRef.current !== null &&
+      event.currentTarget.releasePointerCapture
+    ) {
       try {
         event.currentTarget.releasePointerCapture(joystickPointerRef.current);
       } catch {}
@@ -1513,7 +2139,8 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   };
 
   const updateMobileAimFromPointer = (event) => {
-    mouseRef.current = { x: event.clientX, y: event.clientY };
+    mouseRef.current.x = event.clientX;
+    mouseRef.current.y = event.clientY;
   };
 
   const updateMobileAimFromAttackButton = (event) => {
@@ -1536,11 +2163,12 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       dirY = mobileAimDirRef.current.y || 0;
     }
 
-    const aimDistance = Math.max(220, Math.min(360, Math.min(window.innerWidth, window.innerHeight) * 0.42));
-    mouseRef.current = {
-      x: window.innerWidth / 2 + dirX * aimDistance,
-      y: window.innerHeight / 2 + dirY * aimDistance,
-    };
+    const aimDistance = Math.max(
+      220,
+      Math.min(360, Math.min(window.innerWidth, window.innerHeight) * 0.42),
+    );
+    mouseRef.current.x = window.innerWidth / 2 + dirX * aimDistance;
+    mouseRef.current.y = window.innerHeight / 2 + dirY * aimDistance;
   };
 
   const onAttackPointerDown = (event) => {
@@ -1568,7 +2196,10 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     event.preventDefault();
     updateMobileAimFromAttackButton(event);
 
-    if (attackPointerRef.current !== null && event.currentTarget.releasePointerCapture) {
+    if (
+      attackPointerRef.current !== null &&
+      event.currentTarget.releasePointerCapture
+    ) {
       try {
         event.currentTarget.releasePointerCapture(attackPointerRef.current);
       } catch {}
@@ -1599,7 +2230,10 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
   const stopMobileShield = (event) => {
     event.preventDefault();
-    if (shieldPointerRef.current !== null && event.currentTarget.releasePointerCapture) {
+    if (
+      shieldPointerRef.current !== null &&
+      event.currentTarget.releasePointerCapture
+    ) {
       try {
         event.currentTarget.releasePointerCapture(shieldPointerRef.current);
       } catch {}
@@ -1617,59 +2251,99 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const safeZoneRadius = renderData.safeZoneRadius || ZONE_RADIUS_FALLBACK;
 
   const isDead = Boolean(you && you.alive === false);
-  const liveSpectatorCandidates = (renderData.players || []).filter((player) => player?.alive !== false);
+  const liveSpectatorCandidates = (renderData.players || []).filter(
+    (player) => player?.alive !== false,
+  );
 
-  const serverSpectatingPlayer = renderData.spectatingPlayer?.alive !== false ? renderData.spectatingPlayer : null;
+  const serverSpectatingPlayer =
+    renderData.spectatingPlayer?.alive !== false
+      ? renderData.spectatingPlayer
+      : null;
 
   const spectatorTarget = isDead
-    ? (
-        serverSpectatingPlayer ||
-        (renderData.spectatorTargetId
-          ? liveSpectatorCandidates.find((player) => player.id === renderData.spectatorTargetId)
-          : null) ||
-        (spectatorTargetRef.current?.alive !== false
-          ? liveSpectatorCandidates.find((player) => player.id === spectatorTargetRef.current.id) || spectatorTargetRef.current
-          : null) ||
-        liveSpectatorCandidates[0] ||
-        null
-      )
+    ? serverSpectatingPlayer ||
+      (renderData.spectatorTargetId
+        ? liveSpectatorCandidates.find(
+            (player) => player.id === renderData.spectatorTargetId,
+          )
+        : null) ||
+      (spectatorTargetRef.current?.alive !== false
+        ? liveSpectatorCandidates.find(
+            (player) => player.id === spectatorTargetRef.current.id,
+          ) || spectatorTargetRef.current
+        : null) ||
+      liveSpectatorCandidates[0] ||
+      null
     : null;
 
   if (spectatorTarget) {
     spectatorTargetRef.current = spectatorTarget;
   }
 
-  const cameraSubject = isDead ? (spectatorTarget || you) : you;
+  const cameraSubject = isDead ? spectatorTarget || you : you;
 
   // CAMERA / ZOOM - identic cu BattleRoyaleMode:
   // Desktop/laptop: 0.72 = vezi harta mai de sus.
   // Telefon/tableta touch: 1 = ramane aproape pentru controale si lizibilitate.
   const DESKTOP_CAMERA_SCALE = 0.72;
   const MOBILE_CAMERA_SCALE = 1;
-  const cameraScale = isMobileControls ? MOBILE_CAMERA_SCALE : DESKTOP_CAMERA_SCALE;
+  const cameraScale = isMobileControls
+    ? MOBILE_CAMERA_SCALE
+    : DESKTOP_CAMERA_SCALE;
 
-  const cameraX = cameraSubject ? viewport.width / 2 - cameraSubject.x * cameraScale : 0;
-  const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y * cameraScale : 0;
-  const bounds = getViewportBounds(cameraX, cameraY, viewport, 720, cameraScale);
+  const cameraX = cameraSubject
+    ? viewport.width / 2 - cameraSubject.x * cameraScale
+    : 0;
+  const cameraY = cameraSubject
+    ? viewport.height / 2 - cameraSubject.y * cameraScale
+    : 0;
+  const bounds = getViewportBounds(
+    cameraX,
+    cameraY,
+    viewport,
+    720,
+    cameraScale,
+  );
 
-  const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), 140);
-  const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), 50);
-  const visibleCores = collectVisible(renderData.cores || [], (core) => isVisible(core, bounds, 120), 9);
-  const visiblePlayers = collectVisible(renderData.players || [], (player) => isVisible(player, bounds, 360), MAX_VISIBLE_REMOTE_PLAYERS);
-  const visibleProjectiles = collectVisible(renderData.projectiles || [], (projectile) => isVisible(projectile, bounds, 160), 45);
+  const visibleOrbs = collectVisible(
+    renderData.orbs || [],
+    (orb) => isVisible(orb, bounds, 40),
+    140,
+  );
+  const visibleEnergyCells = collectVisible(
+    renderData.energyCells || [],
+    (cell) => isVisible(cell, bounds, 60),
+    50,
+  );
+  const visibleCores = collectVisible(
+    renderData.cores || [],
+    (core) => isVisible(core, bounds, 120),
+    9,
+  );
+  const visiblePlayers = collectVisible(
+    renderData.players || [],
+    (player) => isVisible(player, bounds, 360),
+    MAX_VISIBLE_REMOTE_PLAYERS,
+  );
+  const visibleProjectiles = collectVisible(
+    renderData.projectiles || [],
+    (projectile) => isVisible(projectile, bounds, 160),
+    45,
+  );
 
-  const rendererPlayer = isDead && spectatorTarget
-    ? {
-        ...spectatorTarget,
-        skin: normalizeSkin(spectatorTarget.skin || getSelectedSkin(user)),
-        isSpectatorTarget: true,
-      }
-    : you?.alive !== false
+  const rendererPlayer =
+    isDead && spectatorTarget
       ? {
-          ...you,
-          skin: normalizeSkin(you?.skin || getSelectedSkin(user)),
+          ...spectatorTarget,
+          skin: normalizeSkin(spectatorTarget.skin || getSelectedSkin(user)),
+          isSpectatorTarget: true,
         }
-      : null;
+      : you?.alive !== false
+        ? {
+            ...you,
+            skin: normalizeSkin(you?.skin || getSelectedSkin(user)),
+          }
+        : null;
 
   const rendererPlayers = visiblePlayers
     .filter((player) => player?.id !== rendererPlayer?.id)
@@ -1691,7 +2365,8 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const maxPlayers = hudData.maxPlayers || renderData.maxPlayers || 2;
   const countdown = hudData.countdown || renderData.countdown || 5;
   const winnerName = hudData.winnerName || renderData.winnerName;
-  const coreDropCountdown = hudData.coreDropCountdown || renderData.coreDropCountdown;
+  const coreDropCountdown =
+    hudData.coreDropCountdown || renderData.coreDropCountdown;
 
   // IMPORTANT: cand meciul se termina (status === "finished"), nu mai
   // asteptam un click manual pe "EXIT TO MENU" - scoatem automat jucatorul
@@ -1707,11 +2382,16 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   }, [isFinished, onExitToMenu]);
 
   const matchStartedAt = hudData.matchStartedAt || renderData.matchStartedAt;
-  const zoneShrinkDuration = hudData.zoneShrinkDuration || renderData.zoneShrinkDuration || 600000;
+  const zoneShrinkDuration =
+    hudData.zoneShrinkDuration || renderData.zoneShrinkDuration || 600000;
 
-  const zoneRemainingMs = matchStartedAt ? Math.max(0, zoneShrinkDuration - (Date.now() - matchStartedAt)) : zoneShrinkDuration;
+  const zoneRemainingMs = matchStartedAt
+    ? Math.max(0, zoneShrinkDuration - (Date.now() - matchStartedAt))
+    : zoneShrinkDuration;
   const zoneRemainingMinutes = Math.floor(zoneRemainingMs / 60000);
-  const zoneRemainingSeconds = Math.floor((zoneRemainingMs % 60000) / 1000).toString().padStart(2, "0");
+  const zoneRemainingSeconds = Math.floor((zoneRemainingMs % 60000) / 1000)
+    .toString()
+    .padStart(2, "0");
 
   const hp = hudYou?.hp ?? 100;
   const maxHp = hudYou?.maxHp ?? 100;
@@ -1720,14 +2400,24 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const nextDroneAt = hudYou?.nextDroneAt ?? 5;
 
   return (
-    <div className={`game-arena pvp-dom-arena normal-pvp-dom-arena ${isMobileControls ? "is-mobile is-mobile-device is-mobile-portrait" : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""}`}>
+    <div
+      className={`game-arena pvp-dom-arena normal-pvp-dom-arena ${isMobileControls ? "is-mobile is-mobile-device is-mobile-portrait" : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""}`}
+    >
       {isMatchmaking && !connectionError && (
         <div className="normal-pvp-matchmaking-screen">
           <div className="normal-pvp-matchmaking-card">
             <div className="normal-pvp-loader" />
             <h1>{isCountdown ? "MATCH STARTS IN" : "WAITING FOR PLAYERS"}</h1>
-            <strong>{isCountdown ? countdown : `${Math.min(playersAlive, minPlayers)} / ${minPlayers}`}</strong>
-            <p>{isCountdown ? "Jucatorii au fost gasiti. Pregateste-te!" : "Se pregateste sesiunea Normal PvP..."}</p>
+            <strong>
+              {isCountdown
+                ? countdown
+                : `${Math.min(playersAlive, minPlayers)} / ${minPlayers}`}
+            </strong>
+            <p>
+              {isCountdown
+                ? "Jucatorii au fost gasiti. Pregateste-te!"
+                : "Se pregateste sesiunea Normal PvP..."}
+            </p>
           </div>
         </div>
       )}
@@ -1786,8 +2476,19 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       {you && !isDead && (
         <svg className="aim-svg" aria-hidden="true">
-          <line className="aim-svg-line" x1={viewport.width / 2} y1={viewport.height / 2} x2={mouseRef.current.x} y2={mouseRef.current.y} />
-          <circle className="aim-svg-circle" cx={mouseRef.current.x} cy={mouseRef.current.y} r="34" />
+          <line
+            className="aim-svg-line"
+            x1={viewport.width / 2}
+            y1={viewport.height / 2}
+            x2={mouseRef.current.x}
+            y2={mouseRef.current.y}
+          />
+          <circle
+            className="aim-svg-circle"
+            cx={mouseRef.current.x}
+            cy={mouseRef.current.y}
+            r="34"
+          />
           <g
             className="aim-svg-arrow"
             transform={`translate(${mouseRef.current.x}, ${mouseRef.current.y}) rotate(${(Math.atan2(mouseRef.current.y - viewport.height / 2, mouseRef.current.x - viewport.width / 2) * 180) / Math.PI})`}
@@ -1797,23 +2498,37 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         </svg>
       )}
 
-      <div className={`fps-counter ${renderData.fps < 50 ? "fps-low" : ""}`}>FPS: {renderData.fps || 60}</div>
+      <div className={`fps-counter ${renderData.fps < 50 ? "fps-low" : ""}`}>
+        FPS: {renderData.fps || 60}
+      </div>
 
       <div className="hp-panel">
         <span>DRONE HP</span>
-        <strong>{hp} / {maxHp}</strong>
-        <div className="hp-bar"><i style={{ width: `${Math.max(0, Math.min(100, (hp / maxHp) * 100))}%` }} /></div>
+        <strong>
+          {hp} / {maxHp}
+        </strong>
+        <div className="hp-bar">
+          <i
+            style={{
+              width: `${Math.max(0, Math.min(100, (hp / maxHp) * 100))}%`,
+            }}
+          />
+        </div>
 
         <div className="energy-row">
           <span>DRONE ENERGY</span>
           <strong>{energy}</strong>
-          <div className="energy-bar"><i style={{ width: `${Math.max(0, Math.min(100, energy))}%` }} /></div>
+          <div className="energy-bar">
+            <i style={{ width: `${Math.max(0, Math.min(100, energy))}%` }} />
+          </div>
         </div>
       </div>
 
       <div className="collect-counter">
         <span>ORB COUNT</span>
-        <strong>{progress} / {nextDroneAt}</strong>
+        <strong>
+          {progress} / {nextDroneAt}
+        </strong>
         <small>Total collected: {hudYou?.totalCollected ?? 0}</small>
         <small>Kills: {hudYou?.kills ?? 0}</small>
         <div className="active-cores-panel">
@@ -1822,8 +2537,12 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
             <em>NO ACTIVE CORES</em>
           ) : (
             activeBadges.map((badge) => (
-              <em key={badge.key} className={`core-badge core-badge-${badge.className}`}>
-                {badge.label}{badge.seconds !== null ? ` ${badge.seconds}s` : ""}
+              <em
+                key={badge.key}
+                className={`core-badge core-badge-${badge.className}`}
+              >
+                {badge.label}
+                {badge.seconds !== null ? ` ${badge.seconds}s` : ""}
               </em>
             ))
           )}
@@ -1842,9 +2561,16 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       <div className="real-leaderboard">
         <h3>LEADERBOARD</h3>
         {(leaderboard || []).slice(0, 8).map((item, index) => (
-          <div key={item.id || index} className={`real-leaderboard-row ${item.id === hudYou?.id ? "is-me" : ""} ${item.alive === false ? "is-dead" : ""}`}>
-            <span>{index + 1}. {item.username || "Player"}</span>
-            <strong>{item.kills ?? 0}K / {item.totalCollected ?? item.score ?? 0}</strong>
+          <div
+            key={item.id || index}
+            className={`real-leaderboard-row ${item.id === hudYou?.id ? "is-me" : ""} ${item.alive === false ? "is-dead" : ""}`}
+          >
+            <span>
+              {index + 1}. {item.username || "Player"}
+            </span>
+            <strong>
+              {item.kills ?? 0}K / {item.totalCollected ?? item.score ?? 0}
+            </strong>
           </div>
         ))}
       </div>
@@ -1901,56 +2627,67 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       {isFinished && (
         <div className="game-over-screen pvp-finished-screen">
           <h1>{winnerName ? `${winnerName} WINS` : "MATCH FINISHED"}</h1>
-          <p>{hudYou?.id === (hudData.winnerId || renderData.winnerId) ? "Ai castigat meciul." : "Meciul s-a terminat."}</p>
-          <p className="normal-pvp-finished-auto-exit">Revenire automata la meniu in cateva secunde...</p>
+          <p>
+            {hudYou?.id === (hudData.winnerId || renderData.winnerId)
+              ? "Ai castigat meciul."
+              : "Meciul s-a terminat."}
+          </p>
+          <p className="normal-pvp-finished-auto-exit">
+            Revenire automata la meniu in cateva secunde...
+          </p>
           <button onClick={onExitToMenu}>EXIT TO MENU</button>
         </div>
       )}
 
       {isMobileControls && !isDead && !isMatchmaking && (
-      <div className="pvp-mobile-controls mobile-controls" aria-label="Mobile PvP controls">
         <div
-          className={`pvp-mobile-joystick mobile-joystick ${mobileJoystick.active ? "is-active" : ""}`}
-          onPointerDown={onJoystickPointerDown}
-          onPointerMove={onJoystickPointerMove}
-          onPointerUp={stopJoystick}
-          onPointerCancel={stopJoystick}
+          className="pvp-mobile-controls mobile-controls"
+          aria-label="Mobile PvP controls"
         >
-          <div className="pvp-mobile-joystick-ring" />
           <div
-            className="pvp-mobile-joystick-knob mobile-joystick-knob"
-            style={{
-              transform: `translate(calc(-50% + ${mobileJoystick.knobX}px), calc(-50% + ${mobileJoystick.knobY}px))`,
-            }}
-          />
-        </div>
-
-        <div className="pvp-mobile-buttons mobile-action-row">
-          <button
-            type="button"
-            className={`pvp-mobile-action pvp-mobile-shield mobile-action-btn mobile-shield-btn ${mobileShieldActive ? "is-active" : ""}`}
-            onPointerDown={onShieldPointerDown}
-            onPointerUp={stopMobileShield}
-            onPointerCancel={stopMobileShield}
+            className={`pvp-mobile-joystick mobile-joystick ${mobileJoystick.active ? "is-active" : ""}`}
+            onPointerDown={onJoystickPointerDown}
+            onPointerMove={onJoystickPointerMove}
+            onPointerUp={stopJoystick}
+            onPointerCancel={stopJoystick}
           >
-            SHIELD
-          </button>
+            <div className="pvp-mobile-joystick-ring" />
+            <div
+              className="pvp-mobile-joystick-knob mobile-joystick-knob"
+              style={{
+                transform: `translate(calc(-50% + ${mobileJoystick.knobX}px), calc(-50% + ${mobileJoystick.knobY}px))`,
+              }}
+            />
+          </div>
 
-          <button
-            type="button"
-            className={`pvp-mobile-action pvp-mobile-attack mobile-action-btn mobile-attack-btn ${mobileAttackActive ? "is-active is-aiming" : ""}`}
-            onPointerDown={onAttackPointerDown}
-            onPointerMove={onAttackPointerMove}
-            onPointerUp={stopMobileAttack}
-            onPointerCancel={stopMobileAttack}
-          >
-            ATTACK
-          </button>
+          <div className="pvp-mobile-buttons mobile-action-row">
+            <button
+              type="button"
+              className={`pvp-mobile-action pvp-mobile-shield mobile-action-btn mobile-shield-btn ${mobileShieldActive ? "is-active" : ""}`}
+              onPointerDown={onShieldPointerDown}
+              onPointerUp={stopMobileShield}
+              onPointerCancel={stopMobileShield}
+            >
+              SHIELD
+            </button>
+
+            <button
+              type="button"
+              className={`pvp-mobile-action pvp-mobile-attack mobile-action-btn mobile-attack-btn ${mobileAttackActive ? "is-active is-aiming" : ""}`}
+              onPointerDown={onAttackPointerDown}
+              onPointerMove={onAttackPointerMove}
+              onPointerUp={stopMobileAttack}
+              onPointerCancel={stopMobileAttack}
+            >
+              ATTACK
+            </button>
+          </div>
         </div>
-      </div>
       )}
 
-      <button className="pvp-exit-btn" onClick={onExitToMenu}>EXIT TO MENU</button>
+      <button className="pvp-exit-btn" onClick={onExitToMenu}>
+        EXIT TO MENU
+      </button>
     </div>
   );
 }

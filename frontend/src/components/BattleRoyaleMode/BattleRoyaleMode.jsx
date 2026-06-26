@@ -8,11 +8,11 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 const COLORS = ["cyan", "green", "orange", "purple", "red", "pink"];
 
-const WORLD_WIDTH = 12000;
-const WORLD_HEIGHT = 12000;
+const WORLD_WIDTH = 14000;
+const WORLD_HEIGHT = 14000;
 const VIEW_PADDING = 120;
 
-const MAX_ORBS = 140;
+const MAX_ORBS = 250;
 const MIN_ORBS = 70;
 const ORBS_PER_ALIVE_PLAYER = 5;
 const ORB_ZONE_DENSITY = 0.0000036;
@@ -209,7 +209,7 @@ function getSelectedUserSkin(user) {
 // ---------------------------------------------------------------------------
 // 49 boti + 1 player = 50 participanti total.
 // ---------------------------------------------------------------------------
-const BOT_COUNT = 49;
+const BOT_COUNT = 59;
 
 // Boti mai inteligenti, nu kamikaze:
 // - farmeaza mai mult inainte sa intre in duel;

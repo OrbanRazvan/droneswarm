@@ -1,4 +1,4 @@
-import { Server, Socket } from 'socket.io';
+import { Server, Socket } from "socket.io";
 export declare class GameGateway {
     server: Server;
     private rooms;
@@ -53,7 +53,7 @@ export declare class GameGateway {
     resolvePlayerPairCollision(a: any, b: any, room: any, now: any, zoneRadius: any): void;
     tryFireProjectile(room: any, player: any, now: any): void;
     getFireCooldown(player: any, now: any): number;
-    updateProjectiles(room: any, deltaFrames?: number): void;
+    updateProjectiles(room: any, deltaFrames?: number, now?: number): void;
     applyZoneDamage(room: any, now: any, zoneRadius: any): void;
     applyBattleRoyaleOnlineZoneDamage(room: any, now: any, zoneRadius: any): void;
     applyZonePvpZoneDamage(room: any, now: any, zoneRadius: any): void;
@@ -180,7 +180,13 @@ export declare class GameGateway {
     };
     isInsideSafeZone(x: any, y: any, radius: any, margin?: number): boolean;
     isNear(a: any, b: any, distance: any): boolean;
+    getSpatialCellKey(x: any, y: any, cellSize?: number): string;
+    buildSpatialIndex(items?: any[], cellSize?: number): Map<string, any[]>;
+    querySpatialIndex(index: any, x: any, y: any, radius: any, cellSize?: number): any[];
+    refreshRoomSpatialIndexes(room: any): void;
+    filterNearIndexed(player: any, index: any, distance: any, limit: any): any[];
     filterNear(player: any, items: any, distance: any, limit: any): any[];
     getAlivePlayers(room: any): any[];
+    sanitizeCoordinate(value: any, fallback: any, min: any, max: any): any;
     clamp(value: any, min: any, max: any): number;
 }

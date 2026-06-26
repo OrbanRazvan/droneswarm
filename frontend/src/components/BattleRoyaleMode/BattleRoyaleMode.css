@@ -500,7 +500,7 @@
 ========================================================= */
 .battle-royale-peace-countdown {
   position: fixed !important;
-  left: 50% !important;
+  left: calc(50% - 50px) !important;
   right: auto !important;
   top: auto !important;
   bottom: max(20px, calc(env(safe-area-inset-bottom) + 18px)) !important;
