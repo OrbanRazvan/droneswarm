@@ -12,6 +12,10 @@ export declare class GameGateway {
     private loop;
     private lastLoopAt;
     constructor();
+    private selectMostPopulatedJoinableRoom;
+    private markRoomOccupied;
+    private markRoomEmptyIfNeeded;
+    private shouldDeleteEmptyRoom;
     afterInit(): void;
     handleDisconnect(client: Socket): void;
     handlePvpJoin(client: Socket, data: any): void;

@@ -72,6 +72,11 @@ const NORMAL_CROWDED_ORB_EXTRA_CAP = 30;
 // movement input after dying.
 const SPECTATOR_KILL_CREDIT_WINDOW_MS = 6000;
 
+// Empty rooms stay alive briefly so a player who reconnects can reuse the same
+// in-memory world. The timer starts when the last socket leaves, never when the
+// room was originally created.
+const EMPTY_ROOM_GRACE_MS = 30000;
+
 const ROOM_START_COUNTDOWN_MS = 5000;
 const MAP_MIN_SIZE = Math.min(WORLD_WIDTH, WORLD_HEIGHT);
 const ZONE_START_RADIUS = MAP_MIN_SIZE * 0.47;
@@ -181,6 +186,54 @@ export class GameGateway {
   private lastLoopAt = Date.now();
 
   constructor() {}
+
+  /**
+   * Keeps matchmaking dense: new players join the busiest compatible room
+   * instead of spreading across many partially-filled simulations.
+   * Ties prefer the older room so a reconnectable empty room is reused first.
+   */
+  private selectMostPopulatedJoinableRoom(
+    rooms: Map<string, any>,
+    canJoin: (room: any) => boolean,
+  ) {
+    let selected: any = null;
+
+    for (const room of rooms.values()) {
+      if (!canJoin(room)) continue;
+
+      if (
+        !selected ||
+        room.players.size > selected.players.size ||
+        (room.players.size === selected.players.size &&
+          Number(room.createdAt || 0) < Number(selected.createdAt || 0))
+      ) {
+        selected = room;
+      }
+    }
+
+    return selected;
+  }
+
+  private markRoomOccupied(room: any) {
+    if (room) room.emptySince = null;
+  }
+
+  private markRoomEmptyIfNeeded(room: any, now = Date.now()) {
+    if (room && room.players.size === 0 && !room.emptySince) {
+      room.emptySince = now;
+    }
+  }
+
+  private shouldDeleteEmptyRoom(room: any, now: number) {
+    if (!room || room.players.size !== 0) return false;
+
+    // Fallback keeps an in-flight deployment safe for a room created before
+    // this field existed.
+    const emptySince = Number(room.emptySince || room.createdAt || now);
+    if (!room.emptySince) room.emptySince = emptySince;
+
+    return now - emptySince >= EMPTY_ROOM_GRACE_MS;
+  }
   afterInit() {
     this.startLoop();
   }
@@ -230,6 +283,7 @@ export class GameGateway {
       knockbackY: 0,
     };
     room.players.set(client.id, player);
+    this.markRoomOccupied(room);
     this.socketRoom.set(client.id, room.id);
     client.join(room.id);
     if (room.players.size >= ROOM_MIN_PLAYERS && room.status === "waiting") {
@@ -334,6 +388,7 @@ export class GameGateway {
     };
 
     room.players.set(client.id, player);
+    this.markRoomOccupied(room);
     this.normalSocketRoom.set(client.id, room.id);
     client.join(room.id);
 
@@ -476,6 +531,7 @@ export class GameGateway {
     };
 
     room.players.set(client.id, player);
+    this.markRoomOccupied(room);
     this.battleRoyaleOnlineSocketRoom.set(client.id, room.id);
     client.join(room.id);
 
@@ -596,6 +652,7 @@ export class GameGateway {
     };
 
     room.players.set(client.id, player);
+    this.markRoomOccupied(room);
     this.zonePvpSocketRoom.set(client.id, room.id);
     client.join(room.id);
 
@@ -2093,15 +2150,14 @@ export class GameGateway {
     };
   }
   findOrCreateNormalRoom() {
-    for (const room of this.normalRooms.values()) {
-      if (room.status !== "playing") {
-        continue;
-      }
+    const joinableRoom = this.selectMostPopulatedJoinableRoom(
+      this.normalRooms,
+      (room) =>
+        room.status === "playing" &&
+        room.players.size < NORMAL_ROOM_MAX_PLAYERS,
+    );
 
-      if (room.players.size < NORMAL_ROOM_MAX_PLAYERS) {
-        return room;
-      }
-    }
+    if (joinableRoom) return joinableRoom;
 
     const room = {
       id: `normal-${crypto.randomUUID()}`,
@@ -2118,6 +2174,7 @@ export class GameGateway {
       projectiles: [],
       countdownStartedAt: null,
       createdAt: Date.now(),
+      emptySince: Date.now(),
       matchStartedAt: Date.now(),
       lastCoreWaveAt: Date.now(),
       nextCoreWaveAt: Date.now() + CORE_WARNING_DELAY,
@@ -2149,6 +2206,7 @@ export class GameGateway {
     if (room) {
       room.players.delete(socketId);
       this.server.sockets.sockets.get(socketId)?.leave(roomId);
+      this.markRoomEmptyIfNeeded(room);
     }
 
     this.normalSocketRoom.delete(socketId);
@@ -2165,7 +2223,7 @@ export class GameGateway {
       }
     }
 
-    if (room.players.size === 0 && now - room.createdAt > 15000) {
+    if (this.shouldDeleteEmptyRoom(room, now)) {
       this.normalRooms.delete(room.id);
     }
   }
@@ -2387,14 +2445,14 @@ export class GameGateway {
   }
 
   findOrCreateBattleRoyaleOnlineRoom() {
-    for (const room of this.battleRoyaleOnlineRooms.values()) {
-      if (
+    const joinableRoom = this.selectMostPopulatedJoinableRoom(
+      this.battleRoyaleOnlineRooms,
+      (room) =>
         (room.status === "waiting" || room.status === "countdown") &&
-        room.players.size < BR_ONLINE_ROOM_MAX_PLAYERS
-      ) {
-        return room;
-      }
-    }
+        room.players.size < BR_ONLINE_ROOM_MAX_PLAYERS,
+    );
+
+    if (joinableRoom) return joinableRoom;
 
     const room = {
       id: `br-online-${crypto.randomUUID()}`,
@@ -2411,6 +2469,7 @@ export class GameGateway {
       projectiles: [],
       countdownStartedAt: null,
       createdAt: Date.now(),
+      emptySince: Date.now(),
       matchStartedAt: null,
       lastCoreWaveAt: Date.now() - CORE_RESPAWN_DELAY + CORE_WARNING_DELAY,
       nextCoreWaveAt: null,
@@ -2441,6 +2500,7 @@ export class GameGateway {
     if (room) {
       room.players.delete(socketId);
       this.server.sockets.sockets.get(socketId)?.leave(roomId);
+      this.markRoomEmptyIfNeeded(room);
 
       if (
         room.players.size < BR_ONLINE_ROOM_MIN_PLAYERS &&
@@ -2462,7 +2522,7 @@ export class GameGateway {
       }
     }
 
-    if (room.players.size === 0 && now - room.createdAt > 15000) {
+    if (this.shouldDeleteEmptyRoom(room, now)) {
       this.battleRoyaleOnlineRooms.delete(room.id);
       return;
     }
@@ -2669,15 +2729,15 @@ export class GameGateway {
   }
 
   findOrCreateZonePvpRoom() {
-    for (const room of this.zonePvpRooms.values()) {
-      if (
+    const joinableRoom = this.selectMostPopulatedJoinableRoom(
+      this.zonePvpRooms,
+      (room) =>
         (room.status === "waiting" || room.status === "countdown") &&
         !room.locked &&
-        room.players.size < ZONE_PVP_ROOM_MAX_PLAYERS
-      ) {
-        return room;
-      }
-    }
+        room.players.size < ZONE_PVP_ROOM_MAX_PLAYERS,
+    );
+
+    if (joinableRoom) return joinableRoom;
 
     const room = {
       id: `zone-pvp-${crypto.randomUUID()}`,
@@ -2695,6 +2755,7 @@ export class GameGateway {
       projectiles: [],
       countdownStartedAt: null,
       createdAt: Date.now(),
+      emptySince: Date.now(),
       matchStartedAt: null,
       battlePrepareUntil: null,
       battleBeginFlashUntil: null,
@@ -2728,6 +2789,7 @@ export class GameGateway {
     if (room) {
       room.players.delete(socketId);
       this.server.sockets.sockets.get(socketId)?.leave(roomId);
+      this.markRoomEmptyIfNeeded(room);
     }
 
     this.zonePvpSocketRoom.delete(socketId);
@@ -2743,7 +2805,7 @@ export class GameGateway {
       }
     }
 
-    if (room.players.size === 0 && now - room.createdAt > 15000) {
+    if (this.shouldDeleteEmptyRoom(room, now)) {
       this.zonePvpRooms.delete(room.id);
       return;
     }
@@ -2955,15 +3017,16 @@ export class GameGateway {
   }
 
   findOrCreateRoom() {
-    for (const room of this.rooms.values()) {
-      if (
+    const joinableRoom = this.selectMostPopulatedJoinableRoom(
+      this.rooms,
+      (room) =>
         room.status !== "playing" &&
         room.status !== "finished" &&
-        room.players.size < ROOM_MAX_PLAYERS
-      ) {
-        return room;
-      }
-    }
+        room.players.size < ROOM_MAX_PLAYERS,
+    );
+
+    if (joinableRoom) return joinableRoom;
+
     const room = {
       id: crypto.randomUUID(),
       status: "waiting",
@@ -2980,6 +3043,7 @@ export class GameGateway {
       projectiles: [],
       countdownStartedAt: null,
       createdAt: Date.now(),
+      emptySince: Date.now(),
       matchStartedAt: null,
       lastCoreWaveAt: Date.now() - CORE_RESPAWN_DELAY + CORE_WARNING_DELAY,
       lastLocalItemAt: 0,
@@ -3004,6 +3068,7 @@ export class GameGateway {
     if (room) {
       room.players.delete(socketId);
       this.server.sockets.sockets.get(socketId)?.leave(roomId);
+      this.markRoomEmptyIfNeeded(room);
       if (room.players.size < ROOM_MIN_PLAYERS && room.status === "countdown") {
         room.status = "waiting";
         room.countdownStartedAt = null;
@@ -3017,7 +3082,7 @@ export class GameGateway {
         this.removePlayer(player.id);
       }
     }
-    if (room.players.size === 0 && now - room.createdAt > 15000) {
+    if (this.shouldDeleteEmptyRoom(room, now)) {
       this.rooms.delete(room.id);
       return;
     }
