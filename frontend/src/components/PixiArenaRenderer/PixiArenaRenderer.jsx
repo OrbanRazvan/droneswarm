@@ -178,21 +178,21 @@ function getRendererConfig(forceLowQuality) {
   const device = getRendererDeviceProfile(forceLowQuality);
   const lowSpec = device.weakMobile || device.lowSpecDesktop;
 
-  // A 2016 laptop GPU gains much more from 1x resolution + no MSAA than from
-  // lowering the simulation. The player stays high-quality; only distant
-  // bots, static loot and projectile pools are capped.
-  const resolution = lowSpec ? 1 : Math.min(1.5, device.dpr);
+  // Old laptop GPUs gain most from a smaller WebGL back buffer. 0.80 is a
+  // deliberate ultra-low desktop tier: it saves ~36% pixel shading while
+  // keeping the HUD sharp because the HUD remains DOM.
+  const resolution = device.lowSpecDesktop ? 0.8 : lowSpec ? 1 : Math.min(1.5, device.dpr);
 
   return {
     ...device,
     resolution,
     antialias: !lowSpec,
-    maxStaticItems: lowSpec ? 84 : 180,
-    maxPlayers: device.lowSpecDesktop ? 24 : forceLowQuality || device.weakMobile ? 32 : MAX_RENDERED_PLAYERS,
-    maxSimplePlayers: device.lowSpecDesktop ? 36 : device.weakMobile ? 24 : 60,
-    maxProjectiles: lowSpec ? 28 : MAX_RENDERED_PROJECTILES,
-    staticSyncInterval: device.lowSpecDesktop ? 180 : device.mobile ? 150 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: device.lowSpecDesktop ? 2 : 1,
+    maxStaticItems: lowSpec ? 48 : 180,
+    maxPlayers: device.lowSpecDesktop ? 12 : forceLowQuality || device.weakMobile ? 32 : MAX_RENDERED_PLAYERS,
+    maxSimplePlayers: device.lowSpecDesktop ? 14 : device.weakMobile ? 24 : 60,
+    maxProjectiles: lowSpec ? 12 : MAX_RENDERED_PROJECTILES,
+    staticSyncInterval: device.lowSpecDesktop ? 250 : device.mobile ? 150 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: device.lowSpecDesktop ? 4 : 1,
   };
 }
 
@@ -1282,7 +1282,7 @@ function createPixelTerrainTexture(worldWidth, worldHeight) {
   // The terrain is one decorative sprite. 1536px is visually sufficient at
   // the Battle Royale camera height and avoids a large GPU texture on GTX
   // 1050-era laptops.
-  const size = mobile ? 2048 : device.weakDesktop ? 1536 : 3072;
+  const size = mobile ? 2048 : device.weakDesktop ? 1024 : 3072;
   const cacheKey = `battle-royale-space-premium:${mobile ? "mobile" : device.weakDesktop ? "desktop-low" : "desktop"}:${size}`;
   let texture = WORLD_TERRAIN_TEXTURE_CACHE.get(cacheKey);
 

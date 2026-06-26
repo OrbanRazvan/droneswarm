@@ -22,6 +22,13 @@ const VIEW_DISTANCE = 1400;
 // cand sunt aproape de marginea camerei. Full = drona completa, Simple = punct/varianta lite.
 const BOT_RENDER_DISTANCE = 3600;
 const MAX_FULL_RENDER_BOTS = 49;
+// Desktop low-spec profile keeps nearby enemies detailed and turns distant
+// drones into inexpensive simple markers. This is the main GPU win on older
+// 2015-2018 laptops without changing the 99-bot simulation.
+const LOW_SPEC_DESKTOP_FULL_BOT_LIMIT = 12;
+const LOW_SPEC_DESKTOP_SIMPLE_BOT_LIMIT = 14;
+const LOW_SPEC_DESKTOP_FULL_BOT_DISTANCE = 2200;
+const LOW_SPEC_DESKTOP_SIMPLE_BOT_DISTANCE = 3300;
 const BOT_SIMPLE_RENDER_DISTANCE = 4200;
 
 const MAX_FULL_PROJECTILES = 18;
@@ -1667,7 +1674,15 @@ function getBotPower(unit) {
 // ---------------------------------------------------------------------------
 function getBattleRoyalePerfProfile() {
   if (typeof window === "undefined" || typeof navigator === "undefined") {
-    return { isLowEndDevice: false, aiBatches: 1 };
+    return {
+      isLowEndDevice: false,
+      isWeakDesktop: false,
+      isLowEndMobile: false,
+      aiBatches: 2,
+      botLogicIntervalMs: 28,
+      botReactSyncIntervalMs: 66,
+      projectileReactSyncIntervalMs: 66,
+    };
   }
 
   const ua = navigator.userAgent || "";
@@ -1676,39 +1691,40 @@ function getBattleRoyalePerfProfile() {
   const hasTouch = navigator.maxTouchPoints > 0 || "ontouchstart" in window;
   const shortSide = Math.min(window.innerWidth, window.innerHeight);
   const isMobile = Boolean(isPhoneUa && hasTouch && shortSide <= 980);
-
   const cores = Number(navigator.hardwareConcurrency || 4);
-
-  // navigator.deviceMemory nu exista in Safari/Firefox - in acel caz raman
-  // null, ca sa NU presupunem fals ca device-ul e slab doar pentru ca acel
-  // browser nu raporteaza memoria. Doar pe Chrome/Edge (unde API-ul exista)
-  // verificam efectiv valoarea.
-  const reportedMemory = typeof navigator.deviceMemory === "number" ? navigator.deviceMemory : null;
+  const reportedMemory = typeof navigator.deviceMemory === "number"
+    ? Number(navigator.deviceMemory)
+    : null;
   const memory = reportedMemory ?? 4;
 
-  // Laptop/desktop slab: putine nuclee SAU memorie raportata <= 8GB.
-  // Daca browserul nu raporteaza deviceMemory (Safari/Firefox), nu folosim
-  // memoria ca semnal - ne bazam doar pe nuclee, ca sa nu marcam gresit
-  // utilizatori cu RAM bun dar pe un browser care nu expune API-ul.
+  // GTX 1050-era laptops often report 4 CPU threads / 8GB RAM. Treat this
+  // class as a dedicated low-spec desktop tier, not as a phone tier: the
+  // battle remains active, but rendering and React sync become much cheaper.
   const isWeakDesktop = !isMobile && (
     cores <= 4 || (reportedMemory !== null && reportedMemory <= 8)
   );
-
   const isLowEndMobile = Boolean(
     isMobile && (isHuaweiLike || cores <= 4 || memory <= 4)
   );
-
   const isLowEndDevice = isLowEndMobile || isWeakDesktop;
 
-  // AI este distribuit rotativ: desktopul proceseaza jumatate din boti/tick,
-  // iar telefonul un sfert. Pozitiile continua intre decizii, astfel miscarea
-  // ramane naturala fara spike-uri CPU de la toate deciziile simultan.
-  const aiBatches = isLowEndDevice ? 4 : 2;
-
-  return { isLowEndDevice, aiBatches };
+  return {
+    isLowEndDevice,
+    isWeakDesktop,
+    isLowEndMobile,
+    // Decisions are spread over six waves on weak PCs. Bots still travel on
+    // every simulation step using their last planned vector, so this reduces
+    // CPU spikes without freezing their movement.
+    aiBatches: isWeakDesktop ? 8 : isLowEndMobile ? 4 : 2,
+    // Keep movement responsive, but spread target searching and collection work
+    // across more groups on 2015–2018 laptops.
+    botLogicIntervalMs: isWeakDesktop ? 36 : isLowEndMobile ? 42 : 28,
+    botReactSyncIntervalMs: isWeakDesktop ? 220 : isLowEndMobile ? 120 : 66,
+    projectileReactSyncIntervalMs: isWeakDesktop ? 160 : isLowEndMobile ? 100 : 66,
+  };
 }
 
-function BattleRoyale({ user, onExitToMenu }) {
+function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const keys = useRef({});
   const mouse = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
@@ -1741,6 +1757,22 @@ function BattleRoyale({ user, onExitToMenu }) {
   const lastFrameTimeRef = useRef(performance.now());
   const lastRenderSyncRef = useRef(0);
   const lastProjectilesRenderSyncRef = useRef(0);
+  const lastBotsRenderSyncRef = useRef(0);
+  const lastBotProjectileStateSyncRef = useRef(0);
+  const lastMouseViewSyncRef = useRef(0);
+  const lastWorldReactSyncRef = useRef({ bots: 0, orbs: 0, energy: 0, projectiles: 0, explosions: 0 });
+  const projectileHitFrameSkipRef = useRef(0);
+  const playerCollisionFrameSkipRef = useRef(0);
+  const pixiBotRenderCacheRef = useRef({
+    key: "",
+    x: 0,
+    y: 0,
+    refreshedAt: 0,
+    fullIds: [],
+    simpleIds: [],
+    source: null,
+    byId: new Map(),
+  });
   const shieldTimeoutRef = useRef(null);
   const matchSavedRef = useRef(false);
   const matchStartedAtRef = useRef(Date.now());
@@ -1768,6 +1800,32 @@ function BattleRoyale({ user, onExitToMenu }) {
     x: window.innerWidth / 2,
     y: window.innerHeight / 2,
   });
+
+  // Pixi reads movement and combat from refs. React only needs occasional HUD/
+  // aim updates on weak desktops; avoiding a component re-render per mouse event
+  // removes a major source of frame-time spikes on older CPUs.
+  const syncWorldReactState = (key, setter, value, minInterval = 180, force = false) => {
+    const lowSpec = perfProfileRef.current.isWeakDesktop || graphicsQuality === "low";
+    if (!lowSpec || force) {
+      setter(value);
+      return;
+    }
+
+    const now = performance.now();
+    if (now - Number(lastWorldReactSyncRef.current[key] || 0) >= minInterval) {
+      lastWorldReactSyncRef.current[key] = now;
+      setter(value);
+    }
+  };
+
+  const syncMouseView = (nextMouse, force = false) => {
+    const lowSpec = perfProfileRef.current.isWeakDesktop || graphicsQuality === "low";
+    const now = performance.now();
+    if (!lowSpec || force || now - lastMouseViewSyncRef.current >= 34) {
+      lastMouseViewSyncRef.current = now;
+      setMouseView(nextMouse);
+    }
+  };
 
   const [viewportSize, setViewportSize] = useState(() => ({
     width: typeof window !== "undefined" ? window.innerWidth : 1280,
@@ -1932,6 +1990,17 @@ function BattleRoyale({ user, onExitToMenu }) {
   };
 
   const createExplosion = (x, y, type = "cyan") => {
+    const lowSpec = perfProfileRef.current.isWeakDesktop || graphicsQuality === "low";
+    const focus = playerRef.current;
+
+    // DOM explosions are expensive when 99 bots fight off-screen. Pixi already
+    // renders the real drones/projectiles; on old PCs keep only nearby impacts.
+    if (lowSpec) {
+      const nearFocus = focus && Math.hypot(Number(x || 0) - Number(focus.x || 0), Number(y || 0) - Number(focus.y || 0)) < 1500;
+      if (!nearFocus) return;
+      if (explosionsRef.current.length >= 6) return;
+    }
+
     const explosion = {
       id: crypto.randomUUID(),
       x,
@@ -1940,13 +2009,13 @@ function BattleRoyale({ user, onExitToMenu }) {
     };
 
     explosionsRef.current = [...explosionsRef.current, explosion];
-    setExplosions([...explosionsRef.current]);
+    syncWorldReactState("explosions", setExplosions, [...explosionsRef.current], lowSpec ? 120 : 0, !lowSpec);
 
     setTimeout(() => {
       explosionsRef.current = explosionsRef.current.filter(
         (item) => item.id !== explosion.id
       );
-      setExplosions([...explosionsRef.current]);
+      syncWorldReactState("explosions", setExplosions, [...explosionsRef.current], lowSpec ? 120 : 0, !lowSpec);
     }, 550);
   };
 
@@ -2032,7 +2101,7 @@ function BattleRoyale({ user, onExitToMenu }) {
     });
 
     botsRef.current = updatedBots;
-    setBots(updatedBots);
+    syncWorldReactState("bots", setBots, updatedBots, 180);
 
     if (!reward || !before) return;
     const gainedHp = Math.max(0, reward.hp - before.hp);
@@ -2262,7 +2331,7 @@ function BattleRoyale({ user, onExitToMenu }) {
 
     if (changed) {
       botsRef.current = updatedBots;
-      setBots(updatedBots);
+      syncWorldReactState("bots", setBots, updatedBots, 180);
     }
   };
 
@@ -2581,10 +2650,19 @@ function BattleRoyale({ user, onExitToMenu }) {
 
   // In Battle Royale singleplayer afisam botii ca drone complete.
   // Nu ii mai mutam in simpleBots, fiindca acolo apar doar ca puncte.
-  const mobileFullBotLimit = 49;
+  const lowSpecDesktopRender = !isMobileLike && (
+    graphicsQuality === "low" || perfProfileRef.current.isWeakDesktop
+  );
+  const mobileFullBotLimit = lowSpecDesktopRender
+    ? LOW_SPEC_DESKTOP_FULL_BOT_LIMIT
+    : 49;
 
-  const mobileFullProjectileLimit = isMobileLandscape ? 7 : MAX_FULL_PROJECTILES;
-  const mobileSimpleProjectileLimit = isMobileLandscape ? 28 : MAX_SIMPLE_PROJECTILES;
+  const mobileFullProjectileLimit = lowSpecDesktopRender
+    ? 6
+    : isMobileLandscape ? 7 : MAX_FULL_PROJECTILES;
+  const mobileSimpleProjectileLimit = lowSpecDesktopRender
+    ? 10
+    : isMobileLandscape ? 28 : MAX_SIMPLE_PROJECTILES;
 
   useEffect(() => {
     if (player.alive) return;
@@ -2607,7 +2685,7 @@ function BattleRoyale({ user, onExitToMenu }) {
           Math.abs(orb.y - viewTarget.y) < mobileViewDistance
         );
       })
-      .slice(0, isMobileLandscape ? 72 : 180);
+      .slice(0, lowSpecDesktopRender ? 40 : isMobileLandscape ? 72 : 180);
   }, [orbs, viewTarget.x, viewTarget.y, isMobileLandscape, mobileViewDistance]);
 
   const visibleEnergyCells = useMemo(() => {
@@ -2618,7 +2696,7 @@ function BattleRoyale({ user, onExitToMenu }) {
           Math.abs(cell.y - viewTarget.y) < mobileViewDistance
         );
       })
-      .slice(0, isMobileLandscape ? 36 : 110);
+      .slice(0, lowSpecDesktopRender ? 16 : isMobileLandscape ? 36 : 110);
   }, [energyCells, viewTarget.x, viewTarget.y, isMobileLandscape, mobileViewDistance]);
 
   const visibleCores = useMemo(() => {
@@ -2698,9 +2776,12 @@ function BattleRoyale({ user, onExitToMenu }) {
   }, [visibleBots, viewTarget.x, viewTarget.y, mobileBotRenderDistance, mobileFullBotLimit]);
 
   const simpleRenderBots = useMemo(() => {
-    // Dezactivat intentionat: vrem botii completi, nu puncte/simple render.
-    return [];
-  }, []);
+    if (!lowSpecDesktopRender) return [];
+    const fullIds = new Set(fullRenderBots.map((bot) => bot.id));
+    return visibleBots
+      .filter((bot) => !fullIds.has(bot.id))
+      .slice(0, LOW_SPEC_DESKTOP_SIMPLE_BOT_LIMIT);
+  }, [lowSpecDesktopRender, fullRenderBots, visibleBots]);
 
   const canFire = player.drones > 0 && player.alive && !gameOver && battleCountdown <= 0;
 
@@ -2736,7 +2817,7 @@ function BattleRoyale({ user, onExitToMenu }) {
 
     if (affected > 0) {
       botsRef.current = updatedBots;
-      setBots(updatedBots);
+      syncWorldReactState("bots", setBots, updatedBots, 180);
     }
 
     createPlayerCombatText(sourceX, sourceY - 135, `EMP HIT ${affected}`, "heal");
@@ -2781,7 +2862,7 @@ function BattleRoyale({ user, onExitToMenu }) {
 
       if (healed) {
         botsRef.current = updatedBots;
-        setBots(updatedBots);
+        syncWorldReactState("bots", setBots, updatedBots, 180);
       }
     }
   };
@@ -2953,7 +3034,7 @@ function BattleRoyale({ user, onExitToMenu }) {
 
     if (wasHit) {
       botsRef.current = updatedBots;
-      setBots(updatedBots);
+      syncWorldReactState("bots", setBots, updatedBots, 180);
     }
 
     if (wasHit && vampireOwnerType && actualDamage > 0) {
@@ -3165,7 +3246,7 @@ function BattleRoyale({ user, onExitToMenu }) {
       });
 
       botsRef.current = updatedBots;
-      setBots(updatedBots);
+      syncWorldReactState("bots", setBots, updatedBots, 180);
 
       createExplosion((p.x + bot.x) / 2, (p.y + bot.y) / 2, "cyan");
 
@@ -3306,7 +3387,7 @@ function BattleRoyale({ user, onExitToMenu }) {
 
     if (changed) {
       botsRef.current = updatedBots;
-      setBots(updatedBots);
+      syncWorldReactState("bots", setBots, updatedBots, 180);
 
       killsToAdd.forEach((botId) => {
         addKillToBot(botId);
@@ -3450,7 +3531,7 @@ function BattleRoyale({ user, onExitToMenu }) {
       y: nextMouse.y,
     };
 
-    setMouseView(nextMouse);
+    syncMouseView(nextMouse, true);
 
     playerRef.current = {
       ...p,
@@ -3720,7 +3801,11 @@ function BattleRoyale({ user, onExitToMenu }) {
     };
 
     projectilesRef.current = [...projectilesRef.current, projectile];
-    setProjectiles([...projectilesRef.current]);
+    const projectileStateInterval = perfProfileRef.current.projectileReactSyncIntervalMs;
+    if (now - lastBotProjectileStateSyncRef.current >= projectileStateInterval) {
+      lastBotProjectileStateSyncRef.current = now;
+      setProjectiles([...projectilesRef.current]);
+    }
 
     return {
       ...bot,
@@ -3735,6 +3820,59 @@ function BattleRoyale({ user, onExitToMenu }) {
       attacking: true,
       mouseX: target.x,
       mouseY: target.y,
+    };
+  };
+
+  // Pixi reads this ref every animation frame. On an older desktop we keep
+  // only the nearest drones as full quadcopters and render farther ones with
+  // the ultra-cheap simple visual. Selection is cached briefly, while the
+  // returned objects are always refreshed from botsRef so movement stays live.
+  const getPixiBotRenderPayload = (target, timestamp) => {
+    const profile = perfProfileRef.current;
+    const lowSpecDesktop = profile.isWeakDesktop || graphicsQuality === "low";
+    const fullLimit = lowSpecDesktop ? LOW_SPEC_DESKTOP_FULL_BOT_LIMIT : MAX_FULL_RENDER_BOTS;
+    const simpleLimit = lowSpecDesktop ? LOW_SPEC_DESKTOP_SIMPLE_BOT_LIMIT : 0;
+    const fullDistance = lowSpecDesktop ? LOW_SPEC_DESKTOP_FULL_BOT_DISTANCE : BOT_RENDER_DISTANCE / DESKTOP_CAMERA_SCALE;
+    const simpleDistance = lowSpecDesktop ? LOW_SPEC_DESKTOP_SIMPLE_BOT_DISTANCE : BOT_SIMPLE_RENDER_DISTANCE / DESKTOP_CAMERA_SCALE;
+    const cache = pixiBotRenderCacheRef.current;
+    const targetKey = `${target?.id || "player"}:${lowSpecDesktop ? "low" : "normal"}`;
+    const movedEnough = Math.hypot(
+      Number(target?.x || 0) - cache.x,
+      Number(target?.y || 0) - cache.y,
+    ) > 160;
+    const refreshEvery = lowSpecDesktop ? 160 : 66;
+
+    if (cache.key !== targetKey || movedEnough || timestamp - cache.refreshedAt >= refreshEvery) {
+      const candidates = botsRef.current
+        .filter((bot) => bot?.alive)
+        .map((bot) => {
+          const dx = Number(bot.x || 0) - Number(target?.x || 0);
+          const dy = Number(bot.y || 0) - Number(target?.y || 0);
+          return { id: bot.id, distanceSq: dx * dx + dy * dy };
+        })
+        .filter((item) => item.distanceSq <= simpleDistance * simpleDistance)
+        .sort((a, b) => a.distanceSq - b.distanceSq);
+
+      cache.key = targetKey;
+      cache.x = Number(target?.x || 0);
+      cache.y = Number(target?.y || 0);
+      cache.refreshedAt = timestamp;
+      cache.fullIds = candidates
+        .filter((item) => item.distanceSq <= fullDistance * fullDistance)
+        .slice(0, fullLimit)
+        .map((item) => item.id);
+      cache.simpleIds = simpleLimit > 0
+        ? candidates.slice(cache.fullIds.length, cache.fullIds.length + simpleLimit).map((item) => item.id)
+        : [];
+    }
+
+    if (cache.source !== botsRef.current) {
+      cache.source = botsRef.current;
+      cache.byId = new Map(botsRef.current.map((bot) => [bot.id, bot]));
+    }
+    return {
+      bots: cache.fullIds.map((id) => cache.byId.get(id)).filter(Boolean),
+      simpleBots: cache.simpleIds.map((id) => cache.byId.get(id)).filter(Boolean),
     };
   };
 
@@ -3782,7 +3920,7 @@ function BattleRoyale({ user, onExitToMenu }) {
     const moveMouse = (e) => {
       const nextMouse = { x: e.clientX, y: e.clientY };
       mouse.current = nextMouse;
-      setMouseView(nextMouse);
+      syncMouseView(nextMouse);
     };
 
     const mouseDown = (e) => {
@@ -3876,7 +4014,7 @@ function BattleRoyale({ user, onExitToMenu }) {
 
         if (botEnergyChanged) {
           botsRef.current = drainedBots;
-          setBots(drainedBots);
+          syncWorldReactState("bots", setBots, drainedBots, 180);
         }
       }
 
@@ -3965,12 +4103,12 @@ function BattleRoyale({ user, onExitToMenu }) {
         orbsRef.current.length !== remainingOrbs.length
       ) {
         orbsRef.current = remainingOrbs;
-        setOrbs([...remainingOrbs]);
+        syncWorldReactState("orbs", setOrbs, [...remainingOrbs], 140);
       }
 
       const nowBotLogic = performance.now();
 
-      const botLogicInterval = isMobileLandscape ? 42 : 28;
+      const botLogicInterval = perfProfileRef.current.botLogicIntervalMs;
 
       if (nowBotLogic - lastBotLogicUpdateRef.current > botLogicInterval) {
         const botDelta = Math.min(
@@ -4517,7 +4655,11 @@ function BattleRoyale({ user, onExitToMenu }) {
         let botsCollectedExtraOrbs = false;
         let orbsAfterBotSweep = [...orbsRef.current];
 
-        const botsAfterOrbSweep = updatedBots.map((bot) => {
+        const botsAfterOrbSweep = updatedBots.map((bot, botIndex) => {
+          // Crossing-path pickup correction is expensive (bot x every orb).
+          // On weak desktops, rotate it through the same AI batches instead
+          // of scanning all 99 bots on every simulation update.
+          if (perfProfile.isWeakDesktop && botIndex % aiBatches !== currentBatch) return bot;
           if (!bot.alive || orbsAfterBotSweep.length === 0) return bot;
 
           const orbToCollect = orbsAfterBotSweep.find((orb) => {
@@ -4591,6 +4733,7 @@ function BattleRoyale({ user, onExitToMenu }) {
         let energyAfterBotCollection = [...energyCellsRef.current];
 
         const botsAfterEnergySweep = botsAfterOrbSweep.map((bot, index) => {
+          if (perfProfile.isWeakDesktop && index % aiBatches !== currentBatch) return bot;
           if (!bot.alive || energyAfterBotCollection.length === 0) return bot;
 
           const botBeforeMove = botsRef.current[index] || bot;
@@ -4643,13 +4786,14 @@ function BattleRoyale({ user, onExitToMenu }) {
           }
 
           energyCellsRef.current = energyAfterBotCollection;
-          setEnergyCells([...energyAfterBotCollection]);
+          syncWorldReactState("energy", setEnergyCells, [...energyAfterBotCollection], 240);
         }
 
         let botsCollectedCores = false;
         let coresAfterBotCollection = [...coresRef.current];
 
-        const botsAfterCoreCollection = botsAfterEnergySweep.map((bot) => {
+        const botsAfterCoreCollection = botsAfterEnergySweep.map((bot, botIndex) => {
+          if (perfProfile.isWeakDesktop && botIndex % aiBatches !== currentBatch) return bot;
           if (!bot.alive || coresAfterBotCollection.length === 0) return bot;
 
           const coreToCollect = coresAfterBotCollection.find((core) => {
@@ -4691,10 +4835,13 @@ function BattleRoyale({ user, onExitToMenu }) {
         }
 
         botsRef.current = botsAfterCoreCollection;
-        setBots(botsAfterCoreCollection);
+        if (nowBotLogic - lastBotsRenderSyncRef.current >= perfProfile.botReactSyncIntervalMs) {
+          lastBotsRenderSyncRef.current = nowBotLogic;
+          setBots(botsAfterCoreCollection);
+        }
 
         if (botsCollectedOrbs || botsCollectedExtraOrbs) {
-          setOrbs([...orbsRef.current]);
+          syncWorldReactState("orbs", setOrbs, [...orbsRef.current], 240);
         }
       }
 
@@ -4746,7 +4893,7 @@ function BattleRoyale({ user, onExitToMenu }) {
         energyCellsRef.current.length !== remainingEnergyCells.length
       ) {
         energyCellsRef.current = remainingEnergyCells;
-        setEnergyCells([...remainingEnergyCells]);
+        syncWorldReactState("energy", setEnergyCells, [...remainingEnergyCells], 140);
 
         if (collectedEnergy) {
           createPlayerCombatText(nextX, nextY - 100, `ENERGY +${ENERGY_CELL_RESTORE_AMOUNT}`, "heal");
@@ -4842,6 +4989,10 @@ function BattleRoyale({ user, onExitToMenu }) {
       }
 
       const updatedProjectiles = [];
+      projectileHitFrameSkipRef.current += 1;
+      // At 30 Hz a projectile travels less than its hit radius between checks,
+      // so collision accuracy stays safe while cutting the 99-target scan in half.
+      const shouldCheckProjectileHits = !perfProfileRef.current.isWeakDesktop || projectileHitFrameSkipRef.current % 2 === 0;
 
       for (const projectile of projectilesRef.current) {
         const movedProjectile = {
@@ -4855,7 +5006,9 @@ function BattleRoyale({ user, onExitToMenu }) {
           movedProjectile.y - movedProjectile.startY
         );
 
-        const hitResult = checkProjectileHit(movedProjectile);
+        const hitResult = shouldCheckProjectileHits
+          ? checkProjectileHit(movedProjectile)
+          : { keep: true, projectile: movedProjectile };
 
         if (hitResult.keep && traveled < PROJECTILE_MAX_DISTANCE) {
           updatedProjectiles.push(hitResult.projectile || movedProjectile);
@@ -4872,11 +5025,14 @@ function BattleRoyale({ user, onExitToMenu }) {
         : null;
       const liveTarget = nextPlayer.alive ? nextPlayer : (liveSpectator || nextPlayer);
 
+      const pixiBotPayload = getPixiBotRenderPayload(liveTarget, now);
+      const lowSpecRenderer = perfProfileRef.current.isWeakDesktop || graphicsQuality === "low";
+
       pixiLiveRef.current = {
         player: nextPlayer.alive ? nextPlayer : null,
         players: [],
-        bots: botsRef.current,
-        simpleBots: [],
+        bots: pixiBotPayload.bots,
+        simpleBots: pixiBotPayload.simpleBots,
         orbs: orbsRef.current,
         energyCells: energyCellsRef.current,
         cores: coresRef.current,
@@ -4893,14 +5049,18 @@ function BattleRoyale({ user, onExitToMenu }) {
         safeZoneRadius: currentZoneRadius,
         showZone: true,
         worldTheme: "battle-royale-pixel-terrain",
+        staticItemBudget: lowSpecRenderer ? 48 : null,
       };
 
       if (now - lastProjectilesRenderSyncRef.current >= (perfProfileRef.current.isLowEndDevice ? 100 : 66)) {
         lastProjectilesRenderSyncRef.current = now;
-        setProjectiles([...updatedProjectiles]);
+        syncWorldReactState("projectiles", setProjectiles, [...updatedProjectiles], 180);
       }
 
-      checkBotsTouchPlayer();
+      playerCollisionFrameSkipRef.current += 1;
+      if (!perfProfileRef.current.isWeakDesktop || playerCollisionFrameSkipRef.current % 2 === 0) {
+        checkBotsTouchPlayer();
+      }
 
       // Pe device slab, coliziunile bot-cu-bot (O(n^2) = ~2300 perechi la 69
       // boti) ruleaza o data la 2 frame-uri rAF in loc de la fiecare frame
@@ -4910,9 +5070,12 @@ function BattleRoyale({ user, onExitToMenu }) {
       // coliziuni reale - doar reduce costul CPU per frame pe device slab.
       collisionFrameSkipRef.current += 1;
 
-      if (
-        collisionFrameSkipRef.current % (perfProfileRef.current.isLowEndDevice ? 3 : 2) === 0
-      ) {
+      const lowSpecCollisionInterval = perfProfileRef.current.isWeakDesktop
+        ? 5
+        : perfProfileRef.current.isLowEndDevice
+          ? 3
+          : 2;
+      if (collisionFrameSkipRef.current % lowSpecCollisionInterval === 0) {
         checkBotsTouchBots();
       }
 
@@ -5383,7 +5546,8 @@ function BattleRoyale({ user, onExitToMenu }) {
         safeZoneRadius={safeZoneRadius}
         showZone={true}
         worldTheme="battle-royale-pixel-terrain"
-        forceLowQuality={false}
+        staticItemBudget={lowSpecDesktopRender ? 48 : null}
+        forceLowQuality={lowSpecDesktopRender}
       />
 
       {showMobileControls && (
