@@ -74,8 +74,8 @@ const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
 const ZONE_STATE_INTERVAL_MS = 25;
 const ZONE_STATE_INTERVAL_CROWDED_MS = 33;
 const ZONE_STATE_INTERVAL_HEAVY_MS = 50;
-const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 20;
-const ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS = 33;
+const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 15;
+const ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS = 25;
 const ZONE_MOVEMENT_STREAM_MAX_PLAYERS = 12;
 const STATIC_STATE_INTERVAL_MS = 500;
 const VIEWPORT_ITEM_STATE_INTERVAL_MS = 125;
@@ -2764,8 +2764,8 @@ let GameGateway = class GameGateway {
     serializeZonePvpMovement(player) {
         return {
             id: player.id,
-            x: Math.round(Number(player.x || 0)),
-            y: Math.round(Number(player.y || 0)),
+            x: Math.round(Number(player.x || 0) * 100) / 100,
+            y: Math.round(Number(player.y || 0) * 100) / 100,
             moveX: Number(player.moveX || 0),
             moveY: Number(player.moveY || 0),
             velocityX: Number(player.velocityX || 0),
@@ -2796,8 +2796,11 @@ let GameGateway = class GameGateway {
                 this.isNear(viewAnchor, other, range))
                 .slice(0, ZONE_PVP_VISIBLE_PLAYERS_LIMIT)
                 .map((other) => this.serializeZonePvpMovement(other));
-            socket.volatile.emit("zone-pvp:movement", {
+            const movementSequence = Number(room.zoneMovementSequence || 0) + 1;
+            room.zoneMovementSequence = movementSequence;
+            socket.compress(false).emit("zone-pvp:movement", {
                 serverNow: now,
+                sequence: movementSequence,
                 roomId: room.id,
                 roundId: room.roundId || null,
                 phaseVersion: Number(room.phaseVersion || 0),

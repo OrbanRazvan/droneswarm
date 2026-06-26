@@ -34,7 +34,7 @@ const SELF_IDLE_FREEZE_DISTANCE = 360;
 const REMOTE_SMOOTHING = 24;
 const REMOTE_PREDICTION = 1.0;
 const REMOTE_HARD_SNAP_DISTANCE = 360;
-const REMOTE_MAX_EXTRAPOLATE_MS = 240;
+const REMOTE_MAX_EXTRAPOLATE_MS = 100;
 
 const PROJECTILE_SMOOTHING = 18;
 const PROJECTILE_FRAME_SCALE = 60;
@@ -61,7 +61,7 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 // Client-side prediction + server reconciliation + remote snapshot buffer.
 const INPUT_SEND_INTERVAL_MS = 20;
 const INPUT_HEARTBEAT_MS = 240;
-const SNAPSHOT_INTERPOLATION_DELAY_MS = 48;
+const SNAPSHOT_INTERPOLATION_DELAY_MS = 72;
 const SNAPSHOT_BUFFER_TTL_MS = 520;
 
 // Keep PvP desktop framing exactly locked to BattleRoyaleMode.
@@ -745,47 +745,66 @@ function reconcileHeldInputUnit(local, server, now = performance.now(), lastLoca
   };
 }
 
-function extrapolateRemoteSnapshot(snapshot, aheadMs = 0) {
-  if (!snapshot) return snapshot;
-
-  const safeAheadMs = clamp(Number(aheadMs || 0), 0, REMOTE_MAX_EXTRAPOLATE_MS);
-  if (!snapshot.isMoving || safeAheadMs <= 0) return snapshot;
-
-  // v37 backend supplies exact server velocity. Older deployed backends are
-  // still supported through the move-vector fallback. This makes other
-  // players appear continuous on a good receiver even if the sender is on a
-  // 40–50 FPS laptop and snapshots arrive with small gaps.
+function getRemoteVelocity(snapshot) {
   const fallbackSpeed =
     CLIENT_SPEED *
     ZONE_BASE_MOVE_SPEED_MULTIPLIER *
-    Math.max(1, Number(snapshot.moveSpeedMultiplier || 1));
-  const velocityX = Number.isFinite(Number(snapshot.velocityX))
-    ? Number(snapshot.velocityX)
-    : Number(snapshot.moveX || 0) * fallbackSpeed;
-  const velocityY = Number.isFinite(Number(snapshot.velocityY))
-    ? Number(snapshot.velocityY)
-    : Number(snapshot.moveY || 0) * fallbackSpeed;
+    Math.max(1, Number(snapshot?.moveSpeedMultiplier || 1));
+
+  return {
+    x: Number.isFinite(Number(snapshot?.velocityX))
+      ? Number(snapshot.velocityX)
+      : Number(snapshot?.moveX || 0) * fallbackSpeed,
+    y: Number.isFinite(Number(snapshot?.velocityY))
+      ? Number(snapshot.velocityY)
+      : Number(snapshot?.moveY || 0) * fallbackSpeed,
+  };
+}
+
+function extrapolateRemoteSnapshot(snapshot, aheadMs = 0) {
+  if (!snapshot) return snapshot;
+
+  // Keep prediction very short. Long prediction was causing the remote drone
+  // to move ahead and then visibly jump backwards when a phone changed input.
+  const safeAheadMs = clamp(Number(aheadMs || 0), 0, REMOTE_MAX_EXTRAPOLATE_MS);
+  if (!snapshot.isMoving || safeAheadMs <= 0) return snapshot;
+
+  const velocity = getRemoteVelocity(snapshot);
   const seconds = (safeAheadMs / 1000) * REMOTE_PREDICTION;
 
   return {
     ...snapshot,
-    x: Number(snapshot.x || 0) + velocityX * seconds,
-    y: Number(snapshot.y || 0) + velocityY * seconds,
+    x: Number(snapshot.x || 0) + velocity.x * seconds,
+    y: Number(snapshot.y || 0) + velocity.y * seconds,
   };
+}
+
+function cubicHermite(p0, v0, p1, v1, t, durationSeconds) {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  const h00 = 2 * t3 - 3 * t2 + 1;
+  const h10 = t3 - 2 * t2 + t;
+  const h01 = -2 * t3 + 3 * t2;
+  const h11 = t3 - t2;
+  return h00 * p0 + h10 * durationSeconds * v0 + h01 * p1 + h11 * durationSeconds * v1;
+}
+
+function getSnapshotTimelineTime(snapshot, fallbackTime) {
+  const serverAt = Number(snapshot?.__serverAt || 0);
+  return serverAt > 0 ? serverAt : Number(snapshot?.__receivedAt || fallbackTime);
 }
 
 function appendRemoteSnapshot(buffer = [], snapshot, receivedAt, serverNow = 0) {
   if (!snapshot?.id) return buffer;
 
   const previous = buffer[buffer.length - 1] || null;
-  const incomingServerAt = Number(
-    snapshot?.__serverAt || snapshot?.serverTime || serverNow || 0,
-  );
+  // The packet-level tick timestamp is shared by every player in the packet.
+  // Prefer it over a per-unit serialization timestamp to keep the buffer on
+  // one timeline even when state and movement packets arrive in a different order.
+  const incomingServerAt = Number(serverNow || snapshot?.__serverAt || snapshot?.serverTime || 0);
   const previousServerAt = Number(previous?.__serverAt || 0);
 
-  // Socket.IO volatile packets can be dropped and occasionally arrive after a
-  // newer movement packet. Never let an older server position pull a remote
-  // drone backward on a fast receiver.
+  // Never let a delayed full-state packet pull a newer transform backwards.
   if (incomingServerAt > 0 && previousServerAt > 0 && incomingServerAt < previousServerAt) {
     return buffer;
   }
@@ -797,72 +816,68 @@ function appendRemoteSnapshot(buffer = [], snapshot, receivedAt, serverNow = 0) 
     __serverAt: incomingServerAt || previousServerAt || 0,
   };
 
-  const next = [...buffer, merged].filter(
-    (entry) => receivedAt - Number(entry?.__receivedAt || receivedAt) <= SNAPSHOT_BUFFER_TTL_MS,
-  );
+  // A full state and a lightweight transform can represent the same tick.
+  // Merge them, rather than creating a zero-duration interpolation segment.
+  if (incomingServerAt > 0 && previousServerAt > 0 && incomingServerAt === previousServerAt) {
+    return [...buffer.slice(0, -1), {
+      ...merged,
+      __receivedAt: previous.__receivedAt,
+      __serverAt: previousServerAt,
+    }];
+  }
 
-  return next.slice(-24);
+  return [...buffer, merged]
+    .filter((entry) => receivedAt - Number(entry?.__receivedAt || receivedAt) <= SNAPSHOT_BUFFER_TTL_MS)
+    .slice(-32);
 }
 
-function interpolateSnapshotBuffer(buffer = [], renderTime) {
+function interpolateSnapshotBuffer(buffer = [], renderTimelineTime) {
   if (!buffer.length) return null;
 
   const newest = buffer[buffer.length - 1];
-  const newestTime = Number(newest?.__receivedAt || renderTime);
+  const newestTime = getSnapshotTimelineTime(newest, renderTimelineTime);
   if (buffer.length === 1) {
-    return extrapolateRemoteSnapshot(newest, renderTime - newestTime);
+    return extrapolateRemoteSnapshot(newest, renderTimelineTime - newestTime);
   }
 
-  // When the renderer has caught up with the most recent packet, continue a
-  // tiny velocity prediction instead of freezing until the following packet.
-  // This is the specific source of the visible "step" on a fast laptop when
-  // another player is sending from slower hardware.
-  if (renderTime >= newestTime) {
-    return extrapolateRemoteSnapshot(newest, renderTime - newestTime);
+  if (renderTimelineTime >= newestTime) {
+    return extrapolateRemoteSnapshot(newest, renderTimelineTime - newestTime);
   }
 
   let older = buffer[0];
   let newer = newest;
-
   for (let i = 0; i < buffer.length - 1; i += 1) {
     const a = buffer[i];
     const b = buffer[i + 1];
-    if ((a.__receivedAt || 0) <= renderTime && (b.__receivedAt || 0) >= renderTime) {
+    const aTime = getSnapshotTimelineTime(a, renderTimelineTime);
+    const bTime = getSnapshotTimelineTime(b, renderTimelineTime);
+    if (aTime <= renderTimelineTime && bTime >= renderTimelineTime) {
       older = a;
       newer = b;
       break;
     }
   }
 
-  const aTime = older.__receivedAt || renderTime;
-  const bTime = newer.__receivedAt || aTime;
+  const aTime = getSnapshotTimelineTime(older, renderTimelineTime);
+  const bTime = getSnapshotTimelineTime(newer, aTime);
   const span = Math.max(1, bTime - aTime);
-  const t = clamp((renderTime - aTime) / span, 0, 1);
+  const t = clamp((renderTimelineTime - aTime) / span, 0, 1);
+  const durationSeconds = span / 1000;
+  const oldVelocity = getRemoteVelocity(older);
+  const newVelocity = getRemoteVelocity(newer);
 
+  // Velocity-aware Hermite interpolation maintains a continuous trajectory
+  // between authoritative transforms. It is much smoother than plain linear
+  // interpolation when the sender runs at a lower frame rate.
   return {
     ...newer,
-    x: lerp(older.x ?? newer.x, newer.x ?? older.x, t),
-    y: lerp(older.y ?? newer.y, newer.y ?? older.y, t),
+    x: cubicHermite(Number(older.x ?? newer.x ?? 0), oldVelocity.x, Number(newer.x ?? older.x ?? 0), newVelocity.x, t, durationSeconds),
+    y: cubicHermite(Number(older.y ?? newer.y ?? 0), oldVelocity.y, Number(newer.y ?? older.y ?? 0), newVelocity.y, t, durationSeconds),
     hp: newer.hp,
     energy: newer.energy,
     drones: newer.drones,
     alive: newer.alive,
   };
-}
-
-
-function getBattlePrepareRemainingMs(data = {}) {
-  if (!data || data.status !== "playing") return 0;
-  if (Number.isFinite(Number(data.battlePrepareRemainingMs)) && Number(data.battlePrepareRemainingMs) > 0) {
-    return Number(data.battlePrepareRemainingMs);
-  }
-  if (data.battlePrepareUntil) {
-    return Math.max(0, Number(data.battlePrepareUntil) - Date.now());
-  }
-  if (data.matchStartedAt) {
-    return Math.max(0, BATTLE_PREPARE_DURATION - (Date.now() - Number(data.matchStartedAt)));
-  }
-  return 0;
 }
 
 function isBattlePrepareLocked(data = {}) {
@@ -967,6 +982,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const lastInputSignatureRef = useRef("");
   const pendingInputsRef = useRef([]);
   const remoteSnapshotBufferRef = useRef(new Map());
+  // Interpolate with the authoritative server clock rather than browser packet
+  // arrival time, which varies far more with mobile/old-laptop senders.
+  const serverClockOffsetRef = useRef(null);
+  const lastMovementSequenceRef = useRef(0);
   const lastConfirmedHpRef = useRef(null);
   const localBattlePrepareUntilRef = useRef(0);
   const localBattleBeginFlashUntilRef = useRef(0);
@@ -1061,6 +1080,24 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     socketRef.current = socket;
 
+    const updateServerClockOffset = (serverNow) => {
+      const serverTime = Number(serverNow || 0);
+      if (!serverTime) return;
+
+      const observedOffset = Date.now() - serverTime;
+      const current = Number(serverClockOffsetRef.current);
+      if (!Number.isFinite(current)) {
+        serverClockOffsetRef.current = observedOffset;
+        return;
+      }
+
+      // Late/queued packets must never move the render timeline forward. A
+      // slow correction toward the closest observed server clock keeps remote
+      // movement fluid and prevents a backwards correction on strong viewers.
+      const target = Math.min(current, observedOffset);
+      serverClockOffsetRef.current = current * 0.985 + target * 0.015;
+    };
+
     const applyState = (state) => {
       if (!state || !shouldAcceptZonePhase(zonePhaseRef.current, state)) {
         return;
@@ -1079,6 +1116,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         stableMinimapEnergyMapRef.current.clear();
         stableCoreMapRef.current.clear();
         remoteSnapshotBufferRef.current.clear();
+        serverClockOffsetRef.current = null;
+        lastMovementSequenceRef.current = 0;
         predictedYouRef.current = null;
       }
 
@@ -1094,6 +1133,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       const now = performance.now();
       const nowWall = Date.now();
+      updateServerClockOffset(state?.serverNow || state?.serverTime);
       const combatViewerId = state?.you?.id || worldRef.current.you?.id || socket.id;
       combatEventMapRef.current = mergePrivateCombatEvents(
         combatEventMapRef.current,
@@ -1373,6 +1413,12 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       const now = performance.now();
       const serverNow = Number(packet?.serverNow || 0);
+      const movementSequence = Number(packet?.sequence || 0);
+      if (movementSequence > 0 && movementSequence <= Number(lastMovementSequenceRef.current || 0)) {
+        return;
+      }
+      if (movementSequence > 0) lastMovementSequenceRef.current = movementSequence;
+      updateServerClockOffset(serverNow);
       const snapshotsById = remoteSnapshotBufferRef.current;
 
       for (const movement of packet?.players || []) {
@@ -1636,7 +1682,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         spectatorTargetRef.current = currentSpectatorTarget;
       }
 
-      const renderTime = now - SNAPSHOT_INTERPOLATION_DELAY_MS;
+      const serverClockOffset = Number(serverClockOffsetRef.current);
+      const renderTime = Number.isFinite(serverClockOffset)
+        ? Date.now() - serverClockOffset - SNAPSHOT_INTERPOLATION_DELAY_MS
+        : now - SNAPSHOT_INTERPOLATION_DELAY_MS;
       const snapshotBuffers = remoteSnapshotBufferRef.current;
       const activeRemoteIds = new Set();
 

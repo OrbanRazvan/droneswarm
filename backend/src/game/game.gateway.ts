@@ -105,8 +105,8 @@ const ZONE_STATE_INTERVAL_HEAVY_MS = 50; // 20 Hz at 28+ players
 // Zone PvP keeps full snapshots compact, then sends a tiny transform-only
 // stream for nearby opponents. This decouples smooth remote motion from the
 // slower sender's render/input cadence and from heavier loot/HUD payloads.
-const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 20; // 50 Hz in small matches
-const ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS = 33; // 30 Hz at 12+ players
+const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 15; // every simulation tick (~60 Hz) in small matches
+const ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS = 25; // adaptive crowded cadence
 const ZONE_MOVEMENT_STREAM_MAX_PLAYERS = 12;
 const STATIC_STATE_INTERVAL_MS = 500; // minimap + leaderboard
 const VIEWPORT_ITEM_STATE_INTERVAL_MS = 125; // static nearby loot, per player
@@ -3620,8 +3620,8 @@ export class GameGateway {
   private serializeZonePvpMovement(player: any) {
     return {
       id: player.id,
-      x: Math.round(Number(player.x || 0)),
-      y: Math.round(Number(player.y || 0)),
+      x: Math.round(Number(player.x || 0) * 100) / 100,
+      y: Math.round(Number(player.y || 0) * 100) / 100,
       moveX: Number(player.moveX || 0),
       moveY: Number(player.moveY || 0),
       velocityX: Number(player.velocityX || 0),
@@ -3659,10 +3659,15 @@ export class GameGateway {
         .slice(0, ZONE_PVP_VISIBLE_PLAYERS_LIMIT)
         .map((other) => this.serializeZonePvpMovement(other));
 
-      // Volatile is correct for transforms: when a packet is skipped, the next
-      // packet supersedes it. It prevents stale queueing and keeps latency low.
-      socket.volatile.emit("zone-pvp:movement", {
+      // In small Zone matches this is a tiny transform-only packet. Emit it
+      // reliably and without compression: volatile transport could skip a
+      // direction-change frame from a phone/old laptop, causing a good viewer
+      // to see the remote drone surge forward and snap back.
+      const movementSequence = Number(room.zoneMovementSequence || 0) + 1;
+      room.zoneMovementSequence = movementSequence;
+      socket.compress(false).emit("zone-pvp:movement", {
         serverNow: now,
+        sequence: movementSequence,
         roomId: room.id,
         roundId: room.roundId || null,
         phaseVersion: Number(room.phaseVersion || 0),
