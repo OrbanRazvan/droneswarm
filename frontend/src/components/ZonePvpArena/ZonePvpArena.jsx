@@ -914,6 +914,15 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           : worldRef.current.minimapCores,
 
         projectiles: Array.isArray(state.projectiles) ? state.projectiles : worldRef.current.projectiles,
+        // Private combat text only: every client retains events assigned to its
+        // own socket/player, never nearby fights from other players.
+        combatEvents: Array.isArray(state.combatEvents)
+          ? state.combatEvents.filter(
+              (event) =>
+                Boolean(state.you?.id || worldRef.current.you?.id) &&
+                event?.viewerId === (state.you?.id || worldRef.current.you?.id),
+            )
+          : worldRef.current.combatEvents,
         leaderboard: Array.isArray(state.leaderboard) ? state.leaderboard : worldRef.current.leaderboard,
       };
 
@@ -1396,7 +1405,14 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         cores: liveCores,
         projectiles: liveProjectiles,
         simpleProjectiles: [],
-        combatEvents: data.combatEvents || [],
+        // Keep combat text private even on the render hot path.
+        combatEvents: (data.combatEvents || []).filter(
+          (event) =>
+            Boolean(data.you?.id || worldRef.current.you?.id) &&
+            event?.viewerId === (data.you?.id || worldRef.current.you?.id),
+        ),
+        combatViewerId: data.you?.id || worldRef.current.you?.id || null,
+        combatEventsPrivate: true,
         cameraX: liveCameraX,
         cameraY: liveCameraY,
         scale: liveCameraScale,
@@ -1404,6 +1420,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         viewportHeight: viewport.height,
         worldWidth,
         worldHeight,
+        // Exact same cached premium space theme already used in BattleRoyaleMode.
+        worldTheme: "battle-royale-pixel-terrain",
         safeZoneRadius: zoneRadius,
         showZone: true,
         coreColorMap: coreColorMapRef.current,
@@ -1953,6 +1971,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         energyCells={visibleEnergyCells}
         cores={visibleCores}
         projectiles={visibleProjectiles}
+        combatEvents={(renderData.combatEvents || []).filter(
+          (event) =>
+            Boolean(renderData.you?.id || worldRef.current.you?.id) &&
+            event?.viewerId === (renderData.you?.id || worldRef.current.you?.id),
+        )}
+        combatViewerId={renderData.you?.id || worldRef.current.you?.id || null}
+        combatEventsPrivate
         cameraX={cameraX}
         cameraY={cameraY}
         scale={cameraScale}
@@ -1965,6 +1990,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         forceLowQuality={graphicsQuality === "low" || isMobileControls}
         worldWidth={worldWidth}
         worldHeight={worldHeight}
+        worldTheme="battle-royale-pixel-terrain"
         safeZoneRadius={safeZoneRadius}
         showZone={true}
       />

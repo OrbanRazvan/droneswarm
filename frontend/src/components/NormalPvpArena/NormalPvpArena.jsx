@@ -1249,8 +1249,14 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         projectiles: Array.isArray(state.projectiles)
           ? state.projectiles
           : worldRef.current.projectiles,
+        // Defense in depth: even if an old/stale backend packet arrives,
+        // this client retains only combat text owned by its own player id.
         combatEvents: Array.isArray(state.combatEvents)
-          ? state.combatEvents
+          ? state.combatEvents.filter(
+              (event) =>
+                Boolean(state.you?.id || worldRef.current.you?.id) &&
+                event?.viewerId === (state.you?.id || worldRef.current.you?.id),
+            )
           : worldRef.current.combatEvents,
         leaderboard: Array.isArray(state.leaderboard)
           ? state.leaderboard
@@ -2033,7 +2039,14 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         cores: liveCores,
         projectiles: liveProjectiles,
         simpleProjectiles: [],
-        combatEvents: data.combatEvents || [],
+        // Keep combat text private even on the render hot path.
+        combatEvents: (data.combatEvents || []).filter(
+          (event) =>
+            Boolean(data.you?.id || worldRef.current.you?.id) &&
+            event?.viewerId === (data.you?.id || worldRef.current.you?.id),
+        ),
+        combatViewerId: data.you?.id || worldRef.current.you?.id || null,
+        combatEventsPrivate: true,
         cameraX: liveCameraX,
         cameraY: liveCameraY,
         scale: liveCameraScale,
@@ -2041,6 +2054,8 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         viewportHeight: viewport.height,
         worldWidth,
         worldHeight,
+        // Exact same cached premium space theme already used in BattleRoyaleMode.
+        worldTheme: "battle-royale-pixel-terrain",
         safeZoneRadius: null,
         showZone: false,
         coreColorMap: coreColorMapRef.current,
@@ -2632,7 +2647,13 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         energyCells={visibleEnergyCells}
         cores={visibleCores}
         projectiles={visibleProjectiles}
-        combatEvents={renderData.combatEvents || []}
+        combatEvents={(renderData.combatEvents || []).filter(
+          (event) =>
+            Boolean(renderData.you?.id || worldRef.current.you?.id) &&
+            event?.viewerId === (renderData.you?.id || worldRef.current.you?.id),
+        )}
+        combatViewerId={renderData.you?.id || worldRef.current.you?.id || null}
+        combatEventsPrivate
         cameraX={cameraX}
         cameraY={cameraY}
         scale={cameraScale}
@@ -2646,6 +2667,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         forceLowQuality={graphicsQuality === "low" || isMobileControls}
         worldWidth={worldWidth}
         worldHeight={worldHeight}
+        worldTheme="battle-royale-pixel-terrain"
         showZone={false}
       />
 

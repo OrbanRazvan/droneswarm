@@ -1584,6 +1584,9 @@ function PixiArenaRenderer({
   projectiles = [],
   simpleProjectiles = [],
   combatEvents = [],
+  // Set by Normal PvP / Zone PvP so combat text is private to this player.
+  combatViewerId = null,
+  combatEventsPrivate = false,
   cameraX = 0,
   cameraY = 0,
   scale = 1,
@@ -1613,6 +1616,8 @@ function PixiArenaRenderer({
     projectiles,
     simpleProjectiles,
     combatEvents,
+    combatViewerId,
+    combatEventsPrivate,
     cameraX,
     cameraY,
     scale,
@@ -1880,13 +1885,26 @@ function PixiArenaRenderer({
           max: Math.floor(config.maxProjectiles * 0.55),
           now,
         });
-        // Defensive client-side privacy filter. Multiplayer already receives
-        // only its own text from the server, but this also prevents a stale or
-        // legacy packet from showing another player's combat numbers.
-        const combatViewerId = data?.player?.id || data?.you?.id || null;
-        const visibleCombatEvents = (data.combatEvents || []).filter((event) =>
-          !event?.viewerId || !combatViewerId || event.viewerId === combatViewerId,
-        );
+        // Normal PvP and Zone PvP request strict private combat text. In this
+        // mode an event must explicitly belong to the local player. Other
+        // renderer modes keep their own existing combat-event behavior.
+        const resolvedCombatViewerId =
+          data?.combatViewerId || data?.player?.id || data?.you?.id || null;
+        const combatSource = data.combatEvents || [];
+        const visibleCombatEvents = data?.combatEventsPrivate
+          ? (
+              resolvedCombatViewerId
+                ? combatSource.filter(
+                    (event) => event?.viewerId === resolvedCombatViewerId,
+                  )
+                : []
+            )
+          : combatSource.filter(
+              (event) =>
+                !event?.viewerId ||
+                !resolvedCombatViewerId ||
+                event.viewerId === resolvedCombatViewerId,
+            );
         syncCombatTextLayer({
           map: combatTextMap,
           source: visibleCombatEvents,

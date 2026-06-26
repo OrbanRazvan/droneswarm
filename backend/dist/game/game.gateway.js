@@ -2180,7 +2180,7 @@ let GameGateway = class GameGateway {
                     const age = now - Number(event?.createdAt || 0);
                     if (age < 0 || age >= Number(event?.ttl || 2000))
                         return false;
-                    if (event?.viewerId && event.viewerId !== player.id)
+                    if (event?.viewerId !== player.id)
                         return false;
                     return this.isNear(viewAnchor, event, VIEW_DISTANCE + 800);
                 })
@@ -2589,7 +2589,7 @@ let GameGateway = class GameGateway {
                     const age = now - Number(event?.createdAt || 0);
                     if (age < 0 || age >= Number(event?.ttl || 2000))
                         return false;
-                    if (event?.viewerId && event.viewerId !== player.id)
+                    if (event?.viewerId !== player.id)
                         return false;
                     return this.isNear(viewAnchor, event, VIEW_DISTANCE + 800);
                 })

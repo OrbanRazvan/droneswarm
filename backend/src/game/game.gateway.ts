@@ -2774,9 +2774,10 @@ export class GameGateway {
           .filter((event) => {
             const age = now - Number(event?.createdAt || 0);
             if (age < 0 || age >= Number(event?.ttl || 2000)) return false;
-            // A player receives only the text generated for their own drone:
-            // incoming damage / shield block, or their own kill rewards.
-            if (event?.viewerId && event.viewerId !== player.id) return false;
+            // Strict privacy: this socket receives only combat text whose
+            // viewerId is its own player id. Untagged legacy events are never
+            // replicated into Normal PvP / Zone PvP client state.
+            if (event?.viewerId !== player.id) return false;
             return this.isNear(viewAnchor, event, VIEW_DISTANCE + 800);
           })
           .slice(-32),
@@ -3367,9 +3368,10 @@ export class GameGateway {
           .filter((event) => {
             const age = now - Number(event?.createdAt || 0);
             if (age < 0 || age >= Number(event?.ttl || 2000)) return false;
-            // A player receives only the text generated for their own drone:
-            // incoming damage / shield block, or their own kill rewards.
-            if (event?.viewerId && event.viewerId !== player.id) return false;
+            // Strict privacy: this socket receives only combat text whose
+            // viewerId is its own player id. Untagged legacy events are never
+            // replicated into Normal PvP / Zone PvP client state.
+            if (event?.viewerId !== player.id) return false;
             return this.isNear(viewAnchor, event, VIEW_DISTANCE + 800);
           })
           .slice(-32),
