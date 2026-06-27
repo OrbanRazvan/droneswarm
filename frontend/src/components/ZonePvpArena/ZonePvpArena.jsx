@@ -1103,8 +1103,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     phaseVersion: -1,
     status: "connecting",
     playerCount: 0,
-    minPlayers: 2,
+    minPlayers: 3,
     maxPlayers: 60,
+    realPlayerCount: 0,
+    botCount: 0,
     countdown: null,
     coreDropCountdown: null,
     winnerId: null,
@@ -2573,8 +2575,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const isMatchmaking = isWaiting || isCountdown;
   const isFinished = status === "finished";
   const playersAlive = hudData.playerCount || renderData.playerCount || 1;
-  const minPlayers = hudData.minPlayers || renderData.minPlayers || 2;
-  const maxPlayers = hudData.maxPlayers || renderData.maxPlayers || 2;
+  const minPlayers = hudData.minPlayers || renderData.minPlayers || 3;
+  const maxPlayers = hudData.maxPlayers || renderData.maxPlayers || 60;
+  const realPlayerCount = Number(hudData.realPlayerCount ?? renderData.realPlayerCount ?? 0);
+  const botCount = Number(hudData.botCount ?? renderData.botCount ?? 0);
   const countdown = hudData.countdown || renderData.countdown || 5;
   const winnerName = hudData.winnerName || renderData.winnerName;
   const coreDropCountdown = hudData.coreDropCountdown || renderData.coreDropCountdown;
@@ -2664,9 +2668,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         <div className="zone-pvp-matchmaking-screen">
           <div className="zone-pvp-matchmaking-card">
             <div className="zone-pvp-loader" />
-            <h1>{isCountdown ? "MATCH STARTS IN" : "WAITING FOR PLAYERS"}</h1>
-            <strong>{isCountdown ? countdown : `${Math.min(playersAlive, minPlayers)} / ${minPlayers}`}</strong>
-            <p>{isCountdown ? "Jucatorii au fost gasiti. Pregateste-te!" : "Se cauta inca un jucator pentru Zone PvP..."}</p>
+            <h1>{isCountdown ? "MATCH STARTS IN" : "WAITING FOR 3 REAL PLAYERS"}</h1>
+            <strong>{isCountdown ? countdown : `${Math.min(realPlayerCount, minPlayers)} / ${minPlayers}`}</strong>
+            <p>
+              {isCountdown
+                ? `${realPlayerCount} real players locked. Missing seats will be filled with AI bots.`
+                : "Zone PvP starts only with 3 real players. Bots are added after the 5-second lobby countdown."}
+            </p>
           </div>
         </div>
       )}
@@ -2766,7 +2774,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         <span>
           {isFinished
             ? `Winner: ${winnerName || "Player"}`
-            : `Max ${maxPlayers} players`}
+            : botCount > 0
+              ? `${botCount} AI BOTS • Max ${maxPlayers}`
+              : `Max ${maxPlayers} players`}
         </span>
       </div>
 

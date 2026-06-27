@@ -17,6 +17,19 @@ export declare class GameGateway {
     private markRoomEmptyIfNeeded;
     private shouldDeleteEmptyRoom;
     private usesProgressionPvpCombat;
+    private getZoneHumanPlayers;
+    private getZoneHumanPlayerCount;
+    private getZoneBotCount;
+    private normalizeZoneBotVector;
+    private getZoneBotPower;
+    private getZoneBotSpawn;
+    private createZonePvpBot;
+    private fillZonePvpBots;
+    private getZoneBotZoneInfo;
+    private getZoneBotAvoidance;
+    private findZoneBotEnemy;
+    private findZoneBotItem;
+    private updateZonePvpBots;
     private getNormalOrbTarget;
     private getNormalEnergyTarget;
     private getNormalRandomPoint;
@@ -98,7 +111,7 @@ export declare class GameGateway {
     canUseCore(player: any, core: any): boolean;
     getActiveCoreCount(player: any): number;
     hasCoreAlready(player: any, type: any): boolean;
-    applyCore(player: any, core: any): void;
+    applyCore(player: any, core: any, authoritativeRoom?: any): void;
     maintainWorldItems(room: any, zoneRadius: any, now: any): void;
     updateWinCondition(room: any, now: any): void;
     updateBattleRoyaleOnlineWinCondition(room: any, now: any): void;
@@ -109,6 +122,7 @@ export declare class GameGateway {
         id: any;
         userId: any;
         isGuest: boolean;
+        isBot: boolean;
         username: any;
         x: number;
         y: number;
