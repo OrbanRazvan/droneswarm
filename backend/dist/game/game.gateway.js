@@ -94,9 +94,10 @@ const NORMAL_STATE_INTERVAL_CROWDED_MS = 33;
 const NORMAL_STATE_INTERVAL_HEAVY_MS = 50;
 const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
 const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
-const ZONE_STATE_INTERVAL_MS = 25;
-const ZONE_STATE_INTERVAL_CROWDED_MS = 33;
-const ZONE_STATE_INTERVAL_HEAVY_MS = 50;
+const ZONE_STATE_INTERVAL_MS = 100;
+const ZONE_STATE_INTERVAL_CROWDED_MS = 125;
+const ZONE_STATE_INTERVAL_HEAVY_MS = 150;
+const ZONE_ENTITY_RECOVERY_INTERVAL_MS = 500;
 const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 16;
 const ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS = 25;
 const ZONE_MOVEMENT_STREAM_MAX_PLAYERS = ZONE_PVP_ROOM_MAX_PLAYERS;
@@ -1533,6 +1534,7 @@ let GameGateway = class GameGateway {
     }
     handleZonePvpLeave(client) {
         this.removeZonePvpPlayer(client.id);
+        return { ok: true };
     }
     handleZonePvpClockSync(client, payload) {
         const room = this.getZonePvpRoomBySocket(client.id);
@@ -3272,6 +3274,7 @@ let GameGateway = class GameGateway {
             nextCoreWaveAt: null,
             lastLocalItemAt: 0,
             lastBroadcastAt: 0,
+            lastZoneEntityRecoveryAt: 0,
             winnerId: null,
             winnerName: null,
             finishedAt: null,
@@ -3618,7 +3621,7 @@ let GameGateway = class GameGateway {
                 ? this.getStableSpectatorTarget(room, viewer)
                 : null;
             const viewAnchor = spectatorTarget || viewer;
-            const range = viewer.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + 260;
+            const range = viewer.alive === false ? VIEW_DISTANCE + 1900 : VIEW_DISTANCE + 1000;
             const projectileRange = range + ZONE_MOVEMENT_STREAM_RANGE_PADDING;
             const movementPlayers = players
                 .filter((other) => other.id !== viewer.id &&
@@ -3661,6 +3664,13 @@ let GameGateway = class GameGateway {
             now - room.lastStaticStateAt >= STATIC_STATE_INTERVAL_MS;
         if (includeStaticState) {
             room.lastStaticStateAt = now;
+        }
+        const includeEntityRecovery = reliable ||
+            room.status !== "playing" ||
+            !room.lastZoneEntityRecoveryAt ||
+            now - room.lastZoneEntityRecoveryAt >= ZONE_ENTITY_RECOVERY_INTERVAL_MS;
+        if (includeEntityRecovery) {
+            room.lastZoneEntityRecoveryAt = now;
         }
         let leaderboard = [];
         let minimapOrbs = [];
@@ -3705,7 +3715,9 @@ let GameGateway = class GameGateway {
                 .sort((a, b) => a.id.localeCompare(b.id))
                 .slice(0, 12);
         }
-        const playerIndex = this.buildSpatialIndex(players);
+        const playerIndex = includeEntityRecovery
+            ? this.buildSpatialIndex(players)
+            : null;
         for (const player of players) {
             const socket = this.server.sockets.sockets.get(player.id);
             if (!socket)
@@ -3726,8 +3738,9 @@ let GameGateway = class GameGateway {
                 now - player.lastViewportItemStateAt >= VIEWPORT_ITEM_STATE_INTERVAL_MS;
             if (includeViewportItems)
                 player.lastViewportItemStateAt = now;
-            const playerCandidates = this.querySpatialIndex(playerIndex, viewAnchor.x, viewAnchor.y, player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE);
-            const visiblePlayers = this.filterNear(viewAnchor, playerCandidates.filter((other) => other.id !== player.id && (player.alive !== false || other.alive !== false)), player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE, ZONE_PVP_VISIBLE_PLAYERS_LIMIT).map((other) => this.serializePlayer(other));
+            const visiblePlayers = includeEntityRecovery
+                ? this.filterNear(viewAnchor, this.querySpatialIndex(playerIndex, viewAnchor.x, viewAnchor.y, player.alive === false ? VIEW_DISTANCE + 1900 : VIEW_DISTANCE + 1000).filter((other) => other.id !== player.id && (player.alive !== false || other.alive !== false)), player.alive === false ? VIEW_DISTANCE + 1900 : VIEW_DISTANCE + 1000, ZONE_PVP_VISIBLE_PLAYERS_LIMIT).map((other) => this.serializePlayer(other))
+                : null;
             const payload = {
                 serverNow: now,
                 roomId: room.id,
@@ -3752,14 +3765,10 @@ let GameGateway = class GameGateway {
                 battlePrepareRemainingMs,
                 battleBeginFlashUntil: room.battleBeginFlashUntil || null,
                 you: this.serializePlayer(player),
-                players: visiblePlayers,
                 spectatorTargetId: spectatorTarget?.id || null,
                 spectatingPlayer: spectatorTarget
                     ? this.serializePlayer(spectatorTarget)
                     : null,
-                projectiles: room.projectileSpatialIndex
-                    ? this.filterNearIndexed(viewAnchor, room.projectileSpatialIndex, VIEW_DISTANCE + 400, 45)
-                    : this.filterNear(viewAnchor, room.projectiles, VIEW_DISTANCE + 400, 45),
                 combatEvents: (room.combatEvents || [])
                     .filter((event) => {
                     const age = now - Number(event?.createdAt || 0);
@@ -3771,6 +3780,12 @@ let GameGateway = class GameGateway {
                 })
                     .slice(-32),
             };
+            if (includeEntityRecovery) {
+                payload.players = visiblePlayers || [];
+                payload.projectiles = room.projectileSpatialIndex
+                    ? this.filterNearIndexed(viewAnchor, room.projectileSpatialIndex, VIEW_DISTANCE + 1400, 45)
+                    : this.filterNear(viewAnchor, room.projectiles, VIEW_DISTANCE + 1400, 45);
+            }
             if (includeViewportItems) {
                 payload.orbs = room.orbSpatialIndex
                     ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, 140)
@@ -3792,7 +3807,7 @@ let GameGateway = class GameGateway {
                 socket.emit("zone-pvp:state", payload);
             }
             else {
-                socket.volatile.emit("zone-pvp:state", payload);
+                socket.volatile.compress(false).emit("zone-pvp:state", payload);
             }
         }
     }
@@ -4281,7 +4296,7 @@ exports.GameGateway = GameGateway = __decorate([
         perMessageDeflate: false,
         httpCompression: false,
         pingInterval: 25000,
-        pingTimeout: 60000,
+        pingTimeout: 120000,
     }),
     __metadata("design:paramtypes", [])
 ], GameGateway);

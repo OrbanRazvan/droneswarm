@@ -129,9 +129,15 @@ const NORMAL_STATE_INTERVAL_CROWDED_MS = 33; // 30 Hz at 12+ players
 const NORMAL_STATE_INTERVAL_HEAVY_MS = 50; // 20 Hz at 28+ players
 const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
 const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
-const ZONE_STATE_INTERVAL_MS = 25; // 40 Hz in small PvP rooms
-const ZONE_STATE_INTERVAL_CROWDED_MS = 33; // 30 Hz at 12+ players
-const ZONE_STATE_INTERVAL_HEAVY_MS = 50; // 20 Hz at 28+ players
+// Zone PvP splits replication in two lanes:
+ // - small transform packets at the simulation cadence;
+ // - lower-rate authoritative/HUD snapshots.
+ // Keeping the heavy lane below 10 Hz prevents it from clogging the same
+ // WebSocket write buffer as the motion lane on mobile networks.
+const ZONE_STATE_INTERVAL_MS = 100; // 10 Hz authoritative self/HUD state
+const ZONE_STATE_INTERVAL_CROWDED_MS = 125; // 8 Hz in bot-filled rooms
+const ZONE_STATE_INTERVAL_HEAVY_MS = 150; // ~6.5 Hz only for human-heavy rooms
+const ZONE_ENTITY_RECOVERY_INTERVAL_MS = 500; // fallback full transforms / 2 Hz
 
 // Zone PvP keeps full snapshots compact, then sends a tiny transform-only
 // stream for nearby opponents. This decouples smooth remote motion from the
@@ -282,7 +288,10 @@ function normalizeSkin(skin) {
   // or returns from the background. Keep the transport alive long enough for
   // the client-side idempotent join handshake to recover cleanly.
   pingInterval: 25000,
-  pingTimeout: 60000,
+  // A busy mobile browser can delay a heartbeat while rendering or resuming
+  // from a brief OS pause. Keep the transport alive long enough for the
+  // resume-seat logic to do its job instead of causing needless reconnects.
+  pingTimeout: 120000,
 })
 export class GameGateway {
   @WebSocketServer()
@@ -1932,7 +1941,11 @@ export class GameGateway {
 
   @SubscribeMessage("zone-pvp:leave")
   handleZonePvpLeave(@ConnectedSocket() client: Socket) {
+    // Explicit menu exits are acknowledged so the client can close the socket
+    // only after this human seat has been removed. A raw disconnect still uses
+    // the reconnect grace path instead.
     this.removeZonePvpPlayer(client.id);
+    return { ok: true };
   }
 
   @SubscribeMessage("zone-pvp:clock-sync")
@@ -4179,6 +4192,9 @@ export class GameGateway {
       nextCoreWaveAt: null,
       lastLocalItemAt: 0,
       lastBroadcastAt: 0,
+      // Full entity snapshots are only a safety net; the movement lane owns
+      // live player/projectile transforms during a running round.
+      lastZoneEntityRecoveryAt: 0,
       winnerId: null,
       winnerName: null,
       finishedAt: null,
@@ -4661,7 +4677,10 @@ export class GameGateway {
           ? this.getStableSpectatorTarget(room, viewer)
           : null;
       const viewAnchor = spectatorTarget || viewer;
-      const range = viewer.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + 260;
+      // The desktop camera can display slightly farther than the old 2400px
+      // replication radius. Keep a generous transform margin so a drone never
+      // enters the visible edge using an old full-state snapshot.
+      const range = viewer.alive === false ? VIEW_DISTANCE + 1900 : VIEW_DISTANCE + 1000;
       const projectileRange = range + ZONE_MOVEMENT_STREAM_RANGE_PADDING;
 
       const movementPlayers = players
@@ -4734,6 +4753,20 @@ export class GameGateway {
       room.lastStaticStateAt = now;
     }
 
+    // During PLAYING, high-rate movement is delivered by zone-pvp:movement.
+    // Send full player/projectile arrays only as a slow recovery snapshot or
+    // at reliable phase boundaries; otherwise those large JSON payloads can
+    // delay the next transform packet and look like remote-player latency.
+    const includeEntityRecovery =
+      reliable ||
+      room.status !== "playing" ||
+      !room.lastZoneEntityRecoveryAt ||
+      now - room.lastZoneEntityRecoveryAt >= ZONE_ENTITY_RECOVERY_INTERVAL_MS;
+
+    if (includeEntityRecovery) {
+      room.lastZoneEntityRecoveryAt = now;
+    }
+
     let leaderboard: any[] = [];
     let minimapOrbs: any[] = [];
     let minimapEnergyCells: any[] = [];
@@ -4789,7 +4822,9 @@ export class GameGateway {
         .slice(0, 12);
     }
 
-    const playerIndex = this.buildSpatialIndex(players);
+    const playerIndex = includeEntityRecovery
+      ? this.buildSpatialIndex(players)
+      : null;
 
     for (const player of players) {
       const socket = this.server.sockets.sockets.get(player.id);
@@ -4819,21 +4854,21 @@ export class GameGateway {
         now - player.lastViewportItemStateAt >= VIEWPORT_ITEM_STATE_INTERVAL_MS;
       if (includeViewportItems) player.lastViewportItemStateAt = now;
 
-      const playerCandidates = this.querySpatialIndex(
-        playerIndex,
-        viewAnchor.x,
-        viewAnchor.y,
-        player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE,
-      );
-
-      const visiblePlayers = this.filterNear(
-        viewAnchor,
-        playerCandidates.filter((other) =>
-          other.id !== player.id && (player.alive !== false || other.alive !== false),
-        ),
-        player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE,
-        ZONE_PVP_VISIBLE_PLAYERS_LIMIT,
-      ).map((other) => this.serializePlayer(other));
+      const visiblePlayers = includeEntityRecovery
+        ? this.filterNear(
+            viewAnchor,
+            this.querySpatialIndex(
+              playerIndex,
+              viewAnchor.x,
+              viewAnchor.y,
+              player.alive === false ? VIEW_DISTANCE + 1900 : VIEW_DISTANCE + 1000,
+            ).filter((other) =>
+              other.id !== player.id && (player.alive !== false || other.alive !== false),
+            ),
+            player.alive === false ? VIEW_DISTANCE + 1900 : VIEW_DISTANCE + 1000,
+            ZONE_PVP_VISIBLE_PLAYERS_LIMIT,
+          ).map((other) => this.serializePlayer(other))
+        : null;
 
       const payload: any = {
         serverNow: now,
@@ -4859,25 +4894,10 @@ export class GameGateway {
         battlePrepareRemainingMs,
         battleBeginFlashUntil: room.battleBeginFlashUntil || null,
         you: this.serializePlayer(player),
-        players: visiblePlayers,
         spectatorTargetId: spectatorTarget?.id || null,
         spectatingPlayer: spectatorTarget
           ? this.serializePlayer(spectatorTarget)
           : null,
-
-        projectiles: room.projectileSpatialIndex
-          ? this.filterNearIndexed(
-              viewAnchor,
-              room.projectileSpatialIndex,
-              VIEW_DISTANCE + 400,
-              45,
-            )
-          : this.filterNear(
-              viewAnchor,
-              room.projectiles,
-              VIEW_DISTANCE + 400,
-              45,
-            ),
         // Short-lived, nearby text only. Sent outside the React render path;
         // Pixi animates it for the same look as Normal PvP.
         combatEvents: (room.combatEvents || [])
@@ -4893,6 +4913,23 @@ export class GameGateway {
           .slice(-32),
 
       };
+
+      if (includeEntityRecovery) {
+        payload.players = visiblePlayers || [];
+        payload.projectiles = room.projectileSpatialIndex
+          ? this.filterNearIndexed(
+              viewAnchor,
+              room.projectileSpatialIndex,
+              VIEW_DISTANCE + 1400,
+              45,
+            )
+          : this.filterNear(
+              viewAnchor,
+              room.projectiles,
+              VIEW_DISTANCE + 1400,
+              45,
+            );
+      }
 
       if (includeViewportItems) {
         payload.orbs = room.orbSpatialIndex
@@ -4916,7 +4953,7 @@ export class GameGateway {
       if (reliable) {
         socket.emit("zone-pvp:state", payload);
       } else {
-        socket.volatile.emit("zone-pvp:state", payload);
+        socket.volatile.compress(false).emit("zone-pvp:state", payload);
       }
     }
   }

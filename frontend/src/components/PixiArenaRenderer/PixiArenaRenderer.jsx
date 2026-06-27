@@ -2065,6 +2065,12 @@ function PixiArenaRenderer({
       app.stage.interactiveChildren = false;
       app.stage.sortableChildren = true;
 
+      // Do not cap Pixi to a lower internal ticker rate. World transforms are
+      // supplied through a live ref and should be painted on every browser rAF
+      // (60/90/120/144 Hz depending on the display).
+      app.ticker.maxFPS = 0;
+      app.ticker.minFPS = 0;
+
       const resources = createResources(coreTypes);
       const background = new PIXI.Graphics();
       background.eventMode = "none";
