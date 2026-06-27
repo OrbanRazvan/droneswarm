@@ -61,7 +61,7 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 // Client-side prediction + server reconciliation + remote snapshot buffer.
 const INPUT_SEND_INTERVAL_MS = 20;
 const INPUT_HEARTBEAT_MS = 240;
-const SNAPSHOT_INTERPOLATION_DELAY_MS = 72;
+const SNAPSHOT_INTERPOLATION_DELAY_MS = 48;
 const SNAPSHOT_BUFFER_TTL_MS = 520;
 
 // Keep PvP desktop framing exactly locked to BattleRoyaleMode.
@@ -301,6 +301,24 @@ function mergeStableItems(previousMap, incoming = [], now, ttlMs) {
 
   return previousMap;
 }
+
+// Viewport loot packets are authoritative snapshots, not append-only events.
+// Replacing this map prevents old visible items from surviving their removal
+// TTL and then disappearing in a batch while the player is moving.
+function replaceStableItems(previousMap, incoming = [], now) {
+  previousMap.clear();
+
+  for (const item of incoming || []) {
+    if (!item?.id) continue;
+    previousMap.set(item.id, {
+      ...item,
+      __seenAt: now,
+    });
+  }
+
+  return previousMap;
+}
+
 
 // Combat events have their own reliable socket channel. Keep a small local
 // cache because high-frequency world snapshots are intentionally volatile.
@@ -1113,11 +1131,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         return;
       }
 
-      // Late/queued packets must never move the render timeline forward. A
-      // slow correction toward the closest observed server clock keeps remote
-      // movement fluid and prevents a backwards correction on strong viewers.
-      const target = Math.min(current, observedOffset);
-      serverClockOffsetRef.current = current * 0.985 + target * 0.015;
+      // Follow the actual clock offset in both directions. One-way correction
+      // left a strong viewer permanently behind after a late packet from a
+      // mobile or low-end laptop.
+      const boundedDelta = clamp(observedOffset - current, -5, 5);
+      serverClockOffsetRef.current = current + boundedDelta * 0.16;
     };
 
     const applyState = (state) => {
@@ -1221,33 +1239,34 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       cleanupHiddenCollected(hiddenEnergyIdsRef.current, now);
       cleanupHiddenCollected(hiddenCoreIdsRef.current, now);
 
-      stableOrbMapRef.current = mergeStableItems(stableOrbMapRef.current, state.orbs || [], now, ORB_STABLE_TTL);
-      stableEnergyMapRef.current = mergeStableItems(stableEnergyMapRef.current, state.energyCells || [], now, ORB_STABLE_TTL);
+      if (state.orbs !== undefined) {
+        stableOrbMapRef.current = replaceStableItems(stableOrbMapRef.current, state.orbs || [], now);
+      }
+      if (state.energyCells !== undefined) {
+        stableEnergyMapRef.current = replaceStableItems(stableEnergyMapRef.current, state.energyCells || [], now);
+      }
 
       if (state.minimapOrbs !== undefined) {
-        stableMinimapOrbMapRef.current = mergeStableItems(
+        stableMinimapOrbMapRef.current = replaceStableItems(
           stableMinimapOrbMapRef.current,
           state.minimapOrbs || [],
           now,
-          MINIMAP_STABLE_TTL
         );
       }
 
       if (state.minimapEnergyCells !== undefined) {
-        stableMinimapEnergyMapRef.current = mergeStableItems(
+        stableMinimapEnergyMapRef.current = replaceStableItems(
           stableMinimapEnergyMapRef.current,
           state.minimapEnergyCells || [],
           now,
-          MINIMAP_STABLE_TTL
         );
       }
 
       if (state.minimapCores !== undefined) {
-        stableCoreMapRef.current = mergeStableItems(
+        stableCoreMapRef.current = replaceStableItems(
           stableCoreMapRef.current,
           state.minimapCores || [],
           now,
-          MINIMAP_STABLE_TTL
         );
       }
 

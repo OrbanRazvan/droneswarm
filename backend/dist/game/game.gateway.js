@@ -28,7 +28,7 @@ const NORMAL_VISIBLE_PLAYERS_LIMIT = 60;
 const NORMAL_ORB_BASE_TARGET = 420;
 const NORMAL_ORB_PER_ALIVE_PLAYER = 22;
 const NORMAL_ORB_MAX_TARGET = 650;
-const NORMAL_ORB_DISTRIBUTION_VERSION = 2;
+const NORMAL_ORB_DISTRIBUTION_VERSION = 3;
 const NORMAL_ORB_GRID_MARGIN = 260;
 const NORMAL_ORB_RESPAWN_DELAY_MIN_MS = 2600;
 const NORMAL_ORB_RESPAWN_DELAY_MAX_MS = 4200;
@@ -67,7 +67,7 @@ const ZONE_PVP_ZONE_DAMAGE_INTERVAL = 1000;
 const ZONE_PVP_VISIBLE_PLAYERS_LIMIT = 60;
 const COLLISION_GRID_CELL_SIZE = 600;
 const NORMAL_STATE_INTERVAL_MS = 33;
-const NORMAL_STATE_INTERVAL_SOLO_MS = 50;
+const NORMAL_STATE_INTERVAL_SOLO_MS = 33;
 const NORMAL_STATE_INTERVAL_CROWDED_MS = 33;
 const NORMAL_STATE_INTERVAL_HEAVY_MS = 50;
 const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
@@ -236,6 +236,50 @@ let GameGateway = class GameGateway {
             y: this.clamp(margin + Math.random() * Math.max(1, NORMAL_WORLD_HEIGHT - margin * 2), PLAYER_RADIUS, NORMAL_WORLD_HEIGHT - PLAYER_RADIUS),
         };
     }
+    isPointFarFromPlayers(room, x, y, minDistance = 780) {
+        const minDistanceSq = minDistance * minDistance;
+        for (const player of room?.players?.values?.() || []) {
+            if (!player?.alive)
+                continue;
+            const dx = Number(player.x || 0) - x;
+            const dy = Number(player.y || 0) - y;
+            if (dx * dx + dy * dy < minDistanceSq)
+                return false;
+        }
+        return true;
+    }
+    createNormalDistributedOrb(room) {
+        const minOrbDistanceSq = 230 * 230;
+        for (let attempt = 0; attempt < 96; attempt += 1) {
+            const point = this.getNormalRandomPoint(260);
+            if (!this.isPointFarFromPlayers(room, point.x, point.y, 760))
+                continue;
+            let tooCloseToOrb = false;
+            for (const existing of room?.orbs || []) {
+                const dx = Number(existing?.x || 0) - point.x;
+                const dy = Number(existing?.y || 0) - point.y;
+                if (dx * dx + dy * dy < minOrbDistanceSq) {
+                    tooCloseToOrb = true;
+                    break;
+                }
+            }
+            if (!tooCloseToOrb) {
+                return {
+                    id: crypto.randomUUID(),
+                    x: point.x,
+                    y: point.y,
+                    color: COLORS[Math.floor(Math.random() * COLORS.length)],
+                };
+            }
+        }
+        const point = this.getNormalRandomPoint(180);
+        return {
+            id: crypto.randomUUID(),
+            x: point.x,
+            y: point.y,
+            color: COLORS[Math.floor(Math.random() * COLORS.length)],
+        };
+    }
     getNormalOrbGrid(room, target = this.getNormalOrbTarget(room)) {
         const safeTarget = Math.max(1, Math.min(NORMAL_ORB_MAX_TARGET, Math.round(target)));
         const columns = Math.max(1, Math.ceil(Math.sqrt(safeTarget)));
@@ -246,39 +290,20 @@ let GameGateway = class GameGateway {
         const raw = Math.sin((slot + 1) * 12.9898 + salt * 78.233) * 43758.5453;
         return raw - Math.floor(raw);
     }
-    createNormalOrbAtGridSlot(room, slot, generation = 0) {
-        const grid = room?.normalOrbGrid || this.getNormalOrbGrid(room);
-        const margin = NORMAL_ORB_GRID_MARGIN;
-        const usableWidth = Math.max(1, NORMAL_WORLD_WIDTH - margin * 2);
-        const usableHeight = Math.max(1, NORMAL_WORLD_HEIGHT - margin * 2);
-        const cellCount = grid.columns * grid.rows;
-        const cellIndex = Math.min(cellCount - 1, Math.floor((slot * cellCount) / Math.max(1, grid.target)));
-        const column = cellIndex % grid.columns;
-        const row = Math.floor(cellIndex / grid.columns);
-        const cellWidth = usableWidth / grid.columns;
-        const cellHeight = usableHeight / grid.rows;
-        const jitterSeed = slot + generation * 9973;
-        const jitterX = 0.22 + this.normalOrbJitter(jitterSeed, 1) * 0.56;
-        const jitterY = 0.22 + this.normalOrbJitter(jitterSeed, 2) * 0.56;
-        const x = this.clamp(margin + (column + jitterX) * cellWidth, PLAYER_RADIUS, NORMAL_WORLD_WIDTH - PLAYER_RADIUS);
-        const y = this.clamp(margin + (row + jitterY) * cellHeight, PLAYER_RADIUS, NORMAL_WORLD_HEIGHT - PLAYER_RADIUS);
-        return {
-            id: crypto.randomUUID(),
-            x,
-            y,
-            color: COLORS[(slot + generation) % COLORS.length],
-            normalOrbSlot: slot,
-            normalOrbGeneration: generation,
-        };
+    createNormalOrbAtGridSlot(room, _slot, _generation = 0) {
+        return this.createNormalDistributedOrb(room);
     }
     rebuildNormalOrbDistribution(room, target = this.getNormalOrbTarget(room)) {
-        const grid = this.getNormalOrbGrid(room, target);
-        room.normalOrbGrid = grid;
+        const safeTarget = Math.max(1, Math.min(NORMAL_ORB_MAX_TARGET, Math.round(target)));
+        room.normalOrbGrid = { target: safeTarget, columns: 0, rows: 0 };
         room.normalOrbDistributionVersion = NORMAL_ORB_DISTRIBUTION_VERSION;
         room.normalOrbRespawnAt = new Map();
         room.normalOrbRespawnCollectorId = new Map();
         room.normalOrbRespawnGeneration = new Map();
-        room.orbs = Array.from({ length: grid.target }, (_, slot) => this.createNormalOrbAtGridSlot(room, slot, 0));
+        room.orbs = [];
+        for (let index = 0; index < safeTarget; index += 1) {
+            room.orbs.push(this.createNormalDistributedOrb(room));
+        }
         room.itemSpatialDirty = true;
     }
     ensureNormalOrbRespawnMaps(room) {
@@ -303,68 +328,25 @@ let GameGateway = class GameGateway {
         room.normalOrbRespawnAt.set(slot, now + NORMAL_ORB_RESPAWN_DELAY_MIN_MS + deterministicDelay);
         room.normalOrbRespawnCollectorId.set(slot, String(collector?.id || ""));
     }
-    ensureNormalOrbDistribution(room, now = Date.now()) {
+    ensureNormalOrbDistribution(room, _now = Date.now()) {
         if (!room?.normalMode)
             return;
         const target = this.getNormalOrbTarget(room);
-        const grid = room.normalOrbGrid;
-        const invalidSlots = room.orbs.some((orb) => !Number.isInteger(orb?.normalOrbSlot) ||
-            orb.normalOrbSlot < 0 ||
-            orb.normalOrbSlot >= target);
-        const needsRebuild = room.normalOrbDistributionVersion !== NORMAL_ORB_DISTRIBUTION_VERSION ||
-            !grid ||
-            Number(grid.target || 0) !== target ||
-            room.orbs.length > target ||
-            invalidSlots;
-        if (needsRebuild) {
+        const requiresReset = room.normalOrbDistributionVersion !== NORMAL_ORB_DISTRIBUTION_VERSION ||
+            !Array.isArray(room.orbs) ||
+            room.orbs.length > target;
+        if (requiresReset) {
             this.rebuildNormalOrbDistribution(room, target);
             return;
         }
-        this.ensureNormalOrbRespawnMaps(room);
-        const occupiedSlots = new Set();
-        for (const orb of room.orbs) {
-            if (Number.isInteger(orb?.normalOrbSlot))
-                occupiedSlots.add(orb.normalOrbSlot);
-        }
-        if (occupiedSlots.size !== room.orbs.length) {
-            this.rebuildNormalOrbDistribution(room, target);
-            return;
-        }
-        for (let slot = 0; slot < target; slot += 1) {
-            if (occupiedSlots.has(slot))
-                continue;
-            const respawnAt = Number(room.normalOrbRespawnAt.get(slot) || 0);
-            if (respawnAt > now)
-                continue;
-            const generation = Number(room.normalOrbRespawnGeneration.get(slot) || 0) + 1;
-            const candidate = this.createNormalOrbAtGridSlot(room, slot, generation);
-            const collectorId = room.normalOrbRespawnCollectorId.get(slot);
-            const collector = collectorId ? room.players.get(collectorId) : null;
-            if (collector?.alive &&
-                this.isNear(collector, candidate, NORMAL_ORB_RESPAWN_SAFE_DISTANCE)) {
-                room.normalOrbRespawnAt.set(slot, now + NORMAL_ORB_RESPAWN_RETRY_MS);
-                room.normalOrbRespawnGeneration.set(slot, generation);
-                continue;
-            }
-            room.orbs.push(candidate);
-            room.normalOrbRespawnAt.delete(slot);
-            room.normalOrbRespawnCollectorId.delete(slot);
-            room.normalOrbRespawnGeneration.set(slot, generation);
+        while (room.orbs.length < target) {
+            room.orbs.push(this.createNormalDistributedOrb(room));
+            room.itemSpatialDirty = true;
         }
     }
     createNormalOrb(room) {
-        if (room?.normalMode && room?.normalOrbGrid) {
-            const occupiedSlots = new Set();
-            for (const orb of room.orbs || []) {
-                if (Number.isInteger(orb?.normalOrbSlot))
-                    occupiedSlots.add(orb.normalOrbSlot);
-            }
-            for (let slot = 0; slot < room.normalOrbGrid.target; slot += 1) {
-                if (!occupiedSlots.has(slot)) {
-                    const generation = Number(room.normalOrbRespawnGeneration?.get?.(slot) || 0) + 1;
-                    return this.createNormalOrbAtGridSlot(room, slot, generation);
-                }
-            }
+        if (room?.normalMode) {
+            return this.createNormalDistributedOrb(room);
         }
         const point = this.getNormalRandomPoint(120);
         return {
@@ -1766,7 +1748,7 @@ let GameGateway = class GameGateway {
     }
     collectOrbs(room, zoneRadius) {
         const collectedIds = new Set();
-        const normalRespawnEntries = [];
+        const activeOrbIds = new Set((room.orbs || []).map((orb) => orb?.id).filter(Boolean));
         for (const player of room.players.values()) {
             if (!player.alive)
                 continue;
@@ -1776,8 +1758,11 @@ let GameGateway = class GameGateway {
                 ? this.querySpatialIndex(room.orbSpatialIndex, player.x, player.y, ORB_COLLECT_DISTANCE + 180)
                 : room.orbs;
             for (const orb of candidates) {
-                if (!orb?.id || collectedIds.has(orb.id))
+                if (!orb?.id ||
+                    !activeOrbIds.has(orb.id) ||
+                    collectedIds.has(orb.id)) {
                     continue;
+                }
                 const endDx = orb.x - player.x;
                 const endDy = orb.y - player.y;
                 const pathDistance = this.distancePointToSegment(orb.x, orb.y, player.prevX ?? player.x, player.prevY ?? player.y, player.x, player.y);
@@ -1787,9 +1772,7 @@ let GameGateway = class GameGateway {
                     continue;
                 }
                 collectedIds.add(orb.id);
-                if (room.normalMode && Number.isInteger(orb.normalOrbSlot)) {
-                    normalRespawnEntries.push({ orb, collector: player });
-                }
+                activeOrbIds.delete(orb.id);
                 collected += 1;
                 collectedOrbIds.push(orb.id);
             }
@@ -1813,12 +1796,9 @@ let GameGateway = class GameGateway {
             room.orbs = room.orbs.filter((orb) => !collectedIds.has(orb.id));
             room.itemSpatialDirty = true;
             if (room.normalMode) {
-                const respawnNow = Date.now();
-                for (const entry of normalRespawnEntries) {
-                    this.scheduleNormalOrbRespawn(room, entry.orb, entry.collector, respawnNow);
-                }
-                this.ensureNormalOrbDistribution(room, respawnNow);
+                this.ensureNormalOrbDistribution(room, Date.now());
             }
+            this.refreshRoomSpatialIndexes(room, Date.now(), true);
             this.emitWorldItemDelta(room, {
                 removedOrbIds: [...collectedIds],
             });
@@ -1826,6 +1806,7 @@ let GameGateway = class GameGateway {
     }
     collectEnergy(room, zoneRadius) {
         const collectedIds = new Set();
+        const activeEnergyIds = new Set((room.energyCells || []).map((cell) => cell?.id).filter(Boolean));
         for (const player of room.players.values()) {
             if (!player.alive)
                 continue;
@@ -1835,8 +1816,11 @@ let GameGateway = class GameGateway {
                 ? this.querySpatialIndex(room.energySpatialIndex, player.x, player.y, ENERGY_CELL_COLLECT_DISTANCE + 180)
                 : room.energyCells;
             for (const cell of candidates) {
-                if (!cell?.id || collectedIds.has(cell.id))
+                if (!cell?.id ||
+                    !activeEnergyIds.has(cell.id) ||
+                    collectedIds.has(cell.id)) {
                     continue;
+                }
                 const endDx = cell.x - player.x;
                 const endDy = cell.y - player.y;
                 const pathDistance = this.distancePointToSegment(cell.x, cell.y, player.prevX ?? player.x, player.prevY ?? player.y, player.x, player.y);
@@ -1846,6 +1830,7 @@ let GameGateway = class GameGateway {
                     continue;
                 }
                 collectedIds.add(cell.id);
+                activeEnergyIds.delete(cell.id);
                 collected += 1;
                 collectedEnergyIds.push(cell.id);
                 const energyBefore = Number(player.energy || 0);
@@ -1872,6 +1857,7 @@ let GameGateway = class GameGateway {
                     room.energyCells.push(this.createNormalEnergyCell());
                 }
             }
+            this.refreshRoomSpatialIndexes(room, Date.now(), true);
             this.emitWorldItemDelta(room, {
                 removedEnergyIds: [...collectedIds],
             });
@@ -1879,6 +1865,7 @@ let GameGateway = class GameGateway {
     }
     collectCores(room, zoneRadius) {
         const collectedIds = new Set();
+        const activeCoreIds = new Set((room.cores || []).map((core) => core?.id).filter(Boolean));
         for (const player of room.players.values()) {
             if (!player.alive)
                 continue;
@@ -1887,7 +1874,7 @@ let GameGateway = class GameGateway {
                 ? this.querySpatialIndex(room.coreSpatialIndex, player.x, player.y, CORE_COLLECT_DISTANCE + 180)
                 : room.cores;
             for (const core of candidates) {
-                if (!core?.id || collectedIds.has(core.id))
+                if (!core?.id || !activeCoreIds.has(core.id) || collectedIds.has(core.id))
                     continue;
                 const endDx = core.x - player.x;
                 const endDy = core.y - player.y;
@@ -1901,6 +1888,7 @@ let GameGateway = class GameGateway {
                     continue;
                 this.applyCore(player, core);
                 collectedIds.add(core.id);
+                activeCoreIds.delete(core.id);
                 collectedCoreIds.push(core.id);
             }
             if (collectedCoreIds.length > 0) {
@@ -1914,6 +1902,7 @@ let GameGateway = class GameGateway {
         if (collectedIds.size > 0) {
             room.cores = room.cores.filter((core) => !collectedIds.has(core.id));
             room.itemSpatialDirty = true;
+            this.refreshRoomSpatialIndexes(room, Date.now(), true);
             this.emitWorldItemDelta(room, {
                 removedCoreIds: [...collectedIds],
             });

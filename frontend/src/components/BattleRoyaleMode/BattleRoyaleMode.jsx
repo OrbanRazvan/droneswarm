@@ -1673,16 +1673,16 @@ function getBotPower(unit) {
 // fara sa schimbe comportamentul vizibil al AI-ului (doar reactioneaza cu
 // cateva zecimi de secunda mai tarziu pe device-uri foarte slabe).
 // ---------------------------------------------------------------------------
-function getBattleRoyalePerfProfile() {
+function getBattleRoyalePerfProfile(forceLowQuality = false) {
   if (typeof window === "undefined" || typeof navigator === "undefined") {
     return {
-      isLowEndDevice: false,
-      isWeakDesktop: false,
+      isLowEndDevice: Boolean(forceLowQuality),
+      isWeakDesktop: Boolean(forceLowQuality),
       isLowEndMobile: false,
-      aiBatches: 2,
-      botLogicIntervalMs: 28,
-      botReactSyncIntervalMs: 66,
-      projectileReactSyncIntervalMs: 66,
+      aiBatches: forceLowQuality ? 6 : 2,
+      botLogicIntervalMs: forceLowQuality ? 30 : 28,
+      botReactSyncIntervalMs: forceLowQuality ? 120 : 66,
+      projectileReactSyncIntervalMs: forceLowQuality ? 110 : 66,
     };
   }
 
@@ -1698,14 +1698,12 @@ function getBattleRoyalePerfProfile() {
     : null;
   const memory = reportedMemory ?? 4;
 
-  // GTX 1050-era laptops often report 4 CPU threads / 8GB RAM. Treat this
-  // class as a dedicated low-spec desktop tier, not as a phone tier: the
-  // battle remains active, but rendering and React sync become much cheaper.
-  const isWeakDesktop = !isMobile && (
+  const detectedWeakDesktop = !isMobile && (
     cores <= 4 || (reportedMemory !== null && reportedMemory <= 8)
   );
+  const isWeakDesktop = detectedWeakDesktop || Boolean(forceLowQuality && !isMobile);
   const isLowEndMobile = Boolean(
-    isMobile && (isHuaweiLike || cores <= 4 || memory <= 4)
+    isMobile && (isHuaweiLike || cores <= 4 || memory <= 4 || forceLowQuality)
   );
   const isLowEndDevice = isLowEndMobile || isWeakDesktop;
 
@@ -1713,15 +1711,13 @@ function getBattleRoyalePerfProfile() {
     isLowEndDevice,
     isWeakDesktop,
     isLowEndMobile,
-    // Decisions are spread over six waves on weak PCs. Bots still travel on
-    // every simulation step using their last planned vector, so this reduces
-    // CPU spikes without freezing their movement.
+    // AI thinking stays amortized, but physical bot movement is evaluated at
+    // a faster cadence. The renderer extrapolates only the short gap between
+    // these ticks, so weak PCs no longer show bots moving in visible steps.
     aiBatches: isWeakDesktop ? 8 : isLowEndMobile ? 4 : 2,
-    // Keep movement responsive, but spread target searching and collection work
-    // across more groups on 2015–2018 laptops.
-    botLogicIntervalMs: isWeakDesktop ? 36 : isLowEndMobile ? 42 : 28,
-    botReactSyncIntervalMs: isWeakDesktop ? 220 : isLowEndMobile ? 120 : 66,
-    projectileReactSyncIntervalMs: isWeakDesktop ? 160 : isLowEndMobile ? 100 : 66,
+    botLogicIntervalMs: isWeakDesktop ? 30 : isLowEndMobile ? 34 : 28,
+    botReactSyncIntervalMs: isWeakDesktop ? 120 : isLowEndMobile ? 100 : 66,
+    projectileReactSyncIntervalMs: isWeakDesktop ? 110 : isLowEndMobile ? 90 : 66,
   };
 }
 
@@ -1787,7 +1783,7 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
   // Profilul de performanta al device-ului (detectat o singura data la mount)
   // si indexul curent al valului de boti care recalculeaza AI in tickul
   // curent - vezi getBattleRoyalePerfProfile() pentru explicatia completa.
-  const perfProfileRef = useRef(getBattleRoyalePerfProfile());
+  const perfProfileRef = useRef(getBattleRoyalePerfProfile(graphicsQuality === "low"));
   const aiBatchIndexRef = useRef(0);
   const collisionFrameSkipRef = useRef(0);
 
@@ -3841,7 +3837,7 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
       Number(target?.x || 0) - cache.x,
       Number(target?.y || 0) - cache.y,
     ) > 160;
-    const refreshEvery = lowSpecDesktop ? 160 : 66;
+    const refreshEvery = lowSpecDesktop ? 120 : 66;
 
     if (cache.key !== targetKey || movedEnough || timestamp - cache.refreshedAt >= refreshEvery) {
       const candidates = botsRef.current
@@ -3867,13 +3863,37 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
         : [];
     }
 
-    if (cache.source !== botsRef.current) {
-      cache.source = botsRef.current;
-      cache.byId = new Map(botsRef.current.map((bot) => [bot.id, bot]));
-    }
+    // The low-spec profile intentionally runs expensive bot decisions less
+    // often. Give Pixi a tiny, capped transform-only prediction between those
+    // decisions; it changes visuals only and converges on the next real tick.
+    const elapsedMs = Math.min(
+      42,
+      Math.max(0, Number(timestamp || 0) - Number(lastBotLogicUpdateRef.current || timestamp)),
+    );
+    const frameScale = elapsedMs / (1000 / 60);
+    const smoothBot = (bot) => {
+      if (!bot || !bot.alive) return bot;
+      const speedMultiplier = Math.max(1, Number(bot.moveSpeedMultiplier || 1));
+      const visualSpeed = BOT_SPEED * speedMultiplier;
+      const vx = Number(bot.vx || bot.moveX || 0);
+      const vy = Number(bot.vy || bot.moveY || 0);
+      const length = Math.hypot(vx, vy);
+      if (length < 0.001) return bot;
+
+      return {
+        ...bot,
+        x: Number(bot.x || 0) + (vx / length) * visualSpeed * frameScale,
+        y: Number(bot.y || 0) + (vy / length) * visualSpeed * frameScale,
+      };
+    };
+
+    // Build the lightweight map for this frame. Selection ids remain cached,
+    // but positions are fresh every rAF so low-end bots do not look like 30 FPS
+    // step animation on a 60 FPS display.
+    const byId = new Map(botsRef.current.map((bot) => [bot.id, smoothBot(bot)]));
     return {
-      bots: cache.fullIds.map((id) => cache.byId.get(id)).filter(Boolean),
-      simpleBots: cache.simpleIds.map((id) => cache.byId.get(id)).filter(Boolean),
+      bots: cache.fullIds.map((id) => byId.get(id)).filter(Boolean),
+      simpleBots: cache.simpleIds.map((id) => byId.get(id)).filter(Boolean),
     };
   };
 

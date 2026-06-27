@@ -601,6 +601,24 @@ function mergeStableItems(previousMap, incoming = [], now, ttlMs) {
   return previousMap;
 }
 
+// Viewport loot packets are authoritative snapshots, not append-only events.
+// Replacing this map prevents old visible items from surviving their removal
+// TTL and then disappearing in a batch while the player is moving.
+function replaceStableItems(previousMap, incoming = [], now) {
+  previousMap.clear();
+
+  for (const item of incoming || []) {
+    if (!item?.id) continue;
+    previousMap.set(item.id, {
+      ...item,
+      __seenAt: now,
+    });
+  }
+
+  return previousMap;
+}
+
+
 // Combat events have their own reliable socket channel. Keep a tiny local
 // cache because realtime world snapshots are deliberately volatile in PvP.
 // The Map also deduplicates the direct event and the later state-snapshot copy.
@@ -1307,45 +1325,44 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       cleanupHiddenCollected(hiddenEnergyIdsRef.current, now);
       cleanupHiddenCollected(hiddenCoreIdsRef.current, now);
 
-      stableOrbMapRef.current = mergeStableItems(
-        stableOrbMapRef.current,
-        state.orbs || [],
-        now,
-        ORB_STABLE_TTL,
-      );
-      stableEnergyMapRef.current = mergeStableItems(
-        stableEnergyMapRef.current,
-        state.energyCells || [],
-        now,
-        ORB_STABLE_TTL,
-      );
+      if (state.orbs !== undefined) {
+        stableOrbMapRef.current = replaceStableItems(
+          stableOrbMapRef.current,
+          state.orbs || [],
+          now,
+        );
+      }
+      if (state.energyCells !== undefined) {
+        stableEnergyMapRef.current = replaceStableItems(
+          stableEnergyMapRef.current,
+          state.energyCells || [],
+          now,
+        );
+      }
 
       // Minimap data now arrives at a lower cadence. Do not merge every local
       // viewport item into the minimap cache between those updates.
       if (state.minimapOrbs !== undefined) {
-        stableMinimapOrbMapRef.current = mergeStableItems(
+        stableMinimapOrbMapRef.current = replaceStableItems(
           stableMinimapOrbMapRef.current,
           state.minimapOrbs || [],
           now,
-          MINIMAP_STABLE_TTL,
         );
       }
 
       if (state.minimapEnergyCells !== undefined) {
-        stableMinimapEnergyMapRef.current = mergeStableItems(
+        stableMinimapEnergyMapRef.current = replaceStableItems(
           stableMinimapEnergyMapRef.current,
           state.minimapEnergyCells || [],
           now,
-          MINIMAP_STABLE_TTL,
         );
       }
 
       if (state.minimapCores !== undefined) {
-        stableCoreMapRef.current = mergeStableItems(
+        stableCoreMapRef.current = replaceStableItems(
           stableCoreMapRef.current,
           state.minimapCores || [],
           now,
-          MINIMAP_STABLE_TTL,
         );
       }
 

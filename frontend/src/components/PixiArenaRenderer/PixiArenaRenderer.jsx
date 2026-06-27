@@ -1828,6 +1828,14 @@ function PixiArenaRenderer({
       let lastZoneRadius = null;
       let lastZoneVisible = false;
 
+      // Adaptive visual budgets: weak devices keep the same simulation but
+      // progressively trim only far/static visuals when the actual render loop
+      // drops below the target frame time. It recovers automatically when the
+      // frame budget is healthy again.
+      let frameTimeEma = 16.7;
+      let adaptiveTier = 0; // 0 = full, 1 = reduced, 2 = emergency low
+      let lastAdaptiveChangeAt = 0;
+
       const resize = () => {
         const width = Math.max(1, hostRef.current?.clientWidth || window.innerWidth);
         const height = Math.max(1, hostRef.current?.clientHeight || window.innerHeight);
@@ -1844,6 +1852,24 @@ function PixiArenaRenderer({
         if (!data) return;
 
         const now = performance.now();
+        const tickMs = Math.min(80, Math.max(1, Number(app.ticker.deltaMS || 16.7)));
+        frameTimeEma = frameTimeEma * 0.92 + tickMs * 0.08;
+
+        if (now - lastAdaptiveChangeAt > 700) {
+          const desiredTier =
+            frameTimeEma > 31 ? 2 :
+            frameTimeEma > 22 ? 1 :
+            frameTimeEma < 18.2 ? 0 :
+            adaptiveTier;
+          if (desiredTier !== adaptiveTier) {
+            adaptiveTier = desiredTier;
+            lastAdaptiveChangeAt = now;
+            // Force a controlled refresh so pooled static visuals converge to
+            // the new budget without one large per-frame rebuild.
+            lastStaticSync = 0;
+          }
+        }
+
         const width = Number(data.viewportWidth || hostRef.current?.clientWidth || app.renderer.width || window.innerWidth);
         const height = Number(data.viewportHeight || hostRef.current?.clientHeight || app.renderer.height || window.innerHeight);
         const camera = {
@@ -1899,9 +1925,14 @@ function PixiArenaRenderer({
           // other game modes. Clamp it to a safe device-specific ceiling.
           const requestedStaticBudget = Number(data.staticItemBudget || 0);
           const staticBudgetCeiling = config.mobile ? 190 : 300;
-          const itemBudget = requestedStaticBudget > 0
+          const baseItemBudget = requestedStaticBudget > 0
             ? clamp(Math.round(requestedStaticBudget), 40, staticBudgetCeiling)
             : config.maxStaticItems;
+          const adaptiveItemCap =
+            adaptiveTier === 2 ? Math.min(baseItemBudget, config.lowSpecDesktop ? 34 : 54) :
+            adaptiveTier === 1 ? Math.min(baseItemBudget, config.lowSpecDesktop ? 42 : 92) :
+            baseItemBudget;
+          const itemBudget = adaptiveItemCap;
           const orbBudget = Math.floor(itemBudget * 0.70);
           const energyBudget = Math.floor(itemBudget * 0.24);
           const coreBudget = Math.max(2, itemBudget - orbBudget - energyBudget);
@@ -1958,9 +1989,9 @@ function PixiArenaRenderer({
           resources,
           parent: entitiesLayer,
           bounds,
-          max: config.maxPlayers,
+          max: adaptiveTier === 2 ? Math.min(config.maxPlayers, 12) : adaptiveTier === 1 ? Math.min(config.maxPlayers, 24) : config.maxPlayers,
           now,
-          compact: config.weakMobile,
+          compact: config.weakMobile || adaptiveTier > 0,
         });
         syncUnitPool({
           pool: botPool,
@@ -1968,9 +1999,9 @@ function PixiArenaRenderer({
           resources,
           parent: entitiesLayer,
           bounds,
-          max: config.maxPlayers,
+          max: adaptiveTier === 2 ? Math.min(config.maxPlayers, 12) : adaptiveTier === 1 ? Math.min(config.maxPlayers, 24) : config.maxPlayers,
           now,
-          compact: config.weakMobile,
+          compact: config.weakMobile || adaptiveTier > 0,
         });
         syncSimplePool({
           pool: simpleBotPool,
@@ -1978,7 +2009,7 @@ function PixiArenaRenderer({
           resources,
           parent: entitiesLayer,
           bounds,
-          max: config.maxSimplePlayers,
+          max: adaptiveTier === 2 ? Math.min(config.maxSimplePlayers, 14) : adaptiveTier === 1 ? Math.min(config.maxSimplePlayers, 28) : config.maxSimplePlayers,
           now,
         });
         syncProjectilePool({
@@ -1987,7 +2018,7 @@ function PixiArenaRenderer({
           resources,
           parent: projectilesLayer,
           bounds,
-          max: config.maxProjectiles,
+          max: adaptiveTier === 2 ? Math.min(config.maxProjectiles, 10) : adaptiveTier === 1 ? Math.min(config.maxProjectiles, 28) : config.maxProjectiles,
           now,
         });
         syncProjectilePool({
@@ -1996,7 +2027,7 @@ function PixiArenaRenderer({
           resources,
           parent: projectilesLayer,
           bounds,
-          max: Math.floor(config.maxProjectiles * 0.55),
+          max: adaptiveTier === 2 ? 5 : adaptiveTier === 1 ? Math.min(14, Math.floor(config.maxProjectiles * 0.55)) : Math.floor(config.maxProjectiles * 0.55),
           now,
         });
         // Normal PvP and Zone PvP request strict private combat text. In this

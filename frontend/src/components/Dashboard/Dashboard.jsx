@@ -365,6 +365,9 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
 
   const [screen, setScreen] = useState(gameMode ? "arena" : "hangar");
   const [selectedMode, setSelectedMode] = useState(gameMode || "pvp");
+  // Every press creates a fresh arena instance. This prevents an old socket
+  // from being reused after staying open in another mode or guest session.
+  const [arenaSessionId, setArenaSessionId] = useState(0);
   const [activeTab, setActiveTab] = useState("hangar");
   const [selectedDrone, setSelectedDrone] = useState(() =>
     isGuestUser ? "cyan" : getInitialSelectedDrone(user)
@@ -447,6 +450,12 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
     skin: arenaSelectedDrone,
   };
 
+  const launchArena = (mode) => {
+    setArenaSessionId((value) => value + 1);
+    setSelectedMode(mode);
+    setScreen("arena");
+  };
+
   const handleExitToHangar = () => {
     setScreen("hangar");
     setSelectedMode("pvp");
@@ -460,15 +469,26 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
     return (
       <div className="dashboard">
         {selectedMode === "normal-pvp" ? (
-          <NormalPvpArena user={arenaUser} onExitToMenu={handleExitToHangar} graphicsQuality={graphicsQuality} />
+          <NormalPvpArena
+            key={`normal-pvp-${arenaSessionId}`}
+            user={arenaUser}
+            onExitToMenu={handleExitToHangar}
+            graphicsQuality={graphicsQuality}
+          />
         ) : selectedMode === "battle-royale" ? (
-          <BattleRoyale user={arenaUser} onExitToMenu={handleExitToHangar} graphicsQuality={graphicsQuality} />
-        ) : selectedMode === "zone-pvp" ? (
-          <ZonePvpArena user={arenaUser} onExitToMenu={handleExitToHangar} graphicsQuality={graphicsQuality} />
-        ) : selectedMode === "battle-royale-pvp" ? (
-          <BattleRoyaleOnline user={arenaUser} onExitToMenu={handleExitToHangar} graphicsQuality={graphicsQuality} />
+          <BattleRoyale
+            key={`battle-royale-${arenaSessionId}`}
+            user={arenaUser}
+            onExitToMenu={handleExitToHangar}
+            graphicsQuality={graphicsQuality}
+          />
         ) : (
-          <PvpArena user={arenaUser} onExitToMenu={handleExitToHangar} graphicsQuality={graphicsQuality} />
+          <ZonePvpArena
+            key={`zone-pvp-${arenaSessionId}`}
+            user={arenaUser}
+            onExitToMenu={handleExitToHangar}
+            graphicsQuality={graphicsQuality}
+          />
         )}
       </div>
     );
@@ -557,30 +577,21 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
 
           <button
             className="secondary-wide normal-pvp-wide"
-            onClick={() => {
-              setSelectedMode("normal-pvp");
-              setScreen("arena");
-            }}
+            onClick={() => launchArena("normal-pvp")}
           >
             Normal PVP
           </button>
 
           <button
             className="secondary-wide battle-royale-mode-wide"
-            onClick={() => {
-              setSelectedMode("battle-royale");
-              setScreen("arena");
-            }}
+            onClick={() => launchArena("battle-royale")}
           >
             Battle Royale - PVE
           </button>
 
           <button
             className="secondary-wide zone-pvp-wide"
-            onClick={() => {
-              setSelectedMode("zone-pvp");
-              setScreen("arena");
-            }}
+            onClick={() => launchArena("zone-pvp")}
           >
             Battle Royale - PVP
           </button>

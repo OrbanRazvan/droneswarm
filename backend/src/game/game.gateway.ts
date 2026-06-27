@@ -28,7 +28,7 @@ const NORMAL_VISIBLE_PLAYERS_LIMIT = 60;
 const NORMAL_ORB_BASE_TARGET = 420;
 const NORMAL_ORB_PER_ALIVE_PLAYER = 22;
 const NORMAL_ORB_MAX_TARGET = 650;
-const NORMAL_ORB_DISTRIBUTION_VERSION = 2;
+const NORMAL_ORB_DISTRIBUTION_VERSION = 3;
 const NORMAL_ORB_GRID_MARGIN = 260;
 // A collected Normal PvP orb must never respawn on top of the same player.
 // The delay plus collector-distance gate preserves the even grid distribution
@@ -94,7 +94,7 @@ const COLLISION_GRID_CELL_SIZE = 600;
 // Network / replication tuning. Simulation remains 60 Hz, but clients receive
 // compact snapshots at a rate that scales down in crowded rooms.
 const NORMAL_STATE_INTERVAL_MS = 33; // 30 Hz in small PvP rooms
-const NORMAL_STATE_INTERVAL_SOLO_MS = 50; // local prediction stays 60 Hz; solo snapshots can be leaner
+const NORMAL_STATE_INTERVAL_SOLO_MS = 33; // 30 Hz authoritative snapshots; local prediction remains 60 Hz
 const NORMAL_STATE_INTERVAL_CROWDED_MS = 33; // 30 Hz at 12+ players
 const NORMAL_STATE_INTERVAL_HEAVY_MS = 50; // 20 Hz at 28+ players
 const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
@@ -332,6 +332,63 @@ export class GameGateway {
       ),
     };
   }
+  private isPointFarFromPlayers(
+    room: any,
+    x: number,
+    y: number,
+    minDistance = 780,
+  ) {
+    const minDistanceSq = minDistance * minDistance;
+    for (const player of room?.players?.values?.() || []) {
+      if (!player?.alive) continue;
+      const dx = Number(player.x || 0) - x;
+      const dy = Number(player.y || 0) - y;
+      if (dx * dx + dy * dy < minDistanceSq) return false;
+    }
+    return true;
+  }
+
+  // Normal PvP loot must be a real world population, not a player-local
+  // stream. Every new orb gets a fresh random position across the 14k map,
+  // while avoiding living players and nearby existing orbs.
+  private createNormalDistributedOrb(room: any) {
+    const minOrbDistanceSq = 230 * 230;
+
+    for (let attempt = 0; attempt < 96; attempt += 1) {
+      const point = this.getNormalRandomPoint(260);
+      if (!this.isPointFarFromPlayers(room, point.x, point.y, 760)) continue;
+
+      let tooCloseToOrb = false;
+      for (const existing of room?.orbs || []) {
+        const dx = Number(existing?.x || 0) - point.x;
+        const dy = Number(existing?.y || 0) - point.y;
+        if (dx * dx + dy * dy < minOrbDistanceSq) {
+          tooCloseToOrb = true;
+          break;
+        }
+      }
+
+      if (!tooCloseToOrb) {
+        return {
+          id: crypto.randomUUID(),
+          x: point.x,
+          y: point.y,
+          color: COLORS[Math.floor(Math.random() * COLORS.length)],
+        };
+      }
+    }
+
+    // The fallback is still map-random. It is used only when a very crowded
+    // room leaves no ideal candidate after the bounded search above.
+    const point = this.getNormalRandomPoint(180);
+    return {
+      id: crypto.randomUUID(),
+      x: point.x,
+      y: point.y,
+      color: COLORS[Math.floor(Math.random() * COLORS.length)],
+    };
+  }
+
 
   private getNormalOrbGrid(room: any, target = this.getNormalOrbTarget(room)) {
     const safeTarget = Math.max(1, Math.min(NORMAL_ORB_MAX_TARGET, Math.round(target)));
@@ -348,62 +405,23 @@ export class GameGateway {
     return raw - Math.floor(raw);
   }
 
-  private createNormalOrbAtGridSlot(room: any, slot: number, generation = 0) {
-    const grid = room?.normalOrbGrid || this.getNormalOrbGrid(room);
-    const margin = NORMAL_ORB_GRID_MARGIN;
-    const usableWidth = Math.max(1, NORMAL_WORLD_WIDTH - margin * 2);
-    const usableHeight = Math.max(1, NORMAL_WORLD_HEIGHT - margin * 2);
-    // Spread logical slots across the entire rectangular grid. When the target
-    // does not fill the final row exactly, this avoids leaving one side of the
-    // map sparse and keeps the population even from edge to edge.
-    const cellCount = grid.columns * grid.rows;
-    const cellIndex = Math.min(
-      cellCount - 1,
-      Math.floor((slot * cellCount) / Math.max(1, grid.target)),
-    );
-    const column = cellIndex % grid.columns;
-    const row = Math.floor(cellIndex / grid.columns);
-    const cellWidth = usableWidth / grid.columns;
-    const cellHeight = usableHeight / grid.rows;
-
-    // Keep the orb visibly inside its own cell. This prevents cluster spawn
-    // around any player while avoiding a sterile perfectly-aligned grid.
-    // Generation changes only after a real collection. The orb remains in its
-    // assigned map cell, but appears at a different natural point in that cell.
-    const jitterSeed = slot + generation * 9973;
-    const jitterX = 0.22 + this.normalOrbJitter(jitterSeed, 1) * 0.56;
-    const jitterY = 0.22 + this.normalOrbJitter(jitterSeed, 2) * 0.56;
-    const x = this.clamp(
-      margin + (column + jitterX) * cellWidth,
-      PLAYER_RADIUS,
-      NORMAL_WORLD_WIDTH - PLAYER_RADIUS,
-    );
-    const y = this.clamp(
-      margin + (row + jitterY) * cellHeight,
-      PLAYER_RADIUS,
-      NORMAL_WORLD_HEIGHT - PLAYER_RADIUS,
-    );
-
-    return {
-      id: crypto.randomUUID(),
-      x,
-      y,
-      color: COLORS[(slot + generation) % COLORS.length],
-      normalOrbSlot: slot,
-      normalOrbGeneration: generation,
-    };
+  private createNormalOrbAtGridSlot(room: any, _slot: number, _generation = 0) {
+    return this.createNormalDistributedOrb(room);
   }
 
   private rebuildNormalOrbDistribution(room: any, target = this.getNormalOrbTarget(room)) {
-    const grid = this.getNormalOrbGrid(room, target);
-    room.normalOrbGrid = grid;
+    const safeTarget = Math.max(1, Math.min(NORMAL_ORB_MAX_TARGET, Math.round(target)));
+    room.normalOrbGrid = { target: safeTarget, columns: 0, rows: 0 };
     room.normalOrbDistributionVersion = NORMAL_ORB_DISTRIBUTION_VERSION;
     room.normalOrbRespawnAt = new Map<number, number>();
     room.normalOrbRespawnCollectorId = new Map<number, string>();
     room.normalOrbRespawnGeneration = new Map<number, number>();
-    room.orbs = Array.from({ length: grid.target }, (_, slot) =>
-      this.createNormalOrbAtGridSlot(room, slot, 0),
-    );
+    room.orbs = [];
+
+    for (let index = 0; index < safeTarget; index += 1) {
+      room.orbs.push(this.createNormalDistributedOrb(room));
+    }
+
     room.itemSpatialDirty = true;
   }
 
@@ -437,86 +455,32 @@ export class GameGateway {
     room.normalOrbRespawnCollectorId.set(slot, String(collector?.id || ""));
   }
 
-  private ensureNormalOrbDistribution(room: any, now = Date.now()) {
+  private ensureNormalOrbDistribution(room: any, _now = Date.now()) {
     if (!room?.normalMode) return;
 
     const target = this.getNormalOrbTarget(room);
-    const grid = room.normalOrbGrid;
-    const invalidSlots = room.orbs.some(
-      (orb) =>
-        !Number.isInteger(orb?.normalOrbSlot) ||
-        orb.normalOrbSlot < 0 ||
-        orb.normalOrbSlot >= target,
-    );
-    const needsRebuild =
+    const requiresReset =
       room.normalOrbDistributionVersion !== NORMAL_ORB_DISTRIBUTION_VERSION ||
-      !grid ||
-      Number(grid.target || 0) !== target ||
-      room.orbs.length > target ||
-      invalidSlots;
+      !Array.isArray(room.orbs) ||
+      room.orbs.length > target;
 
-    if (needsRebuild) {
+    if (requiresReset) {
       this.rebuildNormalOrbDistribution(room, target);
       return;
     }
 
-    this.ensureNormalOrbRespawnMaps(room);
-    const occupiedSlots = new Set<number>();
-    for (const orb of room.orbs) {
-      if (Number.isInteger(orb?.normalOrbSlot)) occupiedSlots.add(orb.normalOrbSlot);
-    }
-
-    // Duplicate slot ids mean two orbs occupy the same logical cell. Rebuild
-    // only then; a missing slot is normal after collection and gets restored
-    // below without moving all other orbs.
-    if (occupiedSlots.size !== room.orbs.length) {
-      this.rebuildNormalOrbDistribution(room, target);
-      return;
-    }
-
-    for (let slot = 0; slot < target; slot += 1) {
-      if (occupiedSlots.has(slot)) continue;
-
-      const respawnAt = Number(room.normalOrbRespawnAt.get(slot) || 0);
-      if (respawnAt > now) continue;
-
-      const generation =
-        Number(room.normalOrbRespawnGeneration.get(slot) || 0) + 1;
-      const candidate = this.createNormalOrbAtGridSlot(room, slot, generation);
-      const collectorId = room.normalOrbRespawnCollectorId.get(slot);
-      const collector = collectorId ? room.players.get(collectorId) : null;
-
-      // A stationary player must first leave the collection radius. Otherwise
-      // a newly restored grid slot would be collected immediately again and
-      // progress would race from 0/5 to several drones without moving.
-      if (
-        collector?.alive &&
-        this.isNear(collector, candidate, NORMAL_ORB_RESPAWN_SAFE_DISTANCE)
-      ) {
-        room.normalOrbRespawnAt.set(slot, now + NORMAL_ORB_RESPAWN_RETRY_MS);
-        room.normalOrbRespawnGeneration.set(slot, generation);
-        continue;
-      }
-
-      room.orbs.push(candidate);
-      room.normalOrbRespawnAt.delete(slot);
-      room.normalOrbRespawnCollectorId.delete(slot);
-      room.normalOrbRespawnGeneration.set(slot, generation);
+    // Every missing orb is replaced by one fresh random spawn somewhere else
+    // on the map. No delayed grid slot, no local respawn and no client-only
+    // item is used here.
+    while (room.orbs.length < target) {
+      room.orbs.push(this.createNormalDistributedOrb(room));
+      room.itemSpatialDirty = true;
     }
   }
 
   private createNormalOrb(room?: any) {
-    if (room?.normalMode && room?.normalOrbGrid) {
-      const occupiedSlots = new Set<number>();
-      for (const orb of room.orbs || []) {
-        if (Number.isInteger(orb?.normalOrbSlot)) occupiedSlots.add(orb.normalOrbSlot);
-      }
-      for (let slot = 0; slot < room.normalOrbGrid.target; slot += 1) {
-        if (!occupiedSlots.has(slot)) {
-          const generation = Number(room.normalOrbRespawnGeneration?.get?.(slot) || 0) + 1;
-          return this.createNormalOrbAtGridSlot(room, slot, generation);
-        }
-      }
+    if (room?.normalMode) {
+      return this.createNormalDistributedOrb(room);
     }
 
     const point = this.getNormalRandomPoint(120);
@@ -2265,7 +2229,10 @@ export class GameGateway {
 
   collectOrbs(room, zoneRadius) {
     const collectedIds = new Set<string>();
-    const normalRespawnEntries: Array<{ orb: any; collector: any }> = [];
+    // Static spatial maps are intentionally refreshed less often than the
+    // 60 Hz simulation. Validate candidates against the live authoritative
+    // array so a removed orb can never be collected again from an old bucket.
+    const activeOrbIds = new Set((room.orbs || []).map((orb) => orb?.id).filter(Boolean));
 
     for (const player of room.players.values()) {
       if (!player.alive) continue;
@@ -2282,7 +2249,13 @@ export class GameGateway {
         : room.orbs;
 
       for (const orb of candidates) {
-        if (!orb?.id || collectedIds.has(orb.id)) continue;
+        if (
+          !orb?.id ||
+          !activeOrbIds.has(orb.id) ||
+          collectedIds.has(orb.id)
+        ) {
+          continue;
+        }
 
         const endDx = orb.x - player.x;
         const endDy = orb.y - player.y;
@@ -2304,9 +2277,7 @@ export class GameGateway {
         }
 
         collectedIds.add(orb.id);
-        if (room.normalMode && Number.isInteger(orb.normalOrbSlot)) {
-          normalRespawnEntries.push({ orb, collector: player });
-        }
+        activeOrbIds.delete(orb.id);
         collected += 1;
         collectedOrbIds.push(orb.id);
       }
@@ -2336,15 +2307,17 @@ export class GameGateway {
       room.orbs = room.orbs.filter((orb) => !collectedIds.has(orb.id));
       room.itemSpatialDirty = true;
 
+      // Instantly restore population with fresh map-random positions. The
+      // replacement is intentionally far from every living player so it cannot
+      // be picked up in the same movement segment or create a visible pile.
       if (room.normalMode) {
-        // Preserve even map-wide distribution, but do not restore a collected
-        // slot underneath the collector in the same simulation tick.
-        const respawnNow = Date.now();
-        for (const entry of normalRespawnEntries) {
-          this.scheduleNormalOrbRespawn(room, entry.orb, entry.collector, respawnNow);
-        }
-        this.ensureNormalOrbDistribution(room, respawnNow);
+        this.ensureNormalOrbDistribution(room, Date.now());
       }
+
+      // Keep the next collect pass and the next network snapshot in sync with
+      // the authoritative arrays; stale index references caused the old
+      // repeated/missing-count bug.
+      this.refreshRoomSpatialIndexes(room, Date.now(), true);
 
       this.emitWorldItemDelta(room, {
         removedOrbIds: [...collectedIds],
@@ -2353,6 +2326,9 @@ export class GameGateway {
   }
   collectEnergy(room, zoneRadius) {
     const collectedIds = new Set<string>();
+    const activeEnergyIds = new Set(
+      (room.energyCells || []).map((cell) => cell?.id).filter(Boolean),
+    );
 
     for (const player of room.players.values()) {
       if (!player.alive) continue;
@@ -2369,7 +2345,13 @@ export class GameGateway {
         : room.energyCells;
 
       for (const cell of candidates) {
-        if (!cell?.id || collectedIds.has(cell.id)) continue;
+        if (
+          !cell?.id ||
+          !activeEnergyIds.has(cell.id) ||
+          collectedIds.has(cell.id)
+        ) {
+          continue;
+        }
 
         const endDx = cell.x - player.x;
         const endDy = cell.y - player.y;
@@ -2391,6 +2373,7 @@ export class GameGateway {
         }
 
         collectedIds.add(cell.id);
+        activeEnergyIds.delete(cell.id);
         collected += 1;
         collectedEnergyIds.push(cell.id);
 
@@ -2398,8 +2381,6 @@ export class GameGateway {
         player.energy = Math.min(100, energyBefore + 25);
         const energyGained = Math.max(0, Number(player.energy || 0) - energyBefore);
 
-        // Same immediate WebGL feedback style as Battle Royale. The event is
-        // private and reliable, so only the player who picked up the cell sees it.
         if (energyGained > 0 && this.usesProgressionPvpCombat(room)) {
           this.pushCombatEvent(
             room,
@@ -2436,6 +2417,7 @@ export class GameGateway {
         }
       }
 
+      this.refreshRoomSpatialIndexes(room, Date.now(), true);
       this.emitWorldItemDelta(room, {
         removedEnergyIds: [...collectedIds],
       });
@@ -2444,6 +2426,7 @@ export class GameGateway {
 
   collectCores(room, zoneRadius) {
     const collectedIds = new Set<string>();
+    const activeCoreIds = new Set((room.cores || []).map((core) => core?.id).filter(Boolean));
 
     for (const player of room.players.values()) {
       if (!player.alive) continue;
@@ -2459,7 +2442,7 @@ export class GameGateway {
         : room.cores;
 
       for (const core of candidates) {
-        if (!core?.id || collectedIds.has(core.id)) continue;
+        if (!core?.id || !activeCoreIds.has(core.id) || collectedIds.has(core.id)) continue;
 
         const endDx = core.x - player.x;
         const endDy = core.y - player.y;
@@ -2483,6 +2466,7 @@ export class GameGateway {
 
         this.applyCore(player, core);
         collectedIds.add(core.id);
+        activeCoreIds.delete(core.id);
         collectedCoreIds.push(core.id);
       }
 
@@ -2498,6 +2482,7 @@ export class GameGateway {
     if (collectedIds.size > 0) {
       room.cores = room.cores.filter((core) => !collectedIds.has(core.id));
       room.itemSpatialDirty = true;
+      this.refreshRoomSpatialIndexes(room, Date.now(), true);
       this.emitWorldItemDelta(room, {
         removedCoreIds: [...collectedIds],
       });
