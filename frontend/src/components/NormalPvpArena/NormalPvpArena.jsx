@@ -1011,6 +1011,20 @@ function predictUnitFromInput(
     nextY += move.ny * moveSpeed * safeDt;
   }
 
+  // The backend validates the collision and sends the same impulse reliably.
+  // Integrating it in the local prediction loop prevents the usual pause-then-
+  // rollback feeling while keeping the server fully authoritative.
+  const frameScale = safeDt * 60;
+  const pushX = Number(unit.knockbackX || 0);
+  const pushY = Number(unit.knockbackY || 0);
+  const pushPower = Math.hypot(pushX, pushY);
+  const hasCollisionPush = pushPower >= NETWORK_COLLISION_PUSH_MIN;
+
+  if (hasCollisionPush) {
+    nextX += pushX * frameScale;
+    nextY += pushY * frameScale;
+  }
+
   const safe = keepInsideSafeZone(
     nextX,
     nextY,
@@ -1033,6 +1047,14 @@ function predictUnitFromInput(
       : (unit.moveAngle ?? 0),
     attacking: Boolean(input.attacking),
     shieldActive: Boolean(unit.shieldActive || input.shield),
+    // Match the server's per-simulation-step damping. A held movement key can
+    // continue normally while the collision impulse fades underneath it.
+    knockbackX: hasCollisionPush
+      ? pushX * Math.pow(NETWORK_COLLISION_PUSH_DECAY, frameScale)
+      : 0,
+    knockbackY: hasCollisionPush
+      ? pushY * Math.pow(NETWORK_COLLISION_PUSH_DECAY, frameScale)
+      : 0,
     mouseX: input.mouseX ?? unit.mouseX ?? safe.x,
     mouseY: input.mouseY ?? unit.mouseY ?? safe.y,
   };
@@ -1055,6 +1077,12 @@ const LOCAL_RELEASE_GRACE_MS = 250;
 const LOCAL_IDLE_SETTLE_ALPHA = 0.16;
 const LOCAL_IDLE_SETTLE_DEADZONE = 1.25;
 const LOCAL_HARD_RESYNC_DISTANCE = 1600;
+
+// Mirrors the backend's authoritative decaying collision impulse. This is not
+// client-side collision detection: the server emits one reliable event only
+// after it validates a real drone-to-drone hit.
+const NETWORK_COLLISION_PUSH_DECAY = 0.82;
+const NETWORK_COLLISION_PUSH_MIN = 0.035;
 
 function reconcileHeldInputUnit(local, server, now = performance.now(), lastLocalMoveAt = 0) {
   if (!server) return local;
@@ -1092,6 +1120,19 @@ function reconcileHeldInputUnit(local, server, now = performance.now(), lastLoca
     moveY: locallyPredicted ? local.moveY : server.moveY,
     moveAngle: locallyPredicted ? local.moveAngle : server.moveAngle,
     isMoving: locallyPredicted ? Boolean(local.isMoving) : Boolean(server.isMoving),
+    // Server values are the fallback after a reconnect or a dropped reliable
+    // event. During a live shove the locally integrated impulse is identical
+    // and should not be overwritten by an older snapshot.
+    knockbackX: Math.abs(Number(server.knockbackX || 0)) > Math.abs(Number(local.knockbackX || 0))
+      ? Number(server.knockbackX || 0)
+      : Number(local.knockbackX || 0),
+    knockbackY: Math.abs(Number(server.knockbackY || 0)) > Math.abs(Number(local.knockbackY || 0))
+      ? Number(server.knockbackY || 0)
+      : Number(local.knockbackY || 0),
+    collisionVersion: Math.max(
+      Number(local.collisionVersion || 0),
+      Number(server.collisionVersion || 0),
+    ),
     serverX: server.x,
     serverY: server.y,
   };
@@ -1196,6 +1237,10 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const lastConfirmedHpRef = useRef(null);
   const lastCollectionSeqRef = useRef(0);
   const combatEventMapRef = useRef(new Map());
+  // Collision events are reliable and keyed by a server monotonic sequence.
+  // Keeping the last value prevents a reconnect/replay from applying a second
+  // visual shove.
+  const lastCollisionVersionRef = useRef(0);
   // Last authoritative self snapshot. Used only as a client-side visual
   // fallback, never for gameplay or damage decisions.
   const selfCombatSnapshotRef = useRef(null);
@@ -1452,6 +1497,9 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
         const local = predictedYouRef.current;
         const server = state.you;
+        // Snapshot collision data is only a fallback. Do not advance the
+        // reliable-event dedupe marker here: a slightly delayed collision event
+        // still carries the full initial impulse and must be applied once.
         const reconciled = reconcileHeldInputUnit(local, server, now, lastLocalMovementAtRef.current);
 
         predictedYouRef.current = {
@@ -1752,6 +1800,42 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       });
     };
 
+    const applyNormalCollisionImpulse = (event = {}) => {
+      const collisionVersion = Number(event.collisionVersion || 0);
+      if (!collisionVersion || collisionVersion <= lastCollisionVersionRef.current) return;
+
+      const current = predictedYouRef.current || worldRef.current.you;
+      if (!current || current.alive === false) return;
+
+      lastCollisionVersionRef.current = collisionVersion;
+      const impulseX = Number(event.impulseX || 0);
+      const impulseY = Number(event.impulseY || 0);
+      const next = {
+        ...current,
+        // Replace, never accumulate: server collision cooldown creates exactly
+        // one impulse per pair hit and the event can be retried on reconnect.
+        knockbackX: impulseX,
+        knockbackY: impulseY,
+        collisionVersion,
+        lastCollisionAt: Number(event.serverTime || Date.now()),
+      };
+
+      predictedYouRef.current = next;
+      worldRef.current = {
+        ...worldRef.current,
+        you: next,
+      };
+
+      // Pixi reads the live ref on the next rAF; no React rerender is needed
+      // for the actual physics, which keeps weak laptops smooth.
+      if (pixiLiveRef.current) {
+        pixiLiveRef.current = {
+          ...pixiLiveRef.current,
+          you: next,
+        };
+      }
+    };
+
     const applyPrivateCombatEvent = (event) => {
       const viewerId = String(worldRef.current.you?.id || socket.id || "");
       if (!event?.id || !viewerId) return;
@@ -1810,6 +1894,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
     });
     socket.on("normal-pvp:state", applyState);
+    socket.on("normal-pvp:collision", applyNormalCollisionImpulse);
     socket.on("normal-pvp:combat", applyPrivateCombatEvent);
     socket.on("normal-pvp:eliminated", applyEliminated);
     socket.on("normal-pvp:collect", applyCollectSync);
@@ -1936,6 +2021,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       window.clearInterval(inputTimer);
       window.clearInterval(hudTimer);
       socket.off("connect", handleConnect);
+      socket.off("normal-pvp:collision", applyNormalCollisionImpulse);
       socket.off("normal-pvp:combat", applyPrivateCombatEvent);
       socket.off("normal-pvp:world-delta", applyWorldItemDelta);
       socket.emit("normal-pvp:leave");
