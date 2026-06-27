@@ -2740,9 +2740,22 @@ export class GameGateway {
     if (bWasAlive && !b.alive && a.alive) this.applyKillReward(a, room, now);
   }
 
+  private hasActiveAttackDrone(room: any, playerId: any) {
+    const ownerId = String(playerId || "");
+    if (!ownerId || !Array.isArray(room?.projectiles)) return false;
+
+    // One launched escort drone stays authoritative until it hits or reaches
+    // its max lifetime/distance. This removes the only gameplay path that
+    // could show two real attack drones from the same player/bot at once.
+    return room.projectiles.some(
+      (projectile: any) => projectile && String(projectile.ownerId || "") === ownerId,
+    );
+  }
+
   tryFireProjectile(room, player, now) {
     if (this.isBattlePrepareLocked(room, now)) return;
     if ((player.drones || 0) <= 0) return;
+    if (this.hasActiveAttackDrone(room, player.id)) return;
     const cooldown = this.getFireCooldown(player, now);
     if (now - player.lastFireAt < cooldown) return;
     const targetX = player.input.mouseX || player.x + 1;
@@ -2777,7 +2790,10 @@ export class GameGateway {
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
       angle,
-      skin: player.skin,
+      // Keep the skin normalized at the authoritative source. The immediate
+      // transform lane below repeats this tiny skin token for projectiles so
+      // receivers never render one cyan frame before metadata arrives.
+      skin: normalizeSkin(player.skin || "cyan"),
       damage:
         player.berserkUntil && player.berserkUntil > now
           ? BERSERK_PROJECTILE_DAMAGE
@@ -4608,6 +4624,9 @@ export class GameGateway {
           Math.round(Number(projectile.angle || 0) * 10000) / 10000,
           flags,
           Number(projectile.createdAt || now),
+          // Unlike player skins, a projectile can be born and die before the
+          // slow metadata packet. Carry its owner skin in the hot tuple.
+          normalizeSkin(projectile.skin || "cyan"),
         ];
       });
 

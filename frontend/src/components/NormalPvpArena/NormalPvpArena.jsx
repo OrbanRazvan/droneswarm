@@ -940,7 +940,7 @@ function projectileHitsAnyTarget(projectile, targets = []) {
   return false;
 }
 
-function createLocalProjectile(unit, mouseWorldX, mouseWorldY, now) {
+function createLocalProjectile(unit, mouseWorldX, mouseWorldY, now, fallbackSkin = "cyan") {
   if (!unit || unit.alive === false || (unit.drones || 0) <= 0) return null;
 
   const angle = Math.atan2(mouseWorldY - unit.y, mouseWorldX - unit.x);
@@ -958,7 +958,9 @@ function createLocalProjectile(unit, mouseWorldX, mouseWorldY, now) {
     vx: Math.cos(angle) * speed,
     vy: Math.sin(angle) * speed,
     angle,
-    skin: normalizeSkin(unit.skin || "cyan"),
+    // Never use the renderer default cyan while the self metadata is still
+    // arriving. The selected/owner skin is known locally at fire time.
+    skin: normalizeSkin(unit.skin || fallbackSkin || "cyan"),
     pierceLeft: Math.max(1, unit.piercingShots || 1),
     shieldBreaker: (unit.shieldBreakerShots || 0) > 0,
     piercesShield: (unit.shieldBreakerShots || 0) > 0,
@@ -2145,6 +2147,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
             mouseWorldX,
             mouseWorldY,
             now,
+            getSelectedSkin(user),
           );
 
           if (localProjectile) {
@@ -2214,6 +2217,9 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         const current = projectileMap.get(id) || target;
 
         if (target.ownerId && target.ownerId === me?.id) {
+          // The shooter already owns the instant local mini drone. Remove a
+          // server alias instead of leaving both IDs alive in the render map.
+          if (!String(id).startsWith("local-")) projectileMap.delete(id);
           continue;
         }
 

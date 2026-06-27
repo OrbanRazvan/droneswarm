@@ -104,6 +104,7 @@ export declare class GameGateway {
     handleBodyCollisions(room: any, now: any, zoneRadius: any): void;
     handleBodyCollisionsBruteForce(alive: any, room: any, now: any, zoneRadius: any): void;
     resolvePlayerPairCollision(a: any, b: any, room: any, now: any, zoneRadius: any): void;
+    private hasActiveAttackDrone;
     tryFireProjectile(room: any, player: any, now: any): void;
     getFireCooldown(player: any, now: any): number;
     updateProjectiles(room: any, deltaFrames?: number, now?: number): void;

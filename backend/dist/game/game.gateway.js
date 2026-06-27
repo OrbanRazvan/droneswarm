@@ -2144,10 +2144,18 @@ let GameGateway = class GameGateway {
         if (bWasAlive && !b.alive && a.alive)
             this.applyKillReward(a, room, now);
     }
+    hasActiveAttackDrone(room, playerId) {
+        const ownerId = String(playerId || "");
+        if (!ownerId || !Array.isArray(room?.projectiles))
+            return false;
+        return room.projectiles.some((projectile) => projectile && String(projectile.ownerId || "") === ownerId);
+    }
     tryFireProjectile(room, player, now) {
         if (this.isBattlePrepareLocked(room, now))
             return;
         if ((player.drones || 0) <= 0)
+            return;
+        if (this.hasActiveAttackDrone(room, player.id))
             return;
         const cooldown = this.getFireCooldown(player, now);
         if (now - player.lastFireAt < cooldown)
@@ -2179,7 +2187,7 @@ let GameGateway = class GameGateway {
             vx: Math.cos(angle) * speed,
             vy: Math.sin(angle) * speed,
             angle,
-            skin: player.skin,
+            skin: normalizeSkin(player.skin || "cyan"),
             damage: player.berserkUntil && player.berserkUntil > now
                 ? BERSERK_PROJECTILE_DAMAGE
                 : PROJECTILE_DAMAGE,
@@ -3568,6 +3576,7 @@ let GameGateway = class GameGateway {
                     Math.round(Number(projectile.angle || 0) * 10000) / 10000,
                     flags,
                     Number(projectile.createdAt || now),
+                    normalizeSkin(projectile.skin || "cyan"),
                 ];
             });
             socket.volatile.compress(false).emit("zone-pvp:movement", {

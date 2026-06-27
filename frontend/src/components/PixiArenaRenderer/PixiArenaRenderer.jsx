@@ -211,7 +211,7 @@ function getRendererConfig(forceLowQuality) {
     : device.weakMobile
       ? 0.70
       : visualFirstDesktop
-        ? Math.min(0.82, device.dpr)
+        ? Math.min(0.78, device.dpr)
         : lightMobile
           ? 0.84
           : Math.min(1.35, device.dpr);
@@ -224,12 +224,12 @@ function getRendererConfig(forceLowQuality) {
     // propellers. The savings come from lower internal resolution, smaller
     // nearby premium pool and fewer static pickups, not from turning enemies
     // into points or freezing their animations.
-    maxStaticItems: device.lowSpecDesktop ? 54 : device.weakMobile ? 48 : visualFirstDesktop ? 76 : lightMobile ? 58 : 120,
+    maxStaticItems: device.lowSpecDesktop ? 50 : device.weakMobile ? 46 : visualFirstDesktop ? 68 : lightMobile ? 54 : 120,
     maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : visualFirstDesktop ? 7 : lightMobile ? 5 : MAX_RENDERED_PLAYERS,
     maxSimplePlayers: 60,
-    maxProjectiles: device.lowSpecDesktop ? 5 : device.weakMobile ? 4 : visualFirstDesktop ? 10 : lightMobile ? 6 : MAX_RENDERED_PROJECTILES,
-    maxSimpleProjectiles: device.lowSpecDesktop ? 30 : device.weakMobile ? 26 : visualFirstDesktop ? 34 : lightMobile ? 28 : 48,
-    staticSyncInterval: device.lowSpecDesktop ? 460 : device.weakMobile ? 520 : visualFirstDesktop ? 300 : lightMobile ? 360 : STATIC_SYNC_INTERVAL_MS,
+    maxProjectiles: device.lowSpecDesktop ? 5 : device.weakMobile ? 4 : visualFirstDesktop ? 8 : lightMobile ? 6 : MAX_RENDERED_PROJECTILES,
+    maxSimpleProjectiles: device.lowSpecDesktop ? 28 : device.weakMobile ? 24 : visualFirstDesktop ? 30 : lightMobile ? 26 : 48,
+    staticSyncInterval: device.lowSpecDesktop ? 500 : device.weakMobile ? 560 : visualFirstDesktop ? 340 : lightMobile ? 400 : STATIC_SYNC_INTERVAL_MS,
     animateStaticEvery: device.lowSpecDesktop ? 8 : device.weakMobile ? 9 : visualFirstDesktop ? 4 : lightMobile ? 5 : 1,
     // Weak desktops keep the same premium space terrain. Only mobile/manual
     // low quality begins without it. Under real sustained load the adaptive
@@ -885,6 +885,20 @@ function createSimpleVisual(resources) {
   body.eventMode = "none";
   root.addChild(body);
 
+  // Far/low-end entities keep their real escort count. These are cached mini
+  // drone geometries with transform-only orbit motion (no aura/beacon/filter),
+  // so bots and remote players do not lose their orbiting drones on old GPUs.
+  const escortLayer = new PIXI.Container();
+  escortLayer.eventMode = "none";
+  const minis = Array.from({ length: MAX_MINI_DRONES }, () => {
+    const mini = new PIXI.Graphics(resources.miniContexts.cyan);
+    mini.eventMode = "none";
+    mini.visible = false;
+    escortLayer.addChild(mini);
+    return mini;
+  });
+  root.addChild(escortLayer);
+
   const rotors = [
     [-23, -18],
     [23, -18],
@@ -904,6 +918,7 @@ function createSimpleVisual(resources) {
     root,
     body,
     engine,
+    minis,
     rotors,
     skin: "",
     facing: 0,
@@ -1413,9 +1428,12 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
     visual.shieldPulse.alpha = (1 - shieldPulsePhase) * 0.34 * shieldAlpha;
   }
 
+  const requestedEscortCount = Math.min(MAX_MINI_DRONES, Math.max(0, Number(unit.drones || 0)));
+  // Quality tiers may reduce glow/shields, but remote escort drones are core
+  // gameplay information. Keep them visible; emergency tier uses at most two.
   const count = reducedRemoteVisual
-    ? 0
-    : Math.min(MAX_MINI_DRONES, Math.max(0, Number(unit.drones || 0)));
+    ? Math.min(requestedEscortCount, safeEffectTier >= 2 ? 2 : 3)
+    : requestedEscortCount;
   visual.orbit.visible = count > 0;
   const attacking = Boolean(unit.attacking);
   const orbitRadius = attacking && isPlayer ? 175 : 145;
@@ -1469,6 +1487,9 @@ function updateSimpleVisual(visual, unit, resources, now) {
     visual.skin = skin;
     visual.body.context = resources.simpleContexts[skin] || resources.simpleContexts.cyan;
     visual.engine.context = resources.engineVectorContexts[skin] || resources.engineVectorContexts.cyan;
+    visual.minis.forEach((mini) => {
+      mini.context = resources.miniContexts[skin] || resources.miniContexts.cyan;
+    });
     visual.rotors.forEach((rotor) => {
       rotor.context = resources.rotorSpinContexts[skin] || resources.rotorSpinContexts.cyan;
     });
@@ -1513,6 +1534,28 @@ function updateSimpleVisual(visual, unit, resources, now) {
     const direction = index % 2 === 0 ? 1 : -1;
     rotor.rotation = direction * now * 0.026 + index * Math.PI * 0.5;
     rotor.alpha = moving ? 0.62 : 0.42;
+  });
+
+  // Escort drones are intentionally simpler than the near premium pool:
+  // no glow and no extra rotor objects, but the same skin, body and orbit
+  // count remain visible for every remote player/bot.
+  const escortCount = Math.min(MAX_MINI_DRONES, Math.max(0, Number(unit.drones || 0)));
+  const escortRadius = 56;
+  const escortSpin = now * (moving ? 0.00185 : 0.00125) + visual.hoverSeed;
+  visual.minis.forEach((mini, index) => {
+    const visible = index < escortCount;
+    mini.visible = visible;
+    if (!visible) return;
+
+    const angle = (index / Math.max(1, escortCount)) * Math.PI * 2 + escortSpin;
+    mini.position.set(
+      Math.cos(angle) * escortRadius,
+      Math.sin(angle) * escortRadius + Math.sin(now * 0.004 + index * 1.7) * 1.45,
+    );
+    mini.rotation = Math.sin(now * 0.003 + index) * 0.05;
+    const pulse = 0.50 + Math.sin(now * 0.0045 + index) * 0.018;
+    mini.scale.set(pulse);
+    mini.alpha = 0.93;
   });
 
   visual.lastSeenAt = now;
@@ -2378,7 +2421,7 @@ function PixiArenaRenderer({
       const applyAdaptiveResolution = () => {
         if (!app?.renderer || !(config.lowSpecDesktop || config.weakMobile || config.forcedMobileQuality || config.visualFirstWeakDesktop)) return;
         const ratio = config.visualFirstWeakDesktop
-          ? (adaptiveTier === 2 ? 0.82 : adaptiveTier === 1 ? 0.92 : 1)
+          ? (adaptiveTier === 2 ? 0.72 : adaptiveTier === 1 ? 0.86 : 1)
           : (adaptiveTier === 2 ? 0.68 : adaptiveTier === 1 ? 0.84 : 1);
         const nextResolution = Math.max(0.34, Number((config.resolution * ratio).toFixed(2)));
         if (Math.abs(nextResolution - dynamicResolution) < 0.01) return;
@@ -2410,9 +2453,9 @@ function PixiArenaRenderer({
 
         if (now - lastAdaptiveChangeAt > 700) {
           const desiredTier =
-            frameTimeEma > 21.5 ? 2 :
-            frameTimeEma > 17.2 ? 1 :
-            frameTimeEma < 16.6 ? 0 :
+            frameTimeEma > 20.0 ? 2 :
+            frameTimeEma > 16.9 ? 1 :
+            frameTimeEma < 16.35 ? 0 :
             adaptiveTier;
           if (desiredTier !== adaptiveTier) {
             adaptiveTier = desiredTier;

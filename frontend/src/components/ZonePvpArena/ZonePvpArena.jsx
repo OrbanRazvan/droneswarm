@@ -645,7 +645,7 @@ function projectileHitsAnyTarget(projectile, targets = []) {
   return false;
 }
 
-function createLocalProjectile(unit, mouseWorldX, mouseWorldY, now) {
+function createLocalProjectile(unit, mouseWorldX, mouseWorldY, now, fallbackSkin = "cyan") {
   if (!unit || unit.alive === false || (unit.drones || 0) <= 0) return null;
 
   const angle = Math.atan2(mouseWorldY - unit.y, mouseWorldX - unit.x);
@@ -663,7 +663,9 @@ function createLocalProjectile(unit, mouseWorldX, mouseWorldY, now) {
     vx: Math.cos(angle) * speed,
     vy: Math.sin(angle) * speed,
     angle,
-    skin: normalizeSkin(unit.skin || "cyan"),
+    // Never use the renderer default cyan while the self metadata is still
+    // arriving. The selected/owner skin is known locally at fire time.
+    skin: normalizeSkin(unit.skin || fallbackSkin || "cyan"),
     pierceLeft: Math.max(1, unit.piercingShots || 1),
     shieldBreaker: (unit.shieldBreakerShots || 0) > 0,
     piercesShield: (unit.shieldBreakerShots || 0) > 0,
@@ -1011,7 +1013,9 @@ function decodeZoneProjectileRow(row, meta = {}) {
     shieldBreaker: Boolean(flags & 2),
     piercesShield: Boolean(flags & 4),
     createdAt: Number(row[8] || meta?.createdAt || Date.now()),
-    skin: normalizeSkin(meta?.skin || 'cyan'),
+    // q[9] is the authoritative owner skin sent with the first hot transform.
+    // Metadata remains a fallback for old backend instances during a deploy.
+    skin: normalizeSkin(row[9] || meta?.skin || 'cyan'),
   };
 }
 
@@ -2016,6 +2020,15 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         const projectile = decodeZoneProjectileRow(row, {
           ...meta,
           ownerId: meta?.ownerId || ownerMeta?.id || localOwner?.id || meta?.ownerId,
+          // On the very first projectile frame metadata can still be absent.
+          // Prefer q[9], then the currently known owner skin, so there is no
+          // temporary cyan attack drone before the normal definition arrives.
+          skin:
+            (Array.isArray(row) ? row[9] : row?.skin) ||
+            meta?.skin ||
+            ownerMeta?.skin ||
+            localOwner?.skin ||
+            "cyan",
         });
         if (!projectile?.id) continue;
         packetProjectileIds.add(projectile.id);
@@ -2407,7 +2420,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         ) {
           const mouseWorldX = predicted.x + (mouseRef.current.x - window.innerWidth / 2);
           const mouseWorldY = predicted.y + (mouseRef.current.y - window.innerHeight / 2);
-          const localProjectile = createLocalProjectile(predicted, mouseWorldX, mouseWorldY, now);
+          const localProjectile = createLocalProjectile(
+            predicted,
+            mouseWorldX,
+            mouseWorldY,
+            now,
+            getSelectedSkin(user),
+          );
 
           if (localProjectile) {
             projectilesRef.current.set(localProjectile.id, localProjectile);
@@ -2498,6 +2517,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         // predicted mini-drone, while every other viewer sees the authoritative
         // server copy. Do not add a second copy during Zone net-id migration.
         if (belongsToLocalPlayer) {
+          // The locally predicted projectile is already in the map. Remove any
+          // authoritative alias immediately; otherwise a net-id/UUID race can
+          // briefly render two mini drones for the same launch.
           if (!String(id).startsWith("local-")) projectileMap.delete(id);
           continue;
         }
