@@ -31,10 +31,16 @@ const SELF_HARD_SNAP_DISTANCE = 420;
 const SELF_MAX_CORRECTION_SPEED = 1400; // px/sec - viteza maxima cu care predictia se "trage" spre server
 const SELF_IDLE_FREEZE_DISTANCE = 360;
 
-const REMOTE_SMOOTHING = 24;
+// Remote transforms arrive in a tiny binary lane at 30 Hz and are rendered at the
+// display refresh rate. A 38 ms interpolation window protects against packet jitter
+// without the old 80-150 ms visual delay from full JSON snapshots.
+const REMOTE_SMOOTHING = 34;
 const REMOTE_PREDICTION = 1.0;
-const REMOTE_HARD_SNAP_DISTANCE = 360;
-const REMOTE_MAX_EXTRAPOLATE_MS = 180;
+const REMOTE_HARD_SNAP_DISTANCE = 520;
+const REMOTE_MAX_EXTRAPOLATE_MS = 110;
+const ZONE_BINARY_PROTOCOL_VERSION = 1;
+const ZONE_BINARY_PLAYER_BYTES = 32;
+const ZONE_BINARY_PROJECTILE_BYTES = 28;
 
 const PROJECTILE_SMOOTHING = 18;
 const PROJECTILE_FRAME_SCALE = 60;
@@ -61,8 +67,8 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 // Client-side prediction + server reconciliation + remote snapshot buffer.
 const INPUT_SEND_INTERVAL_MS = 20;
 const INPUT_HEARTBEAT_MS = 240;
-const SNAPSHOT_INTERPOLATION_DELAY_MS = 28;
-const SNAPSHOT_BUFFER_TTL_MS = 850;
+const SNAPSHOT_INTERPOLATION_DELAY_MS = 38;
+const SNAPSHOT_BUFFER_TTL_MS = 620;
 
 // Keep PvP desktop framing exactly locked to BattleRoyaleMode.
 // BattleRoyaleMode uses 0.72 on desktop; do not change only one mode or the
@@ -1057,6 +1063,25 @@ function FlyingAttackDrone({ projectile }) {
   );
 }
 
+
+function zoneNetKey(netId) {
+  return `zone-net:${Number(netId || 0)}`;
+}
+
+function toZoneBinaryArrayBuffer(payload) {
+  if (!payload) return null;
+  if (payload instanceof ArrayBuffer) return payload;
+  if (ArrayBuffer.isView(payload)) {
+    return payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
+  }
+  if (payload?.buffer instanceof ArrayBuffer) {
+    const byteOffset = Number(payload.byteOffset || 0);
+    const byteLength = Number(payload.byteLength || payload.buffer.byteLength);
+    return payload.buffer.slice(byteOffset, byteOffset + byteLength);
+  }
+  return null;
+}
+
 function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   // The Dashboard can recreate `user` while its own HUD refreshes. Networking
   // must not treat that render as a new arena or emit a leave event.
@@ -1096,6 +1121,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   // Projectiles have the same high-rate latest-wins transform stream as drones.
   // Keeping these transforms outside React is essential on older phones.
   const projectileMovementRef = useRef(new Map());
+  // Low-frequency definitions carry names/skins/owner ids once. The 30 Hz binary
+  // lane carries only numeric positions, velocities and flags.
+  const zoneEntityMetaRef = useRef(new Map());
+  const zoneProjectileMetaRef = useRef(new Map());
   // Interpolate with the authoritative server clock rather than browser packet
   // arrival time, which varies far more with mobile/old-laptop senders.
   const serverClockOffsetRef = useRef(null);
@@ -1291,6 +1320,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         stableCoreMapRef.current.clear();
         remoteSnapshotBufferRef.current.clear();
         projectileMovementRef.current.clear();
+        zoneEntityMetaRef.current.clear();
+        zoneProjectileMetaRef.current.clear();
         serverClockOffsetRef.current = null;
         lastMovementSequenceRef.current = 0;
         lastCollisionVersionRef.current = 0;
@@ -1310,6 +1341,46 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const now = performance.now();
       const nowWall = Date.now();
       updateServerClockOffset(state?.serverNow || state?.serverTime);
+
+      // Definitions are small and rare. They make the binary transform lane
+      // independent from repeated UUID/skin/owner JSON objects.
+      for (const unit of Array.isArray(state?.players) ? state.players : []) {
+        const netId = Number(unit?.netId || 0);
+        if (netId > 0 && unit?.id) {
+          const previousKey = zoneNetKey(netId);
+          const currentKey = String(unit.id);
+          zoneEntityMetaRef.current.set(netId, { ...unit });
+          // A newly visible unit can receive a transform one packet before its
+          // metadata. Merge that temporary numeric key instead of leaving a
+          // second stale visual on screen.
+          if (previousKey !== currentKey) {
+            const buffered = remoteSnapshotBufferRef.current.get(previousKey);
+            if (buffered) {
+              remoteSnapshotBufferRef.current.delete(previousKey);
+              remoteSnapshotBufferRef.current.set(currentKey, buffered.map((sample) => ({ ...sample, ...unit, id: currentKey })));
+            }
+          }
+        }
+      }
+      if (state?.spectatingPlayer?.netId && state?.spectatingPlayer?.id) {
+        zoneEntityMetaRef.current.set(Number(state.spectatingPlayer.netId), { ...state.spectatingPlayer });
+      }
+      for (const projectile of Array.isArray(state?.projectiles) ? state.projectiles : []) {
+        const netId = Number(projectile?.netId || 0);
+        if (netId > 0 && projectile?.id) {
+          const previousKey = zoneNetKey(netId);
+          const currentKey = String(projectile.id);
+          zoneProjectileMetaRef.current.set(netId, { ...projectile });
+          if (previousKey !== currentKey) {
+            const temporary = projectileMovementRef.current.get(previousKey);
+            if (temporary) {
+              projectileMovementRef.current.delete(previousKey);
+              projectileMovementRef.current.set(currentKey, { ...temporary, ...projectile, id: currentKey });
+            }
+          }
+        }
+      }
+
       const combatViewerId = state?.you?.id || worldRef.current.you?.id || socket.id;
       combatEventMapRef.current = mergePrivateCombatEvents(
         combatEventMapRef.current,
@@ -1752,6 +1823,88 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
     };
 
+    // Binary transform lane: fixed-size records, no JSON parsing, no UUIDs and no
+    // cosmetics repeated at 30 Hz. This is the crucial path for phones/old laptops.
+    const applyBinaryTransforms = (packet = {}, binaryPayload) => {
+      const currentRoomId = String(zonePhaseRef.current?.roomId || "");
+      const packetRoomId = String(packet?.roomId || "");
+      if (currentRoomId && packetRoomId && currentRoomId !== packetRoomId) return;
+      if (packet?.status && packet.status !== "playing") return;
+
+      const sequence = Number(packet?.sequence || 0);
+      if (sequence > 0 && sequence <= Number(lastMovementSequenceRef.current || 0)) return;
+      if (sequence > 0) lastMovementSequenceRef.current = sequence;
+
+      const bytes = toZoneBinaryArrayBuffer(binaryPayload);
+      if (!bytes || bytes.byteLength < 8) return;
+
+      const view = new DataView(bytes);
+      const version = view.getUint16(0, true);
+      if (version !== ZONE_BINARY_PROTOCOL_VERSION) return;
+      const playerCount = view.getUint16(2, true);
+      const projectileCount = view.getUint16(4, true);
+      const expectedBytes = 8 + playerCount * ZONE_BINARY_PLAYER_BYTES + projectileCount * ZONE_BINARY_PROJECTILE_BYTES;
+      if (bytes.byteLength < expectedBytes) return;
+
+      const now = performance.now();
+      const serverNow = Number(packet?.serverNow || 0);
+      updateServerClockOffset(serverNow);
+
+      let offset = 8;
+      const snapshotsById = remoteSnapshotBufferRef.current;
+      for (let index = 0; index < playerCount; index += 1) {
+        const netId = view.getUint32(offset, true);
+        const meta = zoneEntityMetaRef.current.get(netId) || {};
+        const flags = view.getUint16(offset + 28, true);
+        const id = meta.id || zoneNetKey(netId);
+        const movement = {
+          ...meta,
+          id,
+          netId,
+          x: view.getFloat32(offset + 4, true),
+          y: view.getFloat32(offset + 8, true),
+          velocityX: view.getFloat32(offset + 12, true),
+          velocityY: view.getFloat32(offset + 16, true),
+          moveAngle: view.getFloat32(offset + 20, true),
+          hp: view.getFloat32(offset + 24, true),
+          isMoving: Boolean(flags & 1),
+          attacking: Boolean(flags & 2),
+          shieldActive: Boolean(flags & 4),
+          alive: Boolean(flags & 8),
+          isBot: Boolean(flags & 16) || Boolean(meta.isBot),
+          drones: view.getUint8(offset + 30),
+          energy: view.getUint8(offset + 31),
+        };
+        const oldBuffer = snapshotsById.get(id) || [];
+        snapshotsById.set(id, appendRemoteSnapshot(oldBuffer, movement, now, serverNow));
+        offset += ZONE_BINARY_PLAYER_BYTES;
+      }
+
+      const movementProjectiles = projectileMovementRef.current;
+      for (let index = 0; index < projectileCount; index += 1) {
+        const netId = view.getUint32(offset, true);
+        const meta = zoneProjectileMetaRef.current.get(netId) || {};
+        const flags = view.getUint16(offset + 24, true);
+        const id = meta.id || zoneNetKey(netId);
+        movementProjectiles.set(id, {
+          ...meta,
+          id,
+          netId,
+          x: view.getFloat32(offset + 4, true),
+          y: view.getFloat32(offset + 8, true),
+          vx: view.getFloat32(offset + 12, true),
+          vy: view.getFloat32(offset + 16, true),
+          angle: view.getFloat32(offset + 20, true),
+          pierceLeft: flags & 1 ? Math.max(2, Number(meta.pierceLeft || 2)) : Number(meta.pierceLeft || 1),
+          shieldBreaker: Boolean(flags & 2),
+          piercesShield: Boolean(flags & 2),
+          __movementSeenAt: now,
+          __serverAt: serverNow,
+        });
+        offset += ZONE_BINARY_PROJECTILE_BYTES;
+      }
+    };
+
     const applyZoneCollisionImpulse = (event = {}) => {
       const collisionVersion = Number(event.collisionVersion || 0);
       if (!collisionVersion || collisionVersion <= Number(lastCollisionVersionRef.current || 0)) return;
@@ -1838,6 +1991,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     socket.on("zone-pvp:join-confirmed", handleJoinConfirmed);
     socket.on("zone-pvp:state", applyState);
     socket.on("zone-pvp:movement", applyMovementFrame);
+    socket.on("zone-pvp:transform", applyBinaryTransforms);
     socket.on("zone-pvp:collision", applyZoneCollisionImpulse);
     socket.on("zone-pvp:combat", applyPrivateCombatEvent);
     socket.on("zone-pvp:collect", applyCollectSync);
@@ -1931,6 +2085,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       socket.off("zone-pvp:join-confirmed", handleJoinConfirmed);
       socket.off("zone-pvp:state", applyState);
       socket.off("zone-pvp:movement", applyMovementFrame);
+      socket.off("zone-pvp:transform", applyBinaryTransforms);
       socket.off("zone-pvp:collision", applyZoneCollisionImpulse);
       socket.off("zone-pvp:combat", applyPrivateCombatEvent);
       socket.off("zone-pvp:collect", applyCollectSync);
@@ -2078,7 +2233,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       // Full state is slow by design; merge it with the 60 Hz projectile
       // transform stream. The stream wins because it is always newer.
       const incomingProjectiles = new Map(
-        (data.projectiles || []).filter((p) => p?.id).map((p) => [p.id, p])
+        (data.projectiles || [])
+          .filter((p) => p?.id || p?.netId)
+          .map((p) => [p.id || zoneNetKey(p.netId), p])
       );
       for (const [id, movementProjectile] of movementProjectiles.entries()) {
         incomingProjectiles.set(id, {
@@ -2226,8 +2383,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         viewportHeight: viewport.height,
         worldWidth,
         worldHeight,
-        // Exact same cached premium space theme already used in BattleRoyaleMode.
-        worldTheme: "premium-space-battle",
+        // Zone PvP is the 60-seat competitive mode: keep the world layer plain
+        // so every GPU budget goes to drone/projectile transforms.
+        worldTheme: "default",
+        staticItemBudget: mobilePerformanceRef.current ? 24 : 80,
         safeZoneRadius: zoneRadius,
         showZone: true,
         coreColorMap: coreColorMapRef.current,
@@ -2795,7 +2954,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         forceLowQuality={graphicsQuality === "low" || isMobileControls}
         worldWidth={worldWidth}
         worldHeight={worldHeight}
-        worldTheme="premium-space-battle"
+        worldTheme="default"
+        staticItemBudget={isRealMobileDevice() ? 24 : 80}
         safeZoneRadius={safeZoneRadius}
         showZone={true}
       />

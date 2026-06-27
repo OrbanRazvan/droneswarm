@@ -22,6 +22,9 @@ export declare class GameGateway {
     private getZoneHumanPlayers;
     private getZoneHumanPlayerCount;
     private getZoneBotCount;
+    private ensureZonePvpNetId;
+    private serializeZonePvpStatePlayer;
+    private serializeZonePvpStateProjectile;
     private normalizeZonePvpResumeToken;
     private rememberZonePvpResumeSeat;
     private findZonePvpResumeSeat;
@@ -200,9 +203,7 @@ export declare class GameGateway {
     removeZonePvpPlayer(socketId: any): void;
     cleanupZonePvpRoom(room: any, now: any): void;
     getZonePvpZoneRadius(room: any): number;
-    private serializeZonePvpMovement;
-    private serializeZonePvpProjectileMovement;
-    private broadcastZonePvpMovement;
+    private broadcastZonePvpTransforms;
     broadcastZonePvpRoomState(room: any, now: any, reliable?: boolean): void;
     findOrCreateRoom(): any;
     getRoomBySocket(socketId: any): any;

@@ -214,12 +214,15 @@ function getRendererConfig(forceLowQuality) {
     ...device,
     resolution,
     antialias: !lowSpec && !lightMobile,
-    maxStaticItems: device.lowSpecDesktop ? 28 : device.weakMobile ? 34 : lightMobile ? 76 : 180,
-    maxPlayers: device.lowSpecDesktop ? 14 : device.weakMobile ? 24 : lightMobile ? 42 : MAX_RENDERED_PLAYERS,
-    maxSimplePlayers: device.lowSpecDesktop ? 22 : device.weakMobile ? 36 : lightMobile ? 48 : 60,
-    maxProjectiles: device.lowSpecDesktop ? 10 : device.weakMobile ? 14 : lightMobile ? 32 : MAX_RENDERED_PROJECTILES,
-    staticSyncInterval: device.lowSpecDesktop ? 300 : device.weakMobile ? 220 : lightMobile ? 160 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: device.lowSpecDesktop ? 6 : device.weakMobile ? 3 : lightMobile ? 2 : 1,
+    // A 60-seat Zone round must protect transforms first. Detailed drone shells
+    // are restricted on constrained devices; distant units remain cheap markers
+    // and still receive every frame of binary transform data.
+    maxStaticItems: device.lowSpecDesktop ? 18 : device.weakMobile ? 20 : lightMobile ? 38 : 120,
+    maxPlayers: device.lowSpecDesktop ? 8 : device.weakMobile ? 8 : lightMobile ? 14 : MAX_RENDERED_PLAYERS,
+    maxSimplePlayers: device.lowSpecDesktop ? 20 : device.weakMobile ? 22 : lightMobile ? 30 : 60,
+    maxProjectiles: device.lowSpecDesktop ? 8 : device.weakMobile ? 9 : lightMobile ? 16 : MAX_RENDERED_PROJECTILES,
+    staticSyncInterval: device.lowSpecDesktop ? 420 : device.weakMobile ? 360 : lightMobile ? 260 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: device.lowSpecDesktop ? 10 : device.weakMobile ? 8 : lightMobile ? 5 : 1,
     disableExpensiveTerrain: Boolean(device.lowSpecDesktop || device.weakMobile || lightMobile),
   };
 }
@@ -2159,9 +2162,9 @@ function PixiArenaRenderer({
 
         if (now - lastAdaptiveChangeAt > 700) {
           const desiredTier =
-            frameTimeEma > 31 ? 2 :
-            frameTimeEma > 22 ? 1 :
-            frameTimeEma < 18.2 ? 0 :
+            frameTimeEma > 24 ? 2 :
+            frameTimeEma > 18.2 ? 1 :
+            frameTimeEma < 16.9 ? 0 :
             adaptiveTier;
           if (desiredTier !== adaptiveTier) {
             adaptiveTier = desiredTier;
