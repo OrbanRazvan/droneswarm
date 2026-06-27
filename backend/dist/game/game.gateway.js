@@ -94,18 +94,18 @@ const NORMAL_STATE_INTERVAL_CROWDED_MS = 33;
 const NORMAL_STATE_INTERVAL_HEAVY_MS = 50;
 const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
 const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
-const ZONE_STATE_INTERVAL_MS = 100;
-const ZONE_STATE_INTERVAL_CROWDED_MS = 125;
-const ZONE_STATE_INTERVAL_HEAVY_MS = 160;
+const ZONE_STATE_INTERVAL_MS = 180;
+const ZONE_STATE_INTERVAL_CROWDED_MS = 220;
+const ZONE_STATE_INTERVAL_HEAVY_MS = 280;
 const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 16;
 const ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS = 25;
 const ZONE_MOVEMENT_STREAM_MAX_PLAYERS = ZONE_PVP_ROOM_MAX_PLAYERS;
-const ZONE_MOVEMENT_STREAM_PROJECTILE_LIMIT = 32;
-const ZONE_MOVEMENT_STREAM_RANGE_PADDING = 560;
-const ZONE_PVP_STATE_VISIBLE_PLAYERS_LIMIT = 28;
-const ZONE_PVP_STATE_PROJECTILE_LIMIT = 18;
-const STATIC_STATE_INTERVAL_MS = 1000;
-const VIEWPORT_ITEM_STATE_INTERVAL_MS = 300;
+const ZONE_MOVEMENT_STREAM_PROJECTILE_LIMIT = 18;
+const ZONE_MOVEMENT_STREAM_RANGE_PADDING = 480;
+const ZONE_PVP_STATE_VISIBLE_PLAYERS_LIMIT = 16;
+const ZONE_PVP_STATE_PROJECTILE_LIMIT = 10;
+const STATIC_STATE_INTERVAL_MS = 1500;
+const VIEWPORT_ITEM_STATE_INTERVAL_MS = 600;
 const PVP_CROWDED_STATE_THRESHOLD = 12;
 const PVP_HEAVY_STATE_THRESHOLD = 28;
 const ITEM_SPATIAL_CELL_SIZE = 1000;
@@ -1766,7 +1766,7 @@ let GameGateway = class GameGateway {
         }
     }
     updateZonePvpRoomStatus(room, now) {
-        if (room.status !== "countdown" || room.locked || room.matchStartedAt)
+        if (room.status !== "countdown" || room.locked || room.hasStarted || room.matchStartedAt)
             return;
         const realPlayerCount = this.getZoneHumanPlayerCount(room);
         if (realPlayerCount < ZONE_PVP_ROOM_MIN_PLAYERS) {
@@ -1782,6 +1782,7 @@ let GameGateway = class GameGateway {
             this.fillZonePvpBots(room, now, this.getZonePvpZoneRadius(room));
             room.status = "playing";
             room.locked = true;
+            room.hasStarted = true;
             room.countdownStartedAt = null;
             room.matchStartedAt = now;
             room.battlePrepareUntil = now + ZONE_PVP_BATTLE_PREPARE_DURATION;
@@ -3492,6 +3493,7 @@ let GameGateway = class GameGateway {
             createdAt: Date.now(),
             emptySince: Date.now(),
             matchStartedAt: null,
+            hasStarted: false,
             battlePrepareUntil: null,
             battleBeginFlashUntil: null,
             matchHadMultiplePlayers: false,
@@ -3548,6 +3550,7 @@ let GameGateway = class GameGateway {
             this.markRoomEmptyIfNeeded(room, now);
             if (room.status === "countdown" &&
                 !room.locked &&
+                !room.hasStarted &&
                 !room.matchStartedAt &&
                 this.getZoneHumanPlayerCount(room) < ZONE_PVP_ROOM_MIN_PLAYERS) {
                 room.status = "waiting";
@@ -3663,6 +3666,41 @@ let GameGateway = class GameGateway {
             createdAt: Number(projectile.createdAt || 0),
         };
     }
+    packZonePvpMovement(player) {
+        const round = (value) => Math.round(Number(value || 0) * 10) / 10;
+        const flags = (player?.isBot ? 1 : 0) |
+            (player?.isMoving ? 2 : 0) |
+            (player?.input?.attacking ? 4 : 0) |
+            (player?.shieldActive ? 8 : 0) |
+            (player?.alive !== false ? 16 : 0);
+        return [
+            String(player.id),
+            round(player.x),
+            round(player.y),
+            round(player.velocityX),
+            round(player.velocityY),
+            round(player.moveAngle),
+            flags,
+        ];
+    }
+    packZonePvpProjectileMovement(projectile) {
+        const round = (value) => Math.round(Number(value || 0) * 10) / 10;
+        const flags = (projectile?.shieldBreaker ? 1 : 0) |
+            (projectile?.piercesShield ? 2 : 0);
+        return [
+            String(projectile.id),
+            String(projectile.ownerId || ""),
+            round(projectile.x),
+            round(projectile.y),
+            round(projectile.vx),
+            round(projectile.vy),
+            round(projectile.angle),
+            String(projectile.skin || "cyan"),
+            Number(projectile.pierceLeft || 1),
+            flags,
+            Number(projectile.createdAt || 0),
+        ];
+    }
     broadcastZonePvpMovement(room, now) {
         if (!room?.zonePvpMode || room.status !== "playing")
             return;
@@ -3682,7 +3720,7 @@ let GameGateway = class GameGateway {
             const viewAnchor = spectatorTarget || viewer;
             const range = viewer.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + 260;
             const projectileRange = range + ZONE_MOVEMENT_STREAM_RANGE_PADDING;
-            const movementPlayers = players
+            const packedPlayers = players
                 .filter((other) => other.id !== viewer.id &&
                 (viewer.alive !== false || other.alive !== false) &&
                 this.isNear(viewAnchor, other, range))
@@ -3694,17 +3732,16 @@ let GameGateway = class GameGateway {
                 return ax * ax + ay * ay - (bx * bx + by * by);
             })
                 .slice(0, ZONE_PVP_VISIBLE_PLAYERS_LIMIT)
-                .map((other) => this.serializeZonePvpMovement(other));
-            const movementProjectiles = this.filterNear(viewAnchor, room.projectiles || [], projectileRange, ZONE_MOVEMENT_STREAM_PROJECTILE_LIMIT).map((projectile) => this.serializeZonePvpProjectileMovement(projectile));
+                .map((other) => this.packZonePvpMovement(other));
+            const packedProjectiles = this.filterNear(viewAnchor, room.projectiles || [], projectileRange, ZONE_MOVEMENT_STREAM_PROJECTILE_LIMIT).map((projectile) => this.packZonePvpProjectileMovement(projectile));
             socket.volatile.compress(false).emit("zone-pvp:movement", {
-                serverNow: now,
-                sequence: movementSequence,
-                roomId: room.id,
-                roundId: room.roundId || null,
-                phaseVersion: Number(room.phaseVersion || 0),
-                status: room.status,
-                players: movementPlayers,
-                projectiles: movementProjectiles,
+                t: now,
+                n: movementSequence,
+                r: room.id,
+                d: room.roundId || null,
+                v: Number(room.phaseVersion || 0),
+                p: packedPlayers,
+                q: packedProjectiles,
             });
         }
     }

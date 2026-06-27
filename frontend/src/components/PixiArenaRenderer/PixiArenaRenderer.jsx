@@ -2346,13 +2346,30 @@ function PixiArenaRenderer({
           now,
           isPlayer: true,
         });
+        const requestedRemoteFullBudget = Number(data.remoteFullBudget);
+        const requestedRemoteSimpleBudget = Number(data.remoteSimpleBudget);
+        const requestedProjectileFullBudget = Number(data.projectileFullBudget);
+        const requestedProjectileSimpleBudget = Number(data.projectileSimpleBudget);
+        const remoteFullMax = Number.isFinite(requestedRemoteFullBudget)
+          ? Math.max(0, Math.min(config.maxPlayers, requestedRemoteFullBudget))
+          : (adaptiveTier === 2 ? Math.min(config.maxPlayers, 9) : adaptiveTier === 1 ? Math.min(config.maxPlayers, 18) : config.maxPlayers);
+        const remoteSimpleMax = Number.isFinite(requestedRemoteSimpleBudget)
+          ? Math.max(0, Math.min(config.maxSimplePlayers, requestedRemoteSimpleBudget))
+          : (adaptiveTier === 2 ? Math.min(config.maxSimplePlayers, 32) : adaptiveTier === 1 ? Math.min(config.maxSimplePlayers, 44) : config.maxSimplePlayers);
+        const projectileFullMax = Number.isFinite(requestedProjectileFullBudget)
+          ? Math.max(0, Math.min(config.maxProjectiles, requestedProjectileFullBudget))
+          : (adaptiveTier === 2 ? Math.min(config.maxProjectiles, 8) : adaptiveTier === 1 ? Math.min(config.maxProjectiles, 16) : config.maxProjectiles);
+        const projectileSimpleMax = Number.isFinite(requestedProjectileSimpleBudget)
+          ? Math.max(0, Math.min(config.maxProjectiles, requestedProjectileSimpleBudget))
+          : (adaptiveTier === 2 ? 16 : adaptiveTier === 1 ? Math.min(28, config.maxProjectiles) : Math.floor(config.maxProjectiles * 0.55));
+
         const fullRemoteIds = syncUnitPool({
           pool: remotePool,
           source: data.players,
           resources,
           parent: entitiesLayer,
           bounds,
-          max: adaptiveTier === 2 ? Math.min(config.maxPlayers, 9) : adaptiveTier === 1 ? Math.min(config.maxPlayers, 18) : config.maxPlayers,
+          max: remoteFullMax,
           now,
           compact: config.mobile || adaptiveTier > 0,
           effectTier: remoteEffectTier,
@@ -2363,22 +2380,19 @@ function PixiArenaRenderer({
           resources,
           parent: entitiesLayer,
           bounds,
-          max: adaptiveTier === 2 ? Math.min(config.maxPlayers, 9) : adaptiveTier === 1 ? Math.min(config.maxPlayers, 18) : config.maxPlayers,
+          max: remoteFullMax,
           now,
           compact: config.mobile || adaptiveTier > 0,
           effectTier: remoteEffectTier,
         });
         const fullEntityIds = new Set([...fullRemoteIds, ...fullBotIds]);
-        const adaptiveSimpleFallback = Boolean(data.useAdaptiveSimpleFallback);
         syncSimplePool({
           pool: simpleBotPool,
-          source: adaptiveSimpleFallback && adaptiveTier === 0 && !config.lowSpecDesktop && !config.weakMobile && !config.mobile
-            ? []
-            : data.simpleBots,
+          source: data.simpleBots,
           resources,
           parent: entitiesLayer,
           bounds,
-          max: adaptiveTier === 2 ? Math.min(config.maxSimplePlayers, 32) : adaptiveTier === 1 ? Math.min(config.maxSimplePlayers, 44) : config.maxSimplePlayers,
+          max: remoteSimpleMax,
           now,
           excludeIds: fullEntityIds,
         });
@@ -2388,18 +2402,16 @@ function PixiArenaRenderer({
           resources,
           parent: projectilesLayer,
           bounds,
-          max: adaptiveTier === 2 ? Math.min(config.maxProjectiles, 8) : adaptiveTier === 1 ? Math.min(config.maxProjectiles, 16) : config.maxProjectiles,
+          max: projectileFullMax,
           now,
         });
         syncProjectilePool({
           pool: simpleProjectilePool,
-          source: adaptiveSimpleFallback && adaptiveTier === 0 && !config.lowSpecDesktop && !config.weakMobile && !config.mobile
-            ? []
-            : data.simpleProjectiles,
+          source: data.simpleProjectiles,
           resources,
           parent: projectilesLayer,
           bounds,
-          max: adaptiveTier === 2 ? 16 : adaptiveTier === 1 ? Math.min(28, config.maxProjectiles) : Math.floor(config.maxProjectiles * 0.55),
+          max: projectileSimpleMax,
           now,
           compact: adaptiveTier > 0 || config.lowSpecDesktop || config.mobile,
           excludeIds: fullProjectileIds,

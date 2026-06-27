@@ -132,9 +132,9 @@ const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
 // Zone has a dedicated 60 Hz transform stream. Full state is only HUD, loot,
 // effects and admission data; keeping it at 8–10 Hz prevents weak phones from
 // parsing old snapshots while a fresh transform is waiting behind them.
-const ZONE_STATE_INTERVAL_MS = 100;
-const ZONE_STATE_INTERVAL_CROWDED_MS = 125;
-const ZONE_STATE_INTERVAL_HEAVY_MS = 160;
+const ZONE_STATE_INTERVAL_MS = 180;
+const ZONE_STATE_INTERVAL_CROWDED_MS = 220;
+const ZONE_STATE_INTERVAL_HEAVY_MS = 280;
 
 // Zone PvP keeps full snapshots compact, then sends a tiny transform-only
 // stream for nearby opponents. This decouples smooth remote motion from the
@@ -147,12 +147,12 @@ const ZONE_STATE_INTERVAL_HEAVY_MS = 160;
 const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 16; // 60 Hz (one stream per server tick)
 const ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS = 25; // 40 Hz only for genuinely human-crowded rooms
 const ZONE_MOVEMENT_STREAM_MAX_PLAYERS = ZONE_PVP_ROOM_MAX_PLAYERS;
-const ZONE_MOVEMENT_STREAM_PROJECTILE_LIMIT = 32;
-const ZONE_MOVEMENT_STREAM_RANGE_PADDING = 560;
-const ZONE_PVP_STATE_VISIBLE_PLAYERS_LIMIT = 28;
-const ZONE_PVP_STATE_PROJECTILE_LIMIT = 18;
-const STATIC_STATE_INTERVAL_MS = 1000; // minimap + leaderboard
-const VIEWPORT_ITEM_STATE_INTERVAL_MS = 300; // static nearby loot, per player
+const ZONE_MOVEMENT_STREAM_PROJECTILE_LIMIT = 18;
+const ZONE_MOVEMENT_STREAM_RANGE_PADDING = 480;
+const ZONE_PVP_STATE_VISIBLE_PLAYERS_LIMIT = 16;
+const ZONE_PVP_STATE_PROJECTILE_LIMIT = 10;
+const STATIC_STATE_INTERVAL_MS = 1500; // minimap + leaderboard
+const VIEWPORT_ITEM_STATE_INTERVAL_MS = 600; // static nearby loot, per player
 const PVP_CROWDED_STATE_THRESHOLD = 12;
 const PVP_HEAVY_STATE_THRESHOLD = 28;
 const ITEM_SPATIAL_CELL_SIZE = 1000;
@@ -2247,7 +2247,7 @@ export class GameGateway {
     // Zone PvP is strictly one-way: waiting -> countdown -> playing -> finished.
     // A started/finished round is never allowed back into matchmaking by a
     // delayed join, a reconnect or a stale timer callback.
-    if (room.status !== "countdown" || room.locked || room.matchStartedAt) return;
+    if (room.status !== "countdown" || room.locked || room.hasStarted || room.matchStartedAt) return;
 
     const realPlayerCount = this.getZoneHumanPlayerCount(room);
     if (realPlayerCount < ZONE_PVP_ROOM_MIN_PLAYERS) {
@@ -2266,6 +2266,7 @@ export class GameGateway {
       this.fillZonePvpBots(room, now, this.getZonePvpZoneRadius(room));
       room.status = "playing";
       room.locked = true;
+      room.hasStarted = true;
       room.countdownStartedAt = null;
       room.matchStartedAt = now;
       room.battlePrepareUntil = now + ZONE_PVP_BATTLE_PREPARE_DURATION;
@@ -4514,6 +4515,9 @@ export class GameGateway {
       createdAt: Date.now(),
       emptySince: Date.now(),
       matchStartedAt: null,
+      // Once true this room can never go back to waiting/countdown. Human
+      // departures only remove those seats; bots and the active round stay.
+      hasStarted: false,
       battlePrepareUntil: null,
       battleBeginFlashUntil: null,
       matchHadMultiplePlayers: false,
@@ -4580,6 +4584,7 @@ export class GameGateway {
       if (
         room.status === "countdown" &&
         !room.locked &&
+        !room.hasStarted &&
         !room.matchStartedAt &&
         this.getZoneHumanPlayerCount(room) < ZONE_PVP_ROOM_MIN_PLAYERS
       ) {
@@ -4718,6 +4723,49 @@ export class GameGateway {
     };
   }
 
+  private packZonePvpMovement(player: any) {
+    // Compact array transport: keys are not repeated 60 times per second for
+    // every bot. This cuts JSON parse/allocation work sharply on weak phones.
+    const round = (value: any) => Math.round(Number(value || 0) * 10) / 10;
+    const flags =
+      (player?.isBot ? 1 : 0) |
+      (player?.isMoving ? 2 : 0) |
+      (player?.input?.attacking ? 4 : 0) |
+      (player?.shieldActive ? 8 : 0) |
+      (player?.alive !== false ? 16 : 0);
+
+    return [
+      String(player.id),
+      round(player.x),
+      round(player.y),
+      round(player.velocityX),
+      round(player.velocityY),
+      round(player.moveAngle),
+      flags,
+    ];
+  }
+
+  private packZonePvpProjectileMovement(projectile: any) {
+    const round = (value: any) => Math.round(Number(value || 0) * 10) / 10;
+    const flags =
+      (projectile?.shieldBreaker ? 1 : 0) |
+      (projectile?.piercesShield ? 2 : 0);
+
+    return [
+      String(projectile.id),
+      String(projectile.ownerId || ""),
+      round(projectile.x),
+      round(projectile.y),
+      round(projectile.vx),
+      round(projectile.vy),
+      round(projectile.angle),
+      String(projectile.skin || "cyan"),
+      Number(projectile.pierceLeft || 1),
+      flags,
+      Number(projectile.createdAt || 0),
+    ];
+  }
+
   private broadcastZonePvpMovement(room: any, now: number) {
     if (!room?.zonePvpMode || room.status !== "playing") return;
 
@@ -4725,8 +4773,6 @@ export class GameGateway {
     const humanViewers = players.filter((player) => !player?.isBot);
     if (!humanViewers.length) return;
 
-    // All viewers receive the same tick sequence. This makes the client-side
-    // timestamp buffer deterministic even when one device receives packets late.
     const movementSequence = Number(room.zoneMovementSequence || 0) + 1;
     room.zoneMovementSequence = movementSequence;
 
@@ -4742,7 +4788,7 @@ export class GameGateway {
       const range = viewer.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + 260;
       const projectileRange = range + ZONE_MOVEMENT_STREAM_RANGE_PADDING;
 
-      const movementPlayers = players
+      const packedPlayers = players
         .filter(
           (other) =>
             other.id !== viewer.id &&
@@ -4757,31 +4803,25 @@ export class GameGateway {
           return ax * ax + ay * ay - (bx * bx + by * by);
         })
         .slice(0, ZONE_PVP_VISIBLE_PLAYERS_LIMIT)
-        .map((other) => this.serializeZonePvpMovement(other));
+        .map((other) => this.packZonePvpMovement(other));
 
-      // Attack drones need the same high-rate transform path as the large
-      // drones. Full snapshots are intentionally slower because they contain
-      // HUD/loot data; putting projectile transforms here prevents a 30 Hz
-      // "slow motion" look on receivers.
-      const movementProjectiles = this.filterNear(
+      const packedProjectiles = this.filterNear(
         viewAnchor,
         room.projectiles || [],
         projectileRange,
         ZONE_MOVEMENT_STREAM_PROJECTILE_LIMIT,
-      ).map((projectile) => this.serializeZonePvpProjectileMovement(projectile));
+      ).map((projectile) => this.packZonePvpProjectileMovement(projectile));
 
-      // Real-time transforms must never queue behind old transforms. A dropped
-      // frame is harmless because the next packet/full snapshot replaces it;
-      // a queued old frame is what causes visible surges on weak hardware.
+      // Transform frames are intentionally volatile: newest wins. A weak phone
+      // never has to parse an old queue before it can render the current tick.
       socket.volatile.compress(false).emit("zone-pvp:movement", {
-        serverNow: now,
-        sequence: movementSequence,
-        roomId: room.id,
-        roundId: room.roundId || null,
-        phaseVersion: Number(room.phaseVersion || 0),
-        status: room.status,
-        players: movementPlayers,
-        projectiles: movementProjectiles,
+        t: now,
+        n: movementSequence,
+        r: room.id,
+        d: room.roundId || null,
+        v: Number(room.phaseVersion || 0),
+        p: packedPlayers,
+        q: packedProjectiles,
       });
     }
   }
