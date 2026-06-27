@@ -1200,6 +1200,16 @@ function getZonePvpResumeToken() {
   }
 }
 
+function clearZonePvpResumeToken() {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(ZONE_PVP_RESUME_STORAGE_KEY);
+  } catch {
+    // Storage can be unavailable in private-browser modes. The server-side
+    // explicit leave still removes the resumable seat in that case.
+  }
+}
+
 function FlyingAttackDrone({ projectile }) {
   const skin = normalizeSkin(projectile.skin || "cyan");
   const angle = projectile.angle || Math.atan2(projectile.vy || 0, projectile.vx || 1);
@@ -1253,6 +1263,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   userRef.current = user;
   const resumeTokenRef = useRef(getZonePvpResumeToken());
   const intentionalExitRef = useRef(false);
+  const explicitLeaveSentRef = useRef(false);
+  const explicitExitFinishedRef = useRef(false);
+  const explicitExitTimerRef = useRef(null);
   const socketRef = useRef(null);
   // Join state is deliberately separate from socket.connected. A mobile
   // transport may be connected while its first join packet was delayed.
@@ -1407,6 +1420,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     socketRef.current = socket;
     let disposed = false;
+
+    const clearExplicitExitTimer = () => {
+      if (explicitExitTimerRef.current) {
+        window.clearTimeout(explicitExitTimerRef.current);
+        explicitExitTimerRef.current = null;
+      }
+    };
 
     const clearZoneJoinRetry = () => {
       if (zoneJoinRetryTimerRef.current) {
@@ -2339,10 +2359,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       socket.off("zone-pvp:combat", applyPrivateCombatEvent);
       socket.off("zone-pvp:collect", applyCollectSync);
       socket.off("zone-pvp:world-delta", applyWorldItemDelta);
+      socket.off("zone-pvp:left");
+      clearExplicitExitTimer();
       // Only an explicit EXIT TO MENU permanently removes the seat. Component
       // remounts, StrictMode, background recovery and connection changes keep
       // the resumable player in the same live room.
-      if (intentionalExitRef.current) {
+      if (intentionalExitRef.current && !explicitLeaveSentRef.current) {
+        explicitLeaveSentRef.current = true;
         socket.emit("zone-pvp:leave");
       }
       socket.disconnect();
@@ -3216,12 +3239,52 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   // until the player chooses EXIT TO MENU; it never remounts the Dashboard
   // automatically and therefore cannot create a fresh lobby by itself.
   const handleZoneExitToMenu = () => {
+    if (intentionalExitRef.current || explicitExitFinishedRef.current) return;
+
+    // Leaving is permanent for this browser tab: discard the resumable token
+    // before returning to the Dashboard, so this player cannot restore the
+    // abandoned Zone PvP seat by opening the mode again.
     intentionalExitRef.current = true;
+    zoneJoinAcceptedRef.current = true;
+    clearZonePvpResumeToken();
+    resumeTokenRef.current = createZonePvpResumeToken();
+
     const socket = socketRef.current;
-    if (socket?.connected) {
+    const finishExit = () => {
+      if (explicitExitFinishedRef.current) return;
+      explicitExitFinishedRef.current = true;
+
+      if (explicitExitTimerRef.current) {
+        window.clearTimeout(explicitExitTimerRef.current);
+        explicitExitTimerRef.current = null;
+      }
+
+      if (socket) {
+        socket.off("zone-pvp:left", finishExit);
+        // The backend has already removed the player when it sends
+        // `zone-pvp:left`. Disconnect now so a reconnect cannot restore the
+        // old room while Dashboard is rendering.
+        socket.disconnect();
+      }
+
+      onExitToMenu?.();
+    };
+
+    if (!socket?.connected) {
+      finishExit();
+      return;
+    }
+
+    socket.once("zone-pvp:left", finishExit);
+    if (!explicitLeaveSentRef.current) {
+      explicitLeaveSentRef.current = true;
       socket.emit("zone-pvp:leave");
     }
-    onExitToMenu?.();
+
+    // Do not strand the UI if a proxy drops the acknowledgement. The server
+    // still receives the leave packet on a healthy socket; this short fallback
+    // only guarantees the menu remains responsive.
+    explicitExitTimerRef.current = window.setTimeout(finishExit, 700);
   };
 
   const matchStartedAt = hudData.matchStartedAt || renderData.matchStartedAt;

@@ -1825,7 +1825,17 @@ export class GameGateway {
 
   @SubscribeMessage("zone-pvp:leave")
   handleZonePvpLeave(@ConnectedSocket() client: Socket) {
+    const roomId = this.zonePvpSocketRoom.get(client.id) || null;
     this.removeZonePvpPlayer(client.id);
+
+    // Explicit exit is different from a transient Socket.IO disconnect.
+    // Acknowledging it lets the client discard its resume token only after the
+    // authoritative seat is gone, so it cannot re-enter this exact round.
+    client.emit("zone-pvp:left", {
+      roomId,
+      playerId: client.id,
+      serverNow: Date.now(),
+    });
   }
 
   @SubscribeMessage("zone-pvp:input")
@@ -4438,6 +4448,9 @@ export class GameGateway {
       winnerId: null,
       winnerName: null,
       finishedAt: null,
+      // Set only when the last real participant intentionally leaves. Bots do
+      // not keep a hidden room alive once every human has exited.
+      abandonedByAllHumansAt: null,
       collisionCooldowns: new Map(),
       zonePvpMode: true,
     };
@@ -4491,6 +4504,7 @@ export class GameGateway {
           room.winnerId = null;
           room.winnerName = null;
           room.finishedAt = Date.now();
+          room.abandonedByAllHumansAt = room.finishedAt;
           room.projectiles = [];
           room.phaseVersion = Number(room.phaseVersion || 0) + 1;
         } else {

@@ -2652,21 +2652,34 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
     ? 920
     : Math.ceil(PROJECTILE_RENDER_DISTANCE * desktopCameraDistanceMultiplier);
 
-  // In Battle Royale singleplayer afisam botii ca drone complete.
-  // Nu ii mai mutam in simpleBots, fiindca acolo apar doar ca puncte.
-  const lowSpecDesktopRender = !isMobileLike && (
-    graphicsQuality === "low" || perfProfileRef.current.isWeakDesktop
-  );
+  // Battle Royale uses the same visual policy as Zone PvP:
+  // weak desktops start with the premium space background and readable drones.
+  // Only far entities are routed through Pixi's animated lightweight fallback;
+  // CPU-side bot AI batching remains active independently.
+  const manualLowGraphics = graphicsQuality === "low";
+  const weakDesktopVisualFallback = !isMobileLike &&
+    perfProfileRef.current.isWeakDesktop &&
+    !manualLowGraphics;
+  const lowSpecDesktopRender = !isMobileLike && manualLowGraphics;
+  const useAdaptiveBotFallback = lowSpecDesktopRender || weakDesktopVisualFallback;
+
   const mobileFullBotLimit = lowSpecDesktopRender
     ? LOW_SPEC_DESKTOP_FULL_BOT_LIMIT
-    : 49;
+    : weakDesktopVisualFallback
+      ? 10
+      : 49;
 
   const mobileFullProjectileLimit = lowSpecDesktopRender
     ? 6
-    : isMobileLandscape ? 7 : MAX_FULL_PROJECTILES;
+    : weakDesktopVisualFallback
+      ? 10
+      : isMobileLandscape ? 7 : MAX_FULL_PROJECTILES;
+
   const mobileSimpleProjectileLimit = lowSpecDesktopRender
     ? 10
-    : isMobileLandscape ? 28 : MAX_SIMPLE_PROJECTILES;
+    : weakDesktopVisualFallback
+      ? 34
+      : isMobileLandscape ? 28 : MAX_SIMPLE_PROJECTILES;
 
   useEffect(() => {
     if (player.alive) return;
@@ -2689,7 +2702,7 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
           Math.abs(orb.y - viewTarget.y) < mobileViewDistance
         );
       })
-      .slice(0, lowSpecDesktopRender ? 40 : isMobileLandscape ? 72 : 180);
+      .slice(0, lowSpecDesktopRender ? 40 : weakDesktopVisualFallback ? 96 : isMobileLandscape ? 72 : 180);
   }, [orbs, viewTarget.x, viewTarget.y, isMobileLandscape, mobileViewDistance]);
 
   const visibleEnergyCells = useMemo(() => {
@@ -2700,7 +2713,7 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
           Math.abs(cell.y - viewTarget.y) < mobileViewDistance
         );
       })
-      .slice(0, lowSpecDesktopRender ? 16 : isMobileLandscape ? 36 : 110);
+      .slice(0, lowSpecDesktopRender ? 16 : weakDesktopVisualFallback ? 46 : isMobileLandscape ? 36 : 110);
   }, [energyCells, viewTarget.x, viewTarget.y, isMobileLandscape, mobileViewDistance]);
 
   const visibleCores = useMemo(() => {
@@ -2780,12 +2793,24 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
   }, [visibleBots, viewTarget.x, viewTarget.y, mobileBotRenderDistance, mobileFullBotLimit]);
 
   const simpleRenderBots = useMemo(() => {
-    if (!lowSpecDesktopRender) return [];
+    if (!useAdaptiveBotFallback) return [];
     const fullIds = new Set(fullRenderBots.map((bot) => bot.id));
+    const limit = lowSpecDesktopRender
+      ? LOW_SPEC_DESKTOP_SIMPLE_BOT_LIMIT
+      : 48;
+
     return visibleBots
       .filter((bot) => !fullIds.has(bot.id))
-      .slice(0, LOW_SPEC_DESKTOP_SIMPLE_BOT_LIMIT);
-  }, [lowSpecDesktopRender, fullRenderBots, visibleBots]);
+      .slice(0, limit)
+      .map((bot) => ({
+        ...bot,
+        isBot: true,
+        // The renderer keeps this lane as an animated mini-quadcopter,
+        // including rotors and thrust. It is not a point marker.
+        drones: Number(bot.drones || 0),
+        skin: normalizeArenaSkin(bot.skin),
+      }));
+  }, [useAdaptiveBotFallback, lowSpecDesktopRender, fullRenderBots, visibleBots]);
 
   const canFire = player.drones > 0 && player.alive && !gameOver && battleCountdown <= 0;
 
@@ -3833,18 +3858,39 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
   // returned objects are always refreshed from botsRef so movement stays live.
   const getPixiBotRenderPayload = (target, timestamp) => {
     const profile = perfProfileRef.current;
-    const lowSpecDesktop = profile.isWeakDesktop || graphicsQuality === "low";
-    const fullLimit = lowSpecDesktop ? LOW_SPEC_DESKTOP_FULL_BOT_LIMIT : MAX_FULL_RENDER_BOTS;
-    const simpleLimit = lowSpecDesktop ? LOW_SPEC_DESKTOP_SIMPLE_BOT_LIMIT : 0;
-    const fullDistance = lowSpecDesktop ? LOW_SPEC_DESKTOP_FULL_BOT_DISTANCE : BOT_RENDER_DISTANCE / DESKTOP_CAMERA_SCALE;
-    const simpleDistance = lowSpecDesktop ? LOW_SPEC_DESKTOP_SIMPLE_BOT_DISTANCE : BOT_SIMPLE_RENDER_DISTANCE / DESKTOP_CAMERA_SCALE;
+    const manualLowGraphics = graphicsQuality === "low";
+    const weakDesktopVisualFallback = profile.isWeakDesktop && !manualLowGraphics;
+    const compactVisuals = manualLowGraphics || weakDesktopVisualFallback;
+    // Same strategy as Zone PvP: nearby units are premium; the rest are
+    // animated compact quadcopters. This preserves the look while avoiding
+    // 49 full high-cost shells on a 2015–2018 integrated GPU.
+    const fullLimit = manualLowGraphics
+      ? LOW_SPEC_DESKTOP_FULL_BOT_LIMIT
+      : weakDesktopVisualFallback
+        ? 10
+        : MAX_FULL_RENDER_BOTS;
+    const simpleLimit = manualLowGraphics
+      ? LOW_SPEC_DESKTOP_SIMPLE_BOT_LIMIT
+      : weakDesktopVisualFallback
+        ? 48
+        : 0;
+    const fullDistance = manualLowGraphics
+      ? LOW_SPEC_DESKTOP_FULL_BOT_DISTANCE
+      : weakDesktopVisualFallback
+        ? 2800
+        : BOT_RENDER_DISTANCE / DESKTOP_CAMERA_SCALE;
+    const simpleDistance = manualLowGraphics
+      ? LOW_SPEC_DESKTOP_SIMPLE_BOT_DISTANCE
+      : weakDesktopVisualFallback
+        ? 5600
+        : BOT_SIMPLE_RENDER_DISTANCE / DESKTOP_CAMERA_SCALE;
     const cache = pixiBotRenderCacheRef.current;
-    const targetKey = `${target?.id || "player"}:${lowSpecDesktop ? "low" : "normal"}`;
+    const targetKey = `${target?.id || "player"}:${compactVisuals ? "adaptive" : "normal"}`;
     const movedEnough = Math.hypot(
       Number(target?.x || 0) - cache.x,
       Number(target?.y || 0) - cache.y,
     ) > 160;
-    const refreshEvery = lowSpecDesktop ? 120 : 66;
+    const refreshEvery = compactVisuals ? 90 : 66;
 
     if (cache.key !== targetKey || movedEnough || timestamp - cache.refreshedAt >= refreshEvery) {
       const candidates = botsRef.current
@@ -5074,7 +5120,11 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
           (bot) => String(bot?.id || "") !== focusId,
         ),
       };
-      const lowSpecRenderer = perfProfileRef.current.isWeakDesktop || graphicsQuality === "low";
+      // Keep the same premium space backdrop as Zone PvP on weak desktops.
+      // Only explicit low graphics or real mobile devices request the compact
+      // Pixi profile. The adaptive renderer still reduces off-screen/far detail
+      // when measured frame time requires it.
+      const lowSpecRenderer = graphicsQuality === "low" || perfProfileRef.current.isLowEndMobile;
 
       pixiLiveRef.current = {
         player: liveTarget?.alive !== false ? liveTarget : null,
@@ -5096,8 +5146,8 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldHeight: WORLD_HEIGHT,
         safeZoneRadius: currentZoneRadius,
         showZone: true,
-        worldTheme: "battle-royale-pixel-terrain",
-        staticItemBudget: lowSpecRenderer ? 48 : null,
+        worldTheme: "premium-space-battle",
+        staticItemBudget: lowSpecRenderer ? 52 : 110,
       };
 
       if (now - lastProjectilesRenderSyncRef.current >= (perfProfileRef.current.isLowEndDevice ? 100 : 66)) {
@@ -5593,9 +5643,9 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldHeight={WORLD_HEIGHT}
         safeZoneRadius={safeZoneRadius}
         showZone={true}
-        worldTheme="battle-royale-pixel-terrain"
-        staticItemBudget={lowSpecDesktopRender ? 48 : null}
-        forceLowQuality={lowSpecDesktopRender}
+        worldTheme="premium-space-battle"
+        staticItemBudget={isMobileLike || graphicsQuality === "low" ? 52 : 110}
+        forceLowQuality={graphicsQuality === "low" || isMobileLike}
       />
 
       {showMobileControls && (

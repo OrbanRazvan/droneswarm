@@ -1437,7 +1437,13 @@ let GameGateway = class GameGateway {
         this.broadcastZonePvpRoomState(room, now, true);
     }
     handleZonePvpLeave(client) {
+        const roomId = this.zonePvpSocketRoom.get(client.id) || null;
         this.removeZonePvpPlayer(client.id);
+        client.emit("zone-pvp:left", {
+            roomId,
+            playerId: client.id,
+            serverNow: Date.now(),
+        });
     }
     handleZonePvpInput(client, input) {
         const room = this.getZonePvpRoomBySocket(client.id);
@@ -3433,6 +3439,7 @@ let GameGateway = class GameGateway {
             winnerId: null,
             winnerName: null,
             finishedAt: null,
+            abandonedByAllHumansAt: null,
             collisionCooldowns: new Map(),
             zonePvpMode: true,
         };
@@ -3478,6 +3485,7 @@ let GameGateway = class GameGateway {
                     room.winnerId = null;
                     room.winnerName = null;
                     room.finishedAt = Date.now();
+                    room.abandonedByAllHumansAt = room.finishedAt;
                     room.projectiles = [];
                     room.phaseVersion = Number(room.phaseVersion || 0) + 1;
                 }

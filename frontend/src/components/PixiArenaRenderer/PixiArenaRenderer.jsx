@@ -2414,17 +2414,53 @@ function PixiArenaRenderer({
       // drops below the target frame time. It recovers automatically when the
       // frame budget is healthy again.
       let frameTimeEma = 16.7;
-      let adaptiveTier = 0; // 0 = full, 1 = reduced, 2 = emergency low
-      let lastAdaptiveChangeAt = 0;
+      // Do not let a single long frame flip the visual profile back and forth.
+      // That was the visible "background blink" on old laptops: tier 2 hid the
+      // terrain, then a short recovery restored it a few hundred milliseconds later.
+      let adaptiveTier = 0; // 0 = full, 1 = reduced effects, 2 = strong static trim
+      let adaptiveCandidateTier = 0;
+      let adaptiveCandidateSince = performance.now();
+      let appliedResolutionTier = 0;
       let dynamicResolution = config.resolution;
+      let terrainVisibility = null;
+
+      const setTerrainVisible = (visible) => {
+        if (terrainVisibility === visible) return;
+        terrainVisibility = visible;
+        terrainLayer.visible = visible;
+      };
+
+      const getStableAdaptiveTier = () => {
+        // Wide hysteresis keeps the renderer stable around 60 FPS. Tier-up
+        // reacts after sustained pressure; tier-down waits much longer so the
+        // canvas does not resize/rebuild repeatedly while a fight is busy.
+        if (adaptiveTier === 0) {
+          return frameTimeEma > 21.5 ? 1 : 0;
+        }
+        if (adaptiveTier === 1) {
+          if (frameTimeEma > 27.5) return 2;
+          if (frameTimeEma < 16.15) return 0;
+          return 1;
+        }
+        return frameTimeEma < 18.2 ? 1 : 2;
+      };
 
       const applyAdaptiveResolution = () => {
         if (!app?.renderer || !(config.lowSpecDesktop || config.weakMobile || config.forcedMobileQuality || config.visualFirstWeakDesktop)) return;
+
+        // Resolution only steps DOWN during this mounted match. Raising it
+        // again causes a renderer resize/stall and was another source of
+        // apparent background blinking on integrated GPUs.
+        const requestedTier = Math.max(appliedResolutionTier, adaptiveTier);
+        if (requestedTier === appliedResolutionTier) return;
+        appliedResolutionTier = requestedTier;
+
         const ratio = config.visualFirstWeakDesktop
-          ? (adaptiveTier === 2 ? 0.72 : adaptiveTier === 1 ? 0.86 : 1)
-          : (adaptiveTier === 2 ? 0.68 : adaptiveTier === 1 ? 0.84 : 1);
+          ? (requestedTier === 2 ? 0.72 : requestedTier === 1 ? 0.86 : 1)
+          : (requestedTier === 2 ? 0.68 : requestedTier === 1 ? 0.84 : 1);
         const nextResolution = Math.max(0.34, Number((config.resolution * ratio).toFixed(2)));
         if (Math.abs(nextResolution - dynamicResolution) < 0.01) return;
+
         dynamicResolution = nextResolution;
         app.renderer.resolution = dynamicResolution;
         const width = Math.max(1, hostRef.current?.clientWidth || window.innerWidth);
@@ -2451,17 +2487,22 @@ function PixiArenaRenderer({
         const tickMs = Math.min(80, Math.max(1, Number(app.ticker.deltaMS || 16.7)));
         frameTimeEma = frameTimeEma * 0.92 + tickMs * 0.08;
 
-        if (now - lastAdaptiveChangeAt > 700) {
-          const desiredTier =
-            frameTimeEma > 20.0 ? 2 :
-            frameTimeEma > 16.9 ? 1 :
-            frameTimeEma < 16.35 ? 0 :
-            adaptiveTier;
-          if (desiredTier !== adaptiveTier) {
+        const desiredTier = getStableAdaptiveTier();
+        if (desiredTier === adaptiveTier) {
+          adaptiveCandidateTier = adaptiveTier;
+          adaptiveCandidateSince = now;
+        } else if (adaptiveCandidateTier !== desiredTier) {
+          adaptiveCandidateTier = desiredTier;
+          adaptiveCandidateSince = now;
+        } else {
+          const isTierUp = desiredTier > adaptiveTier;
+          const holdMs = isTierUp ? 1800 : 5200;
+          if (now - adaptiveCandidateSince >= holdMs) {
             adaptiveTier = desiredTier;
-            lastAdaptiveChangeAt = now;
-            // Force a controlled refresh so pooled static visuals converge to
-            // the new budget without one large per-frame rebuild.
+            adaptiveCandidateTier = desiredTier;
+            adaptiveCandidateSince = now;
+            // Static pools converge only when the stable tier changes, never
+            // every few frames. This keeps weak-laptop fights smooth.
             lastStaticSync = 0;
             applyAdaptiveResolution();
           }
@@ -2475,11 +2516,13 @@ function PixiArenaRenderer({
           scale: Math.max(0.1, Number(data.scale || 1)),
         };
 
-        // Weak desktops keep the same premium terrain by default. If a real
-        // sustained GPU drop reaches emergency tier 2, terrain is temporarily
-        // hidden so combat stays responsive; it returns automatically at tier 0/1.
-        const shouldRenderTerrain = !config.disableExpensiveTerrain && adaptiveTier < 2;
-        terrainLayer.visible = shouldRenderTerrain;
+        // Terrain is a single cached sprite. Keep it stable for the whole
+        // match instead of toggling it under frame pressure; hiding/re-showing
+        // the world texture was the source of the visible background flash.
+        // Low-quality/mobile profiles can still start without terrain by
+        // explicit configuration, but a visible terrain never blinks.
+        const shouldRenderTerrain = !config.disableExpensiveTerrain;
+        setTerrainVisible(shouldRenderTerrain);
         if (shouldRenderTerrain) {
           try {
             syncWorldTerrain(
@@ -2532,9 +2575,9 @@ function PixiArenaRenderer({
             : config.maxStaticItems;
           const adaptiveItemCap =
             adaptiveTier === 2
-              ? Math.min(baseItemBudget, config.visualFirstWeakDesktop ? 64 : config.lowSpecDesktop ? 34 : 54)
+              ? Math.min(baseItemBudget, config.visualFirstWeakDesktop ? 48 : config.lowSpecDesktop ? 30 : 48)
               : adaptiveTier === 1
-                ? Math.min(baseItemBudget, config.visualFirstWeakDesktop ? 88 : config.lowSpecDesktop ? 42 : 92)
+                ? Math.min(baseItemBudget, config.visualFirstWeakDesktop ? 70 : config.lowSpecDesktop ? 38 : 78)
                 : baseItemBudget;
           const itemBudget = adaptiveItemCap;
           const orbBudget = Math.floor(itemBudget * 0.70);
