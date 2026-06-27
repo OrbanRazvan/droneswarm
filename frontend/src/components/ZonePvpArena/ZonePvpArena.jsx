@@ -57,7 +57,7 @@ const LOCAL_PROJECTILE_MAX_DISTANCE = 4200;
 const PROJECTILE_HIT_VISUAL_RADIUS = 118;
 const LOCAL_PROJECTILE_SPEED = 4.4;
 const FIRE_COOLDOWN = 3000;
-const BATTLE_PREPARE_DURATION = 10000; // 10-second peace phase before combat.
+const BATTLE_PREPARE_DURATION = 30000;
 const ORB_STABLE_TTL = 2400;
 const MINIMAP_STABLE_TTL = 8000;
 
@@ -183,8 +183,9 @@ function isConstrainedDesktopDevice() {
     ? Number(navigator.deviceMemory)
     : null;
 
-  // This is intentionally conservative. It catches older office laptops and
-  // integrated-GPU machines before their renderer starts producing a backlog.
+  // This only selects nearby-object budgets. The Pixi renderer now starts
+  // older office laptops in the premium visual profile and adapts from real
+  // frame time instead of permanently removing the background.
   return cores <= 4 || (memory !== null && memory <= 6);
 }
 
@@ -590,6 +591,43 @@ function getProjectileTravelDistance(projectile) {
   return Math.hypot((projectile.x || 0) - startX, (projectile.y || 0) - startY);
 }
 
+function getLocalFireCooldown(unit, now = performance.now()) {
+  let cooldown = FIRE_COOLDOWN;
+
+  if (unit?.rapidFireUntil && unit.rapidFireUntil > Date.now()) {
+    cooldown *= unit.attackCooldownMultiplier || 0.65;
+  }
+
+  if (unit?.overclockUntil && unit.overclockUntil > Date.now()) {
+    cooldown *= 0.5;
+  }
+
+  if (unit?.rotorCoreActive) {
+    cooldown *= 0.72;
+  }
+
+  // Same kill-streak attack cadence as Normal PvP.
+  cooldown *= Math.max(0.45, Number(unit?.killAttackSpeedMultiplier || 1));
+
+  return Math.max(420, Math.floor(cooldown));
+}
+
+function getLocalProjectileSpeed(unit) {
+  const rapidBonus =
+    unit?.rapidFireUntil && unit.rapidFireUntil > Date.now() ? 0.75 : 0;
+  const overclockBonus =
+    unit?.overclockUntil && unit.overclockUntil > Date.now() ? 1.25 : 0;
+
+  return (
+    (LOCAL_PROJECTILE_SPEED +
+      (unit?.projectileSpeedBonus || 0) +
+      rapidBonus +
+      overclockBonus) *
+    ZONE_BASE_ATTACK_DRONE_SPEED_MULTIPLIER *
+    Math.max(1, Number(unit?.attackDroneSpeedMultiplier || 1))
+  );
+}
+
 function projectileHitsAnyTarget(projectile, targets = []) {
   if (!projectile) return false;
 
@@ -606,6 +644,32 @@ function projectileHitsAnyTarget(projectile, targets = []) {
 
   return false;
 }
+
+function createLocalProjectile(unit, mouseWorldX, mouseWorldY, now) {
+  if (!unit || unit.alive === false || (unit.drones || 0) <= 0) return null;
+
+  const angle = Math.atan2(mouseWorldY - unit.y, mouseWorldX - unit.x);
+  const speed = getLocalProjectileSpeed(unit);
+  return {
+    id: `local-${unit.id || "me"}-${Math.round(now)}-${Math.random().toString(16).slice(2)}`,
+    ownerId: unit.id,
+    localOnly: true,
+    createdAt: now,
+    __seenAt: now,
+    x: unit.x + Math.cos(angle) * 120,
+    y: unit.y + Math.sin(angle) * 120,
+    startX: unit.x,
+    startY: unit.y,
+    vx: Math.cos(angle) * speed,
+    vy: Math.sin(angle) * speed,
+    angle,
+    skin: normalizeSkin(unit.skin || "cyan"),
+    pierceLeft: Math.max(1, unit.piercingShots || 1),
+    shieldBreaker: (unit.shieldBreakerShots || 0) > 0,
+    piercesShield: (unit.shieldBreakerShots || 0) > 0,
+  };
+}
+
 
 function getMoveVectorFromInput(input = {}) {
   let dx = 0;
@@ -934,11 +998,7 @@ function decodeZoneProjectileRow(row, meta = {}) {
   const ownerNetId = Number(row[1] || 0);
   return {
     ...(meta || {}),
-    // Keep the movement-map key permanently tied to netId. Metadata arrives
-    // later than transforms; changing to UUID mid-flight created two entries
-    // for the same physical attack drone.
-    id: zoneNetKey(netId),
-    sourceId: meta?.id || null,
+    id: meta?.id || zoneNetKey(netId),
     netId,
     ownerId: meta?.ownerId || zoneNetKey(ownerNetId),
     ownerNetId,
@@ -1265,6 +1325,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const attackPointerRef = useRef(null);
   const shieldPointerRef = useRef(null);
   const mobileAimDirRef = useRef({ x: 1, y: 0 });
+  const mobileAimLineRef = useRef(null);
+  const mobileAimCircleRef = useRef(null);
+  const mobileAimArrowRef = useRef(null);
 
   const worldRef = useRef({
     roomId: null,
@@ -1300,6 +1363,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const spectatorTargetRef = useRef(null);
   const remotePlayersRef = useRef(new Map());
   const projectilesRef = useRef(new Map());
+  const lastLocalProjectileAtRef = useRef(0);
   const stableOrbMapRef = useRef(new Map());
   const stableEnergyMapRef = useRef(new Map());
   const stableMinimapOrbMapRef = useRef(new Map());
@@ -2303,9 +2367,26 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         // vanish visually even when the server has not yet validated the pickup.
         worldRef.current.you = predictedYouRef.current || worldRef.current.you;
 
-        // Render only the authoritative attack drone emitted by the server.
-        // Creating a local prediction here used to produce a second drone for
-        // the shooter until the server transform arrived.
+        const wantsToAttack = Boolean(keysRef.current.mouseDown);
+        const localCooldown = getLocalFireCooldown(predicted, now);
+
+        if (
+          data.status === "playing" &&
+          !isBattlePrepareLocked(data) &&
+          wantsToAttack &&
+          predicted?.alive !== false &&
+          (predicted?.drones || 0) > 0 &&
+          now - lastLocalProjectileAtRef.current >= localCooldown
+        ) {
+          const mouseWorldX = predicted.x + (mouseRef.current.x - window.innerWidth / 2);
+          const mouseWorldY = predicted.y + (mouseRef.current.y - window.innerHeight / 2);
+          const localProjectile = createLocalProjectile(predicted, mouseWorldX, mouseWorldY, now);
+
+          if (localProjectile) {
+            projectilesRef.current.set(localProjectile.id, localProjectile);
+            lastLocalProjectileAtRef.current = now;
+          }
+        }
       }
 
       const me = predictedYouRef.current || data.you;
@@ -2362,12 +2443,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const incomingProjectiles = new Map(
         (data.projectiles || [])
           .filter((p) => p?.id || p?.netId)
-          .map((p) => {
-            const stableId = Number(p?.netId || 0) > 0
-              ? zoneNetKey(p.netId)
-              : String(p.id || "");
-            return [stableId, { ...p, id: stableId, sourceId: p.id || null }];
-          })
+          .map((p) => [p.id || zoneNetKey(p.netId), p])
       );
       for (const [id, movementProjectile] of movementProjectiles.entries()) {
         incomingProjectiles.set(id, {
@@ -2382,6 +2458,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       for (const [id, target] of incomingProjectiles.entries()) {
         const current = projectileMap.get(id) || target;
+
+        if (target.ownerId && target.ownerId === me?.id) {
+          continue;
+        }
 
         const error = Math.hypot(
           Number(target.x || 0) - Number(current.x ?? target.x ?? 0),
@@ -2453,17 +2533,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const liveCameraY = liveCameraSubject ? viewport.height / 2 - liveCameraSubject.y * liveCameraScale : 0;
 
       const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 980, liveCameraScale);
-      // Same close-range combat art for every device. Pixi adapts only the
-      // backbuffer/static update cadence, never the player/bot model tier.
-      const renderLimits = {
-        detailed: MAX_VISIBLE_REMOTE_PLAYERS,
-        total: MAX_VISIBLE_REMOTE_PLAYERS,
-        orbs: 140,
-        energy: 50,
-        cores: 9,
-        projectiles: 60,
-        simpleProjectiles: 0,
-      };
+      const renderLimits = mobilePerformanceRef.current
+        ? { detailed: 6, total: 50, orbs: 48, energy: 16, cores: 4, projectiles: 5, simpleProjectiles: 26 }
+        : constrainedDesktopRef.current
+          ? { detailed: 10, total: 60, orbs: 96, energy: 34, cores: 7, projectiles: 14, simpleProjectiles: 42 }
+          : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
       // Map insertion order is not distance order. Sort by the camera subject
       // so the nearest threats keep detailed shells and every other visible
@@ -2480,8 +2554,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         })
         .slice(0, renderLimits.total);
 
-      const detailedRemoteUnits = visibleRemoteUnits;
-      const simpleRemoteUnits = [];
+      const detailedRemoteUnits = visibleRemoteUnits.slice(0, renderLimits.detailed);
+      const simpleRemoteUnits = visibleRemoteUnits.slice(renderLimits.detailed);
       const livePlayers = detailedRemoteUnits.filter((player) => !player.isBot);
       const liveBots = detailedRemoteUnits.filter((player) => player.isBot);
 
@@ -2542,10 +2616,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldHeight,
         // Zone PvP is the 60-seat competitive mode: keep the world layer plain
         // so every GPU budget goes to drone/projectile transforms.
+        // Zone PvP shares the same premium space background as the good-desktop
+        // profile. Pixi hides it only temporarily if emergency frame pressure is measured.
         worldTheme: "premium-space-battle",
-        // Static pickups are now part of the low-end readability budget too.
-        // Renderer adapts further only when its measured frame time requires it.
-        staticItemBudget: 100,
+        staticItemBudget: mobilePerformanceRef.current ? 52 : 110,
         safeZoneRadius: zoneRadius,
         showZone: true,
         coreColorMap: coreColorMapRef.current,
@@ -2951,15 +3025,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const cameraX = cameraSubject ? viewport.width / 2 - cameraSubject.x * cameraScale : 0;
   const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y * cameraScale : 0;
   const bounds = getViewportBounds(cameraX, cameraY, viewport, 720, cameraScale);
-  const reactiveRenderLimits = {
-    detailed: MAX_VISIBLE_REMOTE_PLAYERS,
-    total: MAX_VISIBLE_REMOTE_PLAYERS,
-    orbs: 140,
-    energy: 50,
-    cores: 9,
-    projectiles: 60,
-    simpleProjectiles: 0,
-  };
+  const reactiveRenderLimits = isMobileControls
+    ? { detailed: 6, total: 50, orbs: 48, energy: 16, cores: 4, projectiles: 5, simpleProjectiles: 26 }
+    : constrainedDesktopRef.current
+      ? { detailed: 10, total: 60, orbs: 96, energy: 34, cores: 7, projectiles: 14, simpleProjectiles: 42 }
+      : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
   const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), reactiveRenderLimits.orbs);
   const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), reactiveRenderLimits.energy);
@@ -3001,8 +3071,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       skin: normalizeSkin(player.skin),
       isBot: Boolean(player.isBot),
     }));
-  const rendererDetailedUnits = rendererRemoteUnits;
-  const rendererSimpleUnits = [];
+  const rendererDetailedUnits = rendererRemoteUnits.slice(0, reactiveRenderLimits.detailed);
+  const rendererSimpleUnits = rendererRemoteUnits.slice(reactiveRenderLimits.detailed);
   const rendererPlayers = rendererDetailedUnits.filter((player) => !player.isBot);
   const rendererBots = rendererDetailedUnits.filter((player) => player.isBot);
 
@@ -3145,11 +3215,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         otherPlayerSize={112}
         otherPlayerQuality={0}
         liveDataRef={pixiLiveRef}
-        forceLowQuality={graphicsQuality === "low"}
+        // Weak laptops start with the premium desktop visuals. Pixi measures
+        // real frame time and lowers only far details if sustained pressure occurs.
+        forceLowQuality={graphicsQuality === "low" || isMobileControls}
         worldWidth={worldWidth}
         worldHeight={worldHeight}
         worldTheme="premium-space-battle"
-        staticItemBudget={100}
+        staticItemBudget={isRealMobileDevice() ? 52 : 110}
         safeZoneRadius={safeZoneRadius}
         showZone={true}
       />
@@ -3166,7 +3238,19 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         `}</style>
       )}
 
-      {/* Aim reticle removed: the only attack visual is the real server drone. */}
+      {you && !isDead && (!isMobileControls || mobileAttackActive) && (
+        <svg className={`aim-svg ${isMobileControls ? "mobile-aim-svg" : ""}`} aria-hidden="true">
+          <line className="aim-svg-line" ref={mobileAimLineRef} x1={viewport.width / 2} y1={viewport.height / 2} x2={mouseRef.current.x} y2={mouseRef.current.y} />
+          <circle className="aim-svg-circle" ref={mobileAimCircleRef} cx={mouseRef.current.x} cy={mouseRef.current.y} r="34" />
+          <g
+            className="aim-svg-arrow"
+            ref={mobileAimArrowRef}
+            transform={`translate(${mouseRef.current.x}, ${mouseRef.current.y}) rotate(${(Math.atan2(mouseRef.current.y - viewport.height / 2, mouseRef.current.x - viewport.width / 2) * 180) / Math.PI})`}
+          >
+            <path d="M -15 -11 L 18 0 L -15 11 L -7 0 Z" />
+          </g>
+        </svg>
+      )}
 
       <div className={`fps-counter ${renderData.fps < 50 ? "fps-low" : ""}`}>FPS: {renderData.fps || 60}</div>
 
