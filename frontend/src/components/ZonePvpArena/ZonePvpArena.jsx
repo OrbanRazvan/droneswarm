@@ -57,7 +57,7 @@ const LOCAL_PROJECTILE_MAX_DISTANCE = 4200;
 const PROJECTILE_HIT_VISUAL_RADIUS = 118;
 const LOCAL_PROJECTILE_SPEED = 4.4;
 const FIRE_COOLDOWN = 3000;
-const BATTLE_PREPARE_DURATION = 60000; // Original Zone PvP peace phase: 60 seconds before combat.
+const BATTLE_PREPARE_DURATION = 10000; // 10-second peace phase before combat.
 const ORB_STABLE_TTL = 2400;
 const MINIMAP_STABLE_TTL = 8000;
 
@@ -1096,7 +1096,7 @@ function getBattlePrepareRemainingMs(data = {}) {
   const prepareStartsAt = Number(data.battlePrepareStartsAt || 0);
   // `battlePrepareUntil` is intentionally absent until the five-second final
   // countdown finishes. This guard also keeps an out-of-order packet from
-  // showing the 60-second panel early.
+  // showing the 10-second panel early.
   if (prepareStartsAt > now) return 0;
 
   const explicitRemaining = Number(data.battlePrepareRemainingMs);
@@ -1117,7 +1117,7 @@ function isBattlePrepareLocked(data = {}) {
 }
 
 // Match found and the final 5..1 are locked too, even though the visible
-// 60-second PREPARE PHASE has not started yet.
+// 10-second PREPARE PHASE has not started yet.
 function isZoneCombatLocked(data = {}) {
   if (!data || data.status !== "playing") return true;
   if (!data.matchStartedAt) return true;
@@ -1345,7 +1345,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     phaseVersion: -1,
     status: "connecting",
     playerCount: 0,
-    minPlayers: 3,
+    minPlayers: 2,
     maxPlayers: 60,
     countdown: null,
     matchFoundUntil: null,
@@ -1571,6 +1571,23 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
               projectileMovementRef.current.delete(previousKey);
               projectileMovementRef.current.set(currentKey, { ...temporary, ...projectile, id: currentKey });
             }
+
+            // The transform stream can arrive before the metadata packet. The
+            // old code migrated only projectileMovementRef, leaving the already
+            // rendered temporary key in projectilesRef. That produced one mini
+            // drone under zone-net:<id> plus the same mini drone under its UUID.
+            const renderedTemporary = projectilesRef.current.get(previousKey);
+            if (renderedTemporary) {
+              const renderedCanonical = projectilesRef.current.get(currentKey);
+              projectilesRef.current.delete(previousKey);
+              projectilesRef.current.set(currentKey, {
+                ...renderedTemporary,
+                ...renderedCanonical,
+                ...projectile,
+                id: currentKey,
+                localOnly: false,
+              });
+            }
           }
         }
       }
@@ -1602,7 +1619,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         );
       }
 
-      // The server owns MATCH FOUND, the final 5..1, and the full 60-second
+      // The server owns MATCH FOUND, the final 5..1, and the 10-second
       // peace period. Cache only an already-started PREPARE PHASE locally so
       // packet jitter cannot turn the final countdown into BATTLE BEGIN.
       if (state?.status === "playing") {
@@ -2611,7 +2628,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         // Zone PvP shares the same premium space background as the good-desktop
         // profile. Pixi hides it only temporarily if emergency frame pressure is measured.
         worldTheme: "premium-space-battle",
-        staticItemBudget: mobilePerformanceRef.current ? 46 : constrainedDesktopRef.current ? 62 : 110,
+        staticItemBudget: mobilePerformanceRef.current ? 48 : constrainedDesktopRef.current ? 86 : 110,
         safeZoneRadius: zoneRadius,
         showZone: true,
         coreColorMap: coreColorMapRef.current,
@@ -3018,12 +3035,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y * cameraScale : 0;
   const bounds = getViewportBounds(cameraX, cameraY, viewport, 720, cameraScale);
   const reactiveRenderLimits = isMobileControls
-    ? { detailed: 6, total: 44, orbs: 42, energy: 14, cores: 4, projectiles: 5, simpleProjectiles: 22 }
+    ? { detailed: 8, total: 46, orbs: 48, energy: 16, cores: 4, projectiles: 6, simpleProjectiles: 24 }
     : constrainedDesktopRef.current
-      // Keep premium drones nearby, but reduce far objects and static loot
-      // first on older integrated GPUs.
-      ? { detailed: 7, total: 44, orbs: 64, energy: 22, cores: 5, projectiles: 8, simpleProjectiles: 28 }
-      : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
+      // Older PCs now keep premium animated drones for the entire nearby fight.
+      // We reduce distant loot first; Pixi adapts resolution only when real frame
+      // time requires it instead of pre-emptively replacing neighbours with dots.
+      ? { detailed: 38, total: 56, orbs: 86, energy: 30, cores: 7, projectiles: 16, simpleProjectiles: 30 }
+      : { detailed: 60, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
   const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), reactiveRenderLimits.orbs);
   const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), reactiveRenderLimits.energy);
@@ -3038,12 +3056,30 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       return ax * ax + ay * ay - (bx * bx + by * by);
     })
     .slice(0, reactiveRenderLimits.total);
-  const visibleProjectiles = [...(renderData.projectiles || [])]
-    .filter((projectile) => isVisible(projectile, bounds, 180))
-    .slice(0, reactiveRenderLimits.projectiles);
-  const visibleSimpleProjectiles = [...(renderData.projectiles || [])]
-    .filter((projectile) => isVisible(projectile, bounds, 180))
-    .slice(reactiveRenderLimits.projectiles, reactiveRenderLimits.projectiles + reactiveRenderLimits.simpleProjectiles);
+  // A Zone transform may first use zone-net:<id> and later receive its UUID.
+  // Keep one canonical projectile in the renderer even while the metadata packet
+  // and transform packet cross on a slow device.
+  const uniqueProjectileMap = new Map();
+  for (const projectile of renderData.projectiles || []) {
+    if (!projectile) continue;
+    const netId = Number(projectile.netId || 0);
+    const metadata = netId > 0 ? zoneProjectileMetaRef.current.get(netId) : null;
+    const key = String(metadata?.id || projectile.id || (netId > 0 ? zoneNetKey(netId) : ""));
+    if (!key) continue;
+    const previous = uniqueProjectileMap.get(key);
+    const previousSeenAt = Number(previous?.__seenAt || previous?.createdAt || 0);
+    const nextSeenAt = Number(projectile?.__seenAt || projectile?.createdAt || 0);
+    if (!previous || nextSeenAt >= previousSeenAt) {
+      uniqueProjectileMap.set(key, { ...previous, ...projectile, id: key, localOnly: false });
+    }
+  }
+  const uniqueProjectiles = [...uniqueProjectileMap.values()]
+    .filter((projectile) => isVisible(projectile, bounds, 180));
+  const visibleProjectiles = uniqueProjectiles.slice(0, reactiveRenderLimits.projectiles);
+  const visibleSimpleProjectiles = uniqueProjectiles.slice(
+    reactiveRenderLimits.projectiles,
+    reactiveRenderLimits.projectiles + reactiveRenderLimits.simpleProjectiles,
+  );
 
   const rendererPlayer = isDead && spectatorTarget
     ? {
@@ -3283,7 +3319,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldWidth={worldWidth}
         worldHeight={worldHeight}
         worldTheme="premium-space-battle"
-        staticItemBudget={isRealMobileDevice() ? 46 : constrainedDesktopRef.current ? 62 : 110}
+        staticItemBudget={isRealMobileDevice() ? 48 : constrainedDesktopRef.current ? 86 : 110}
         safeZoneRadius={safeZoneRadius}
         showZone={true}
       />
