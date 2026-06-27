@@ -176,10 +176,10 @@ function getRendererDeviceProfile(forceLowQuality = false) {
     cores <= 4 || (deviceMemory !== null && deviceMemory <= 8)
   );
 
-  // `forceLowQuality` is a player preference and must not misclassify a phone
-  // as a desktop. Keeping the profiles distinct makes the cheap mobile path
-  // predictable and avoids a huge resize/rebuild when orientation changes.
-  const lowSpecDesktop = Boolean(!mobile && (weakDesktop || forceLowQuality));
+  // Hardware heuristics do not downgrade the visual identity. Every device
+  // starts with the premium unit model; only the explicit in-game low setting
+  // requests the cheaper renderer profile.
+  const lowSpecDesktop = Boolean(!mobile && forceLowQuality);
   const forcedMobileQuality = Boolean(mobile && forceLowQuality);
 
   return {
@@ -196,34 +196,28 @@ function getRendererDeviceProfile(forceLowQuality = false) {
 
 function getRendererConfig(forceLowQuality) {
   const device = getRendererDeviceProfile(forceLowQuality);
-  const lowSpec = device.weakMobile || device.lowSpecDesktop;
-  const lightMobile = device.forcedMobileQuality && !device.weakMobile;
+  const manualLowQuality = Boolean(forceLowQuality);
+  const dpr = Math.max(1, Number(device.dpr || 1));
 
-  // Low-end no longer means "dots only". We keep the nearby combat scene
-  // readable (real drone silhouettes + nearby loot), then let the adaptive
-  // tier reduce resolution/effects only when the measured frame time demands it.
-  const resolution = device.lowSpecDesktop
-    ? 0.72
-    : device.weakMobile
-      ? 0.74
-      : lightMobile
-        ? 0.90
-        : Math.min(1.35, device.dpr);
+  // Preserve one visual language everywhere: complete drone chassis, rotor
+  // motion, nearby items and space background. Performance adaptation is
+  // resolution/static cadence, not replacing units with points.
+  const resolution = manualLowQuality
+    ? Math.min(0.80, dpr)
+    : Math.min(1.10, dpr);
 
   return {
     ...device,
     resolution,
-    antialias: !lowSpec && !lightMobile,
-    // Nearby drones stay premium. All remaining units use the lightweight
-    // quadcopter silhouette below, not circles/points.
-    maxStaticItems: device.lowSpecDesktop ? 76 : device.weakMobile ? 62 : lightMobile ? 76 : 120,
-    maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : lightMobile ? 7 : MAX_RENDERED_PLAYERS,
-    maxSimplePlayers: device.lowSpecDesktop ? 56 : device.weakMobile ? 52 : lightMobile ? 54 : 60,
-    maxProjectiles: device.lowSpecDesktop ? 5 : device.weakMobile ? 4 : lightMobile ? 7 : MAX_RENDERED_PROJECTILES,
-    maxSimpleProjectiles: device.lowSpecDesktop ? 34 : device.weakMobile ? 28 : lightMobile ? 32 : 48,
-    staticSyncInterval: device.lowSpecDesktop ? 340 : device.weakMobile ? 420 : lightMobile ? 280 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: device.lowSpecDesktop ? 5 : device.weakMobile ? 6 : lightMobile ? 3 : 1,
-    disableExpensiveTerrain: Boolean(device.lowSpecDesktop || device.weakMobile || lightMobile),
+    antialias: !manualLowQuality,
+    maxStaticItems: manualLowQuality ? 80 : 120,
+    maxPlayers: MAX_RENDERED_PLAYERS,
+    maxSimplePlayers: 0,
+    maxProjectiles: MAX_RENDERED_PROJECTILES,
+    maxSimpleProjectiles: 0,
+    staticSyncInterval: manualLowQuality ? 220 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: manualLowQuality ? 2 : 1,
+    disableExpensiveTerrain: false,
   };
 }
 
@@ -875,28 +869,18 @@ function createSimpleProjectileVisual(resources) {
 }
 
 function createProjectileVisual(resources) {
-  // Launched attack drone: a miniature drone with a bright skin-specific
-  // lock-on halo, plasma vector and spinning rotors. All parts use shared
-  // graphics contexts and only transform per frame.
+  // A fired attack drone is the same drone artwork as the main craft, scaled
+  // down. No separate lock-on halo, arrow, jet or duplicate sprite exists.
   const root = new PIXI.Container();
   root.eventMode = "none";
 
-  const aura = new PIXI.Graphics(resources.projectileAuraContexts.cyan);
-  aura.eventMode = "none";
-  root.addChild(aura);
-
-  const jet = new PIXI.Graphics(resources.projectileJetContexts.cyan);
-  jet.eventMode = "none";
-  root.addChild(jet);
-
-  const body = new PIXI.Graphics(resources.miniContexts.cyan);
+  const body = new PIXI.Graphics(resources.droneContexts.cyan);
   body.eventMode = "none";
   root.addChild(body);
 
-  const rotorSpins = MINI_ROTOR_POINTS.map(([x, y]) => {
+  const rotorSpins = MAIN_ROTOR_POINTS.map(([x, y]) => {
     const rotor = new PIXI.Graphics(resources.rotorSpinContexts.cyan);
     rotor.position.set(x, y);
-    rotor.scale.set(0.44);
     rotor.eventMode = "none";
     root.addChild(rotor);
     return rotor;
@@ -904,8 +888,6 @@ function createProjectileVisual(resources) {
 
   return {
     root,
-    aura,
-    jet,
     body,
     rotorSpins,
     skin: "cyan",
@@ -1266,7 +1248,7 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
   const safeEffectTier = clamp(Number(effectTier || 0), 0, 2);
   // Compact remote shells must not keep aura, engine and rotor animation alive
   // on a weak GPU. Their body still follows every render frame exactly.
-  const reducedRemoteVisual = !isPlayer && (compact || safeEffectTier >= 1);
+  const reducedRemoteVisual = false;
   const glowStrength =
     (isPlayer ? 0.72 : 0.50) *
     (safeEffectTier === 2 && !isPlayer ? 0.62 : 1);
@@ -1437,9 +1419,7 @@ function updateProjectileVisual(visual, projectile, resources, now, compact = fa
   const skin = normalizeSkin(projectile.skin);
   if (visual.skin !== skin) {
     visual.skin = skin;
-    visual.aura.context = resources.projectileAuraContexts[skin] || resources.projectileAuraContexts.cyan;
-    visual.jet.context = resources.projectileJetContexts[skin] || resources.projectileJetContexts.cyan;
-    visual.body.context = resources.miniContexts[skin] || resources.miniContexts.cyan;
+    visual.body.context = resources.droneContexts[skin] || resources.droneContexts.cyan;
     visual.rotorSpins.forEach((rotor) => {
       rotor.context = resources.rotorSpinContexts[skin] || resources.rotorSpinContexts.cyan;
     });
@@ -1450,40 +1430,27 @@ function updateProjectileVisual(visual, projectile, resources, now, compact = fa
       Math.atan2(Number(projectile.vy || 0), Number(projectile.vx || 1)),
   );
 
-  // Mini drone artwork faces up in local space; add 90° so its nose points
-  // precisely along its real flight vector (angle 0 = moving right).
-  const flightScale = projectile.pierceLeft > 1 ? 1.24 : 1.12;
-  const phase = now * 0.016 + visual.flightSeed;
-  const hover = Math.sin(phase * 1.12) * 0.72;
-  const pulse = 1 + Math.sin(phase * 1.45) * 0.08;
+  // Same complete four-rotor silhouette as a player drone, only scaled down
+  // for flight. `compact` is intentionally ignored so weak devices never see
+  // another projectile shape.
+  const flightScale = projectile.pierceLeft > 1 ? 0.52 : 0.46;
+  const phase = now * 0.010 + visual.flightSeed;
+  const hover = Math.sin(phase * 1.15) * 0.55;
 
   visual.root.visible = true;
   visual.root.position.set(Number(projectile.x || 0), Number(projectile.y || 0));
   visual.root.rotation = heading + Math.PI * 0.5;
   visual.root.scale.set(flightScale);
-  visual.root.alpha = projectile.localOnly ? 0.92 : 1;
+  visual.root.alpha = 1;
+  visual.body.position.set(0, hover);
 
-  visual.aura.visible = !compact;
-  visual.jet.visible = !compact;
-  if (!compact) {
-    visual.aura.rotation = -phase * 0.65;
-    visual.aura.scale.set(pulse * (projectile.pierceLeft > 1 ? 1.12 : 1));
-    visual.aura.alpha = projectile.localOnly ? 0.68 : 0.84;
-
-    visual.jet.position.set(0, 19);
-    visual.jet.scale.set(0.78 + Math.sin(phase * 1.7) * 0.07, 0.92 + Math.sin(phase * 2.1) * 0.16);
-    visual.jet.alpha = projectile.shieldBreaker || projectile.piercesShield ? 1 : 0.82;
-  }
-
-  visual.body.position.set(0, compact ? 0 : hover);
   visual.rotorSpins.forEach((rotor, index) => {
     const direction = index % 2 === 0 ? 1 : -1;
-    rotor.visible = !compact;
-    if (!compact) {
-      rotor.rotation = direction * now * 0.032 + index * Math.PI * 0.5;
-      rotor.alpha = 0.78;
-    }
+    rotor.visible = true;
+    rotor.rotation = direction * now * 0.032 + index * Math.PI * 0.5;
+    rotor.alpha = 0.78;
   });
+
   visual.lastSeenAt = now;
 }
 
@@ -2377,11 +2344,7 @@ function PixiArenaRenderer({
           const baseItemBudget = hasRequestedStaticBudget
             ? clamp(Math.round(requestedStaticBudget), 0, staticBudgetCeiling)
             : config.maxStaticItems;
-          const adaptiveItemCap =
-            adaptiveTier === 2 ? Math.min(baseItemBudget, config.lowSpecDesktop ? 34 : 54) :
-            adaptiveTier === 1 ? Math.min(baseItemBudget, config.lowSpecDesktop ? 42 : 92) :
-            baseItemBudget;
-          const itemBudget = adaptiveItemCap;
+          const itemBudget = baseItemBudget;
           const orbBudget = Math.floor(itemBudget * 0.70);
           const energyBudget = Math.floor(itemBudget * 0.24);
           const coreBudget = Math.max(2, itemBudget - orbBudget - energyBudget);
@@ -2422,12 +2385,9 @@ function PixiArenaRenderer({
         }
 
         const playerSource = data.player && data.player.alive !== false ? [data.player] : [];
-        // Player keeps the complete visual treatment. Remote/bot effects scale
-        // down only when the actual device profile or adaptive frame budget
-        // needs it; gameplay simulation remains untouched.
-        // Keep nearby remote drones visually close to desktop quality at tier 0.
-        // Effects are removed only after actual frame-time pressure is detected.
-        const remoteEffectTier = adaptiveTier;
+        // Visual parity: frame pressure may lower backbuffer/static work, but
+        // it never changes a player, bot or projectile into a different model.
+        const remoteEffectTier = 0;
         syncUnitPool({
           pool: playerPool,
           source: playerSource,
@@ -2438,11 +2398,7 @@ function PixiArenaRenderer({
           now,
           isPlayer: true,
         });
-        const fullUnitCap = adaptiveTier === 2
-          ? Math.min(config.maxPlayers, config.lowSpecDesktop || config.weakMobile ? 2 : 3)
-          : adaptiveTier === 1
-            ? Math.min(config.maxPlayers, config.lowSpecDesktop || config.weakMobile ? 3 : 5)
-            : config.maxPlayers;
+        const fullUnitCap = config.maxPlayers;
         const fullRemoteIds = syncUnitPool({
           pool: remotePool,
           source: data.players,
@@ -2451,7 +2407,7 @@ function PixiArenaRenderer({
           bounds,
           max: fullUnitCap,
           now,
-          compact: adaptiveTier > 0,
+          compact: false,
           effectTier: remoteEffectTier,
         });
         const fullBotIds = syncUnitPool({
@@ -2462,7 +2418,7 @@ function PixiArenaRenderer({
           bounds,
           max: fullUnitCap,
           now,
-          compact: adaptiveTier > 0,
+          compact: false,
           effectTier: remoteEffectTier,
         });
         const fullEntityIds = new Set([...fullRemoteIds, ...fullBotIds]);
@@ -2474,15 +2430,11 @@ function PixiArenaRenderer({
           resources,
           parent: entitiesLayer,
           bounds,
-          max: config.maxSimplePlayers,
+          max: 0,
           now,
           excludeIds: fullEntityIds,
         });
-        const fullProjectileCap = adaptiveTier === 2
-          ? Math.min(config.maxProjectiles, config.lowSpecDesktop || config.weakMobile ? 2 : 3)
-          : adaptiveTier === 1
-            ? Math.min(config.maxProjectiles, config.lowSpecDesktop || config.weakMobile ? 3 : 5)
-            : config.maxProjectiles;
+        const fullProjectileCap = config.maxProjectiles;
         const fullProjectileIds = syncProjectilePool({
           pool: projectilePool,
           source: data.projectiles,
@@ -2491,7 +2443,7 @@ function PixiArenaRenderer({
           bounds,
           max: fullProjectileCap,
           now,
-          compact: adaptiveTier > 0,
+          compact: false,
         });
         syncProjectilePool({
           pool: simpleProjectilePool,
@@ -2499,7 +2451,7 @@ function PixiArenaRenderer({
           resources,
           parent: projectilesLayer,
           bounds,
-          max: config.maxSimpleProjectiles,
+          max: 0,
           now,
           compact: true,
           simple: true,

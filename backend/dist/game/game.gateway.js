@@ -60,7 +60,7 @@ const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 60;
 const ZONE_PVP_ROOM_MAX_PLAYERS = 60;
 const ZONE_PVP_ROOM_MIN_PLAYERS = 2;
 const ZONE_PVP_START_COUNTDOWN_MS = 5000;
-const ZONE_PVP_BATTLE_PREPARE_DURATION = 30000;
+const ZONE_PVP_BATTLE_PREPARE_DURATION = 10000;
 const ZONE_PVP_ZONE_SHRINK_DURATION = 420000;
 const ZONE_PVP_ZONE_DAMAGE = 10;
 const ZONE_PVP_ZONE_DAMAGE_INTERVAL = 1000;
@@ -2149,6 +2149,11 @@ let GameGateway = class GameGateway {
             return;
         if ((player.drones || 0) <= 0)
             return;
+        if (room?.zonePvpMode &&
+            (room.projectiles || []).some((projectile) => projectile &&
+                String(projectile.ownerId || "") === String(player.id || ""))) {
+            return;
+        }
         const cooldown = this.getFireCooldown(player, now);
         if (now - player.lastFireAt < cooldown)
             return;

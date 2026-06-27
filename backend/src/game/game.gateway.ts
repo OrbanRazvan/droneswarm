@@ -85,7 +85,7 @@ const ZONE_PVP_ROOM_MAX_PLAYERS = 60;
 // Bots never unlock the lobby; they are created only when the admission window ends.
 const ZONE_PVP_ROOM_MIN_PLAYERS = 2; // TEST: revert to 3 before public launch.
 const ZONE_PVP_START_COUNTDOWN_MS = 5000;
-const ZONE_PVP_BATTLE_PREPARE_DURATION = 30000;
+const ZONE_PVP_BATTLE_PREPARE_DURATION = 10000; // 10-second peace phase before combat.
 const ZONE_PVP_ZONE_SHRINK_DURATION = 420000;
 const ZONE_PVP_ZONE_DAMAGE = 10;
 const ZONE_PVP_ZONE_DAMAGE_INTERVAL = 1000;
@@ -2743,6 +2743,21 @@ export class GameGateway {
   tryFireProjectile(room, player, now) {
     if (this.isBattlePrepareLocked(room, now)) return;
     if ((player.drones || 0) <= 0) return;
+
+    // Zone PvP permits exactly one active attack drone per owner. This is
+    // server-authoritative, so held input, bot replans or a slow client cannot
+    // create a second visual/physical attack drone before the first resolves.
+    if (
+      room?.zonePvpMode &&
+      (room.projectiles || []).some(
+        (projectile: any) =>
+          projectile &&
+          String(projectile.ownerId || "") === String(player.id || ""),
+      )
+    ) {
+      return;
+    }
+
     const cooldown = this.getFireCooldown(player, now);
     if (now - player.lastFireAt < cooldown) return;
     const targetX = player.input.mouseX || player.x + 1;
