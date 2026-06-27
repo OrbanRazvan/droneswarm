@@ -91,15 +91,19 @@ const NORMAL_STATE_INTERVAL_CROWDED_MS = 33;
 const NORMAL_STATE_INTERVAL_HEAVY_MS = 50;
 const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
 const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
-const ZONE_STATE_INTERVAL_MS = 220;
-const ZONE_STATE_INTERVAL_CROWDED_MS = 240;
-const ZONE_STATE_INTERVAL_HEAVY_MS = 260;
-const ZONE_ENTITY_DEFINITION_INTERVAL_MS = 850;
-const ZONE_PROJECTILE_DEFINITION_INTERVAL_MS = 500;
-const ZONE_TRANSFORM_INTERVAL_MS = 33;
+const ZONE_STATE_INTERVAL_MS = 360;
+const ZONE_STATE_INTERVAL_CROWDED_MS = 440;
+const ZONE_STATE_INTERVAL_HEAVY_MS = 520;
+const ZONE_ENTITY_DEFINITION_INTERVAL_MS = 1500;
+const ZONE_PROJECTILE_DEFINITION_INTERVAL_MS = 800;
+const ZONE_TRANSFORM_INTERVAL_MS = 25;
 const ZONE_TRANSFORM_PLAYER_LIMIT = 60;
 const ZONE_TRANSFORM_PROJECTILE_LIMIT = 48;
 const ZONE_TRANSFORM_RANGE_PADDING = 900;
+const ZONE_WORLD_DELTA_INTERVAL_MS = 250;
+const ZONE_LOOT_TICK_INTERVAL_MS = 50;
+const ZONE_COLLISION_TICK_INTERVAL_MS = 34;
+const ZONE_ITEM_MAINTENANCE_INTERVAL_MS = 260;
 const ZONE_TRANSFORM_PROTOCOL_VERSION = 1;
 const ZONE_TRANSFORM_PLAYER_BYTES = 32;
 const ZONE_TRANSFORM_PROJECTILE_BYTES = 28;
@@ -1472,6 +1476,21 @@ let GameGateway = class GameGateway {
         player.lastInputReceivedAt = now;
         player.lastSeenAt = now;
     }
+    handleZonePvpInputStop(client, payload) {
+        const room = this.getZonePvpRoomBySocket(client.id);
+        const player = room?.players.get(client.id);
+        if (!room || !player || player.isBot)
+            return;
+        const now = Date.now();
+        player.input = {};
+        player.lastSeenAt = now;
+        player.lastInputReceivedAt = now;
+        const seq = Number(payload?.seq || 0);
+        if (Number.isFinite(seq) && seq > 0) {
+            player.lastReceivedInputSeq = Math.max(Number(player.lastReceivedInputSeq || 0), seq);
+            player.lastProcessedInputSeq = Math.max(Number(player.lastProcessedInputSeq || 0), seq);
+        }
+    }
     startLoop() {
         if (this.loop)
             return;
@@ -1554,13 +1573,22 @@ let GameGateway = class GameGateway {
                     this.updateZonePvpBots(room, now, zoneRadius);
                     this.updatePlayers(room, now, zoneRadius, deltaFrames);
                     this.applyZonePvpZoneDamage(room, now, zoneRadius);
-                    this.handleBodyCollisions(room, now, zoneRadius);
-                    this.collectOrbs(room, zoneRadius);
-                    this.collectEnergy(room, zoneRadius);
-                    this.collectCores(room, zoneRadius);
                     this.updateProjectiles(room, deltaFrames, now);
-                    this.maintainWorldItems(room, zoneRadius, now);
-                    this.cleanupCombatEvents(room, now);
+                    if (!room.lastZoneCollisionAt || now - room.lastZoneCollisionAt >= ZONE_COLLISION_TICK_INTERVAL_MS) {
+                        room.lastZoneCollisionAt = now;
+                        this.handleBodyCollisions(room, now, zoneRadius);
+                    }
+                    if (!room.lastZoneLootAt || now - room.lastZoneLootAt >= ZONE_LOOT_TICK_INTERVAL_MS) {
+                        room.lastZoneLootAt = now;
+                        this.collectOrbs(room, zoneRadius);
+                        this.collectEnergy(room, zoneRadius);
+                        this.collectCores(room, zoneRadius);
+                    }
+                    if (!room.lastZoneItemMaintenanceAt || now - room.lastZoneItemMaintenanceAt >= ZONE_ITEM_MAINTENANCE_INTERVAL_MS) {
+                        room.lastZoneItemMaintenanceAt = now;
+                        this.maintainWorldItems(room, zoneRadius, now);
+                        this.cleanupCombatEvents(room, now);
+                    }
                     this.updateZonePvpWinCondition(room, now);
                 }
                 const broadcastInterval = room.players.size >= PVP_HEAVY_STATE_THRESHOLD
@@ -1580,6 +1608,7 @@ let GameGateway = class GameGateway {
                         this.broadcastZonePvpTransforms(room, now);
                     }
                 }
+                this.flushZonePvpWorldDelta(room, now);
                 this.cleanupZonePvpRoom(room, now);
             }
         }, 1000 / 60);
@@ -1615,6 +1644,8 @@ let GameGateway = class GameGateway {
         }
     }
     updateZonePvpRoomStatus(room, now) {
+        if (room.roundStarted || room.status === "playing" || room.status === "finished")
+            return;
         if (room.status !== "countdown")
             return;
         if (this.getZoneHumanPlayerCount(room) < ZONE_PVP_ROOM_MIN_PLAYERS) {
@@ -1630,6 +1661,7 @@ let GameGateway = class GameGateway {
             const zoneRadius = this.getZonePvpZoneRadius(room);
             this.fillZonePvpBots(room, zoneRadius);
             room.status = "playing";
+            room.roundStarted = true;
             room.locked = true;
             room.countdownStartedAt = null;
             room.matchStartedAt = now;
@@ -1654,7 +1686,7 @@ let GameGateway = class GameGateway {
             let dx = 0;
             let dy = 0;
             const input = player.input || {};
-            const inputFresh = !player.lastInputReceivedAt || now - player.lastInputReceivedAt <= 750;
+            const inputFresh = player.isBot || !player.lastInputReceivedAt || now - player.lastInputReceivedAt <= 280;
             if (!inputFresh) {
                 player.input = {};
             }
@@ -2334,6 +2366,10 @@ let GameGateway = class GameGateway {
     emitWorldItemDelta(room, payload, now = Date.now()) {
         if (!room?.id)
             return;
+        if (room.zonePvpMode) {
+            this.queueZonePvpWorldDelta(room, payload, now);
+            return;
+        }
         const prefix = this.getRoomEventPrefix(room);
         const removedOrbIds = Array.isArray(payload?.removedOrbIds) ? payload.removedOrbIds : [];
         const removedEnergyIds = Array.isArray(payload?.removedEnergyIds) ? payload.removedEnergyIds : [];
@@ -2341,6 +2377,47 @@ let GameGateway = class GameGateway {
         if (!removedOrbIds.length && !removedEnergyIds.length && !removedCoreIds.length)
             return;
         this.server.to(room.id).compress(false).emit(`${prefix}:world-delta`, {
+            serverTime: now,
+            removedOrbIds,
+            removedEnergyIds,
+            removedCoreIds,
+        });
+    }
+    queueZonePvpWorldDelta(room, payload, now = Date.now()) {
+        if (!room)
+            return;
+        const pending = room.pendingZoneWorldDelta || {
+            removedOrbIds: new Set(),
+            removedEnergyIds: new Set(),
+            removedCoreIds: new Set(),
+            queuedAt: now,
+        };
+        for (const id of payload?.removedOrbIds || [])
+            pending.removedOrbIds.add(String(id));
+        for (const id of payload?.removedEnergyIds || [])
+            pending.removedEnergyIds.add(String(id));
+        for (const id of payload?.removedCoreIds || [])
+            pending.removedCoreIds.add(String(id));
+        room.pendingZoneWorldDelta = pending;
+    }
+    flushZonePvpWorldDelta(room, now = Date.now()) {
+        if (!room?.zonePvpMode)
+            return;
+        const pending = room.pendingZoneWorldDelta;
+        if (!pending)
+            return;
+        if (now - Number(room.lastZoneWorldDeltaAt || 0) < ZONE_WORLD_DELTA_INTERVAL_MS)
+            return;
+        const removedOrbIds = [...pending.removedOrbIds];
+        const removedEnergyIds = [...pending.removedEnergyIds];
+        const removedCoreIds = [...pending.removedCoreIds];
+        if (!removedOrbIds.length && !removedEnergyIds.length && !removedCoreIds.length) {
+            room.pendingZoneWorldDelta = null;
+            return;
+        }
+        room.lastZoneWorldDeltaAt = now;
+        room.pendingZoneWorldDelta = null;
+        this.server.to(room.id).volatile.compress(false).emit("zone-pvp:world-delta", {
             serverTime: now,
             removedOrbIds,
             removedEnergyIds,
@@ -3320,6 +3397,12 @@ let GameGateway = class GameGateway {
             locked: false,
             phaseVersion: 0,
             roundId: null,
+            roundStarted: false,
+            lastZoneCollisionAt: 0,
+            lastZoneLootAt: 0,
+            lastZoneItemMaintenanceAt: 0,
+            lastZoneWorldDeltaAt: 0,
+            pendingZoneWorldDelta: null,
             players: new Map(),
             orbs: Array.from({ length: MAX_ORBS }, () => this.createOrb(ZONE_START_RADIUS)),
             energyCells: Array.from({ length: MAX_ENERGY_CELLS }, () => this.createEnergyCell(ZONE_START_RADIUS)),
@@ -4123,6 +4206,14 @@ __decorate([
     __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
     __metadata("design:returntype", void 0)
 ], GameGateway.prototype, "handleZonePvpInput", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)("zone-pvp:input-stop"),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", void 0)
+], GameGateway.prototype, "handleZonePvpInputStop", null);
 exports.GameGateway = GameGateway = __decorate([
     (0, websockets_1.WebSocketGateway)({
         cors: {

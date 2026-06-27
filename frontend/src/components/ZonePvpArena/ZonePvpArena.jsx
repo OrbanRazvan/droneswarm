@@ -34,10 +34,13 @@ const SELF_IDLE_FREEZE_DISTANCE = 360;
 // Remote transforms arrive in a tiny binary lane at 30 Hz and are rendered at the
 // display refresh rate. A 38 ms interpolation window protects against packet jitter
 // without the old 80-150 ms visual delay from full JSON snapshots.
-const REMOTE_SMOOTHING = 34;
+// Direct WebSocket transforms are kept only a few milliseconds behind.  The
+// velocity field carries the visible movement between packets, so an old phone
+// sees continuous motion rather than a 30 Hz step or a large visual delay.
+const REMOTE_SMOOTHING = 42;
 const REMOTE_PREDICTION = 1.0;
-const REMOTE_HARD_SNAP_DISTANCE = 520;
-const REMOTE_MAX_EXTRAPOLATE_MS = 150;
+const REMOTE_HARD_SNAP_DISTANCE = 900;
+const REMOTE_MAX_EXTRAPOLATE_MS = 180;
 const ZONE_BINARY_PROTOCOL_VERSION = 1;
 const ZONE_BINARY_PLAYER_BYTES = 32;
 const ZONE_BINARY_PROJECTILE_BYTES = 28;
@@ -66,9 +69,9 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 // Multiplayer modern sync
 // Client-side prediction + server reconciliation + remote snapshot buffer.
 const INPUT_SEND_INTERVAL_MS = 33;
-const INPUT_HEARTBEAT_MS = 300;
-const SNAPSHOT_INTERPOLATION_DELAY_MS = 45;
-const SNAPSHOT_BUFFER_TTL_MS = 620;
+const INPUT_HEARTBEAT_MS = 220;
+const SNAPSHOT_INTERPOLATION_DELAY_MS = 16;
+const SNAPSHOT_BUFFER_TTL_MS = 420;
 
 // Keep PvP desktop framing exactly locked to BattleRoyaleMode.
 // BattleRoyaleMode uses 0.72 on desktop; do not change only one mode or the
@@ -889,7 +892,7 @@ function appendRemoteSnapshot(buffer = [], snapshot, receivedAt, serverNow = 0) 
 
   return [...buffer, merged]
     .filter((entry) => receivedAt - Number(entry?.__receivedAt || receivedAt) <= SNAPSHOT_BUFFER_TTL_MS)
-    .slice(-32);
+    .slice(-8);
 }
 
 function interpolateSnapshotBuffer(buffer = [], renderTimelineTime) {
@@ -995,7 +998,19 @@ function shouldAcceptZonePhase(current, incoming = {}) {
   const incomingRank = getZoneStatusRank(incoming?.status);
   const currentRank = getZoneStatusRank(current?.status);
 
-  // A real new room is a new match and must be accepted.
+  // Once a round has started, a retry/reconnect packet from a fresh lobby
+  // must never replace the live round on screen. Only an explicit Exit creates
+  // a fresh component and therefore a fresh phase ref.
+  if (
+    currentRank >= ZONE_STATUS_RANK.playing &&
+    incomingRoomId &&
+    currentRoomId &&
+    incomingRoomId !== currentRoomId
+  ) {
+    return false;
+  }
+
+  // Before the match starts a different room is a valid new lobby.
   if (incomingRoomId && currentRoomId && incomingRoomId !== currentRoomId) {
     return true;
   }
@@ -1116,7 +1131,12 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const lastInputSentAtRef = useRef(performance.now());
   const lastLocalMovementAtRef = useRef(performance.now());
   const lastInputSignatureRef = useRef("");
+  const hadActiveControlRef = useRef(false);
   const pendingInputsRef = useRef([]);
+  // Socket events can arrive in a burst after a weak phone is busy. Keep only
+  // the newest transform packet and consume it on the next animation frame.
+  const latestMovementPacketRef = useRef(null);
+  const movementFlushRafRef = useRef(0);
   const remoteSnapshotBufferRef = useRef(new Map());
   // Projectiles have the same high-rate latest-wins transform stream as drones.
   // Keeping these transforms outside React is essential on older phones.
@@ -1142,6 +1162,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     roundId: null,
     phaseVersion: -1,
     status: "connecting",
+    lockedRoomId: null,
   });
   const combatEventMapRef = useRef(new Map());
   // Last authoritative self snapshot. This is visual-only fallback state for
@@ -1214,15 +1235,12 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const [battleBeginFlashUntil, setBattleBeginFlashUntil] = useState(0);
 
   useEffect(() => {
-    // Default Socket.IO transport order is intentional here: polling gives
-    // mobile Safari/Chrome and restrictive carrier networks a reliable first
-    // handshake, then Engine.IO upgrades the active session to WebSocket.
-    // forceNew/multiplex:false prevents a previous Normal/BR socket manager
-    // from being reused while the user switches modes quickly on mobile.
+    // Zone PvP uses direct WebSocket. Polling can queue HTTP packets behind
+    // loot/HUD traffic and is the main cause of slow-motion remote drones.
     const socket = io(API_URL, {
       autoConnect: false,
-      transports: ["polling", "websocket"],
-      upgrade: true,
+      transports: ["websocket"],
+      upgrade: false,
       forceNew: true,
       multiplex: false,
       withCredentials: false,
@@ -1336,6 +1354,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           Number(state?.phaseVersion || 0),
         ),
         status: state?.status || zonePhaseRef.current.status || "connecting",
+        lockedRoomId:
+          state?.status === "playing" || state?.status === "finished"
+            ? (incomingRoomId || zonePhaseRef.current.lockedRoomId || null)
+            : zonePhaseRef.current.lockedRoomId || null,
       };
 
       const now = performance.now();
@@ -1771,7 +1793,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     // Lightweight latest-wins transform stream. It contains only remote
     // players and attack drones; no loot/minimap/HUD is allowed on this lane.
-    const applyMovementFrame = (packet = {}) => {
+    const consumeMovementFrame = (packet = {}) => {
       const currentRoomId = String(zonePhaseRef.current?.roomId || "");
       const packetRoomId = String(packet?.roomId || "");
       if (currentRoomId && packetRoomId && currentRoomId !== packetRoomId) return;
@@ -1823,9 +1845,22 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
     };
 
-    // Binary transform lane: fixed-size records, no JSON parsing, no UUIDs and no
-    // cosmetics repeated at 30 Hz. This is the crucial path for phones/old laptops.
-    const applyBinaryTransforms = (packet = {}, binaryPayload) => {
+    const applyMovementFrame = (packet = {}) => {
+      latestMovementPacketRef.current = packet;
+      if (movementFlushRafRef.current) return;
+
+      movementFlushRafRef.current = window.requestAnimationFrame(() => {
+        movementFlushRafRef.current = 0;
+        const latest = latestMovementPacketRef.current;
+        latestMovementPacketRef.current = null;
+        if (latest) consumeMovementFrame(latest);
+      });
+    };
+
+    // Legacy binary packets are intentionally ignored. The JSON transform lane
+    // now contains complete entities, so bots never wait for separate metadata.
+    const applyBinaryTransforms = () => {};
+    const ignoredBinaryTransforms = (packet = {}, binaryPayload) => {
       const currentRoomId = String(zonePhaseRef.current?.roomId || "");
       const packetRoomId = String(packet?.roomId || "");
       if (currentRoomId && packetRoomId && currentRoomId !== packetRoomId) return;
@@ -2057,10 +2092,16 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       lastInputSentAtRef.current = now;
       lastInputSignatureRef.current = signature;
 
-      // Retained movement state must be reliable. A 30 Hz tiny WebSocket packet
-      // is inexpensive, and prevents stale server movement after one volatile
-      // packet is dropped by the browser/socket transport.
-      socket.emit("zone-pvp:input", input);
+      // Inputs are latest-wins. Reliable input at 50 Hz can form a TCP queue on
+      // mobile and makes *other* drones appear seconds behind. A reliable STOP
+      // packet handles release, while active held input is volatile and current.
+      const sendStop = !hasActiveControl && hadActiveControlRef.current;
+      hadActiveControlRef.current = hasActiveControl;
+      if (sendStop) {
+        socket.emit("zone-pvp:input-stop", { seq: input.seq });
+      } else {
+        socket.volatile.emit("zone-pvp:input", input);
+      }
     };
 
     sendInputRef.current = sendInputNow;
@@ -2077,6 +2118,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       clearZoneJoinRetry();
       window.clearInterval(inputTimer);
       window.clearInterval(hudTimer);
+      if (movementFlushRafRef.current) {
+        window.cancelAnimationFrame(movementFlushRafRef.current);
+        movementFlushRafRef.current = 0;
+      }
+      latestMovementPacketRef.current = null;
       document.removeEventListener("visibilitychange", recoverVisibleZoneSession);
       window.removeEventListener("pageshow", recoverVisibleZoneSession);
       socket.off("connect", handleConnect);
@@ -2865,12 +2911,20 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
   const activeBadges = useMemo(() => getActiveEffectBadges(hudYou), [hudYou]);
   const leaderboard = hudData.leaderboard || renderData.leaderboard || [];
-  const status = hudData.status || renderData.status || "connecting";
+  const renderStatus = renderData.status || "connecting";
+  const hudStatus = hudData.status || "connecting";
+  const status = getZoneStatusRank(renderStatus) >= getZoneStatusRank(hudStatus)
+    ? renderStatus
+    : hudStatus;
   const isWaiting = status === "waiting" || status === "connecting";
   const isCountdown = status === "countdown";
   const isMatchmaking = isWaiting || isCountdown;
   const isFinished = status === "finished";
-  const playersAlive = hudData.playerCount || renderData.playerCount || 1;
+  const playersAlive = Math.max(
+    Number(hudData.playerCount || 0),
+    Number(renderData.playerCount || 0),
+    status === "playing" ? 1 : 0,
+  );
   const minPlayers = hudData.minPlayers || renderData.minPlayers || 3;
   const maxPlayers = hudData.maxPlayers || renderData.maxPlayers || 60;
   const countdown = hudData.countdown || renderData.countdown || 5;

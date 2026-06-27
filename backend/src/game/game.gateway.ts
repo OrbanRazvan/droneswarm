@@ -127,19 +127,26 @@ const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
 const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
 // Zone PvP has two lanes. Movement is a small latest-wins JSON packet at 30 Hz;
 // HUD, loot and minimap stay on a slower packet so they can never delay drones.
-const ZONE_STATE_INTERVAL_MS = 220;
-const ZONE_STATE_INTERVAL_CROWDED_MS = 240;
-const ZONE_STATE_INTERVAL_HEAVY_MS = 260;
-const ZONE_ENTITY_DEFINITION_INTERVAL_MS = 850;
-const ZONE_PROJECTILE_DEFINITION_INTERVAL_MS = 500;
+// Zone PvP has a strict split between simulation and replication.  The full
+// JSON state is deliberately slow; transforms travel on their own latest-wins
+// WebSocket lane.  This prevents loot/minimap/HUD work from delaying drones.
+const ZONE_STATE_INTERVAL_MS = 360;
+const ZONE_STATE_INTERVAL_CROWDED_MS = 440;
+const ZONE_STATE_INTERVAL_HEAVY_MS = 520;
+const ZONE_ENTITY_DEFINITION_INTERVAL_MS = 1500;
+const ZONE_PROJECTILE_DEFINITION_INTERVAL_MS = 800;
 
-// A visual frame is rendered by requestAnimationFrame; 30 authoritative movement
-// packets per second provide enough samples for continuous interpolation without
-// overwhelming older mobile CPUs with 60 large JSON parses every second.
-const ZONE_TRANSFORM_INTERVAL_MS = 33;
+// Forty transform updates/second plus local display-rate interpolation is a
+// better mobile trade-off than 60 large JSON payloads.  The server always sends
+// the newest transform and clients discard an obsolete packet before processing.
+const ZONE_TRANSFORM_INTERVAL_MS = 25;
 const ZONE_TRANSFORM_PLAYER_LIMIT = 60;
 const ZONE_TRANSFORM_PROJECTILE_LIMIT = 48;
 const ZONE_TRANSFORM_RANGE_PADDING = 900;
+const ZONE_WORLD_DELTA_INTERVAL_MS = 250;
+const ZONE_LOOT_TICK_INTERVAL_MS = 50;
+const ZONE_COLLISION_TICK_INTERVAL_MS = 34;
+const ZONE_ITEM_MAINTENANCE_INTERVAL_MS = 260;
 // Kept only for backwards-compatible type references. Zone no longer depends on
 // the fragile binary stream; movement uses a compact JSON event.
 const ZONE_TRANSFORM_PROTOCOL_VERSION = 1;
@@ -267,11 +274,8 @@ function normalizeSkin(skin) {
     origin: true,
     credentials: false,
   },
-  // Start with Engine.IO polling as a compatibility handshake, then upgrade
-  // to WebSocket automatically. This is important on mobile browsers and some
-  // mobile networks where an immediate WSS upgrade can be delayed or blocked
-  // during the first page transition. Gameplay still runs on WebSocket after
-  // the upgrade; polling is only the robust fallback.
+  // Keep both transports for the other game modes. ZonePvpArena itself starts
+  // directly on WebSocket, so it never enters the polling upgrade path.
   transports: ["polling", "websocket"],
   allowUpgrades: true,
   perMessageDeflate: false,
@@ -1879,6 +1883,26 @@ export class GameGateway {
     player.lastSeenAt = now;
   }
 
+  @SubscribeMessage("zone-pvp:input-stop")
+  handleZonePvpInputStop(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: any,
+  ) {
+    const room = this.getZonePvpRoomBySocket(client.id);
+    const player = room?.players.get(client.id);
+    if (!room || !player || player.isBot) return;
+
+    const now = Date.now();
+    player.input = {};
+    player.lastSeenAt = now;
+    player.lastInputReceivedAt = now;
+    const seq = Number(payload?.seq || 0);
+    if (Number.isFinite(seq) && seq > 0) {
+      player.lastReceivedInputSeq = Math.max(Number(player.lastReceivedInputSeq || 0), seq);
+      player.lastProcessedInputSeq = Math.max(Number(player.lastProcessedInputSeq || 0), seq);
+    }
+  }
+
   startLoop() {
     if (this.loop) return;
     this.loop = setInterval(() => {
@@ -1978,18 +2002,32 @@ export class GameGateway {
 
         if (room.status === "playing") {
           const zoneRadius = this.getZonePvpZoneRadius(room);
-          // Bots decide their held input in batches, then all units are moved by
-          // the same 60 Hz authoritative movement/combat pipeline.
+          // Core movement/projectiles remain 60 Hz.  Expensive collision, loot
+          // and respawn work is sampled at a lower fixed cadence; this removes
+          // Node event-loop spikes without changing how a drone visually moves.
           this.updateZonePvpBots(room, now, zoneRadius);
           this.updatePlayers(room, now, zoneRadius, deltaFrames);
           this.applyZonePvpZoneDamage(room, now, zoneRadius);
-          this.handleBodyCollisions(room, now, zoneRadius);
-          this.collectOrbs(room, zoneRadius);
-          this.collectEnergy(room, zoneRadius);
-          this.collectCores(room, zoneRadius);
           this.updateProjectiles(room, deltaFrames, now);
-          this.maintainWorldItems(room, zoneRadius, now);
-          this.cleanupCombatEvents(room, now);
+
+          if (!room.lastZoneCollisionAt || now - room.lastZoneCollisionAt >= ZONE_COLLISION_TICK_INTERVAL_MS) {
+            room.lastZoneCollisionAt = now;
+            this.handleBodyCollisions(room, now, zoneRadius);
+          }
+
+          if (!room.lastZoneLootAt || now - room.lastZoneLootAt >= ZONE_LOOT_TICK_INTERVAL_MS) {
+            room.lastZoneLootAt = now;
+            this.collectOrbs(room, zoneRadius);
+            this.collectEnergy(room, zoneRadius);
+            this.collectCores(room, zoneRadius);
+          }
+
+          if (!room.lastZoneItemMaintenanceAt || now - room.lastZoneItemMaintenanceAt >= ZONE_ITEM_MAINTENANCE_INTERVAL_MS) {
+            room.lastZoneItemMaintenanceAt = now;
+            this.maintainWorldItems(room, zoneRadius, now);
+            this.cleanupCombatEvents(room, now);
+          }
+
           this.updateZonePvpWinCondition(room, now);
         }
 
@@ -2020,6 +2058,7 @@ export class GameGateway {
           }
         }
 
+        this.flushZonePvpWorldDelta(room, now);
         this.cleanupZonePvpRoom(room, now);
       }
     }, 1000 / 60);
@@ -2057,7 +2096,9 @@ export class GameGateway {
   }
   updateZonePvpRoomStatus(room, now) {
     // Zone PvP is one-way: waiting -> countdown -> playing -> finished.
-    // A live round never re-enters countdown or waiting.
+    // `roundStarted` survives reconnects and prevents any stale lobby branch
+    // from turning an active room back into WAITING.
+    if (room.roundStarted || room.status === "playing" || room.status === "finished") return;
     if (room.status !== "countdown") return;
 
     if (this.getZoneHumanPlayerCount(room) < ZONE_PVP_ROOM_MIN_PLAYERS) {
@@ -2076,6 +2117,7 @@ export class GameGateway {
       // round once, then lock it permanently — never rebuild/reset this room.
       this.fillZonePvpBots(room, zoneRadius);
       room.status = "playing";
+      room.roundStarted = true;
       room.locked = true;
       room.countdownStartedAt = null;
       room.matchStartedAt = now;
@@ -2109,7 +2151,10 @@ export class GameGateway {
       // Nu continuam sa deplasam drona la infinit daca telefonul a intrat in
       // background sau ultimul pachet de input s-a pierdut. Clientul activ
       // trimite heartbeat mult mai des decat acest timeout.
-      const inputFresh = !player.lastInputReceivedAt || now - player.lastInputReceivedAt <= 750;
+      // Human input is latest-wins and expires quickly after a lost STOP packet.
+      // Bots keep their held vector until the next tactical replan (up to 320 ms),
+      // otherwise they visibly pause before every AI decision.
+      const inputFresh = player.isBot || !player.lastInputReceivedAt || now - player.lastInputReceivedAt <= 280;
       if (!inputFresh) {
         player.input = {};
       }
@@ -2947,6 +2992,15 @@ export class GameGateway {
   // to broadcast to the room and is far cheaper than forcing a full snapshot.
   emitWorldItemDelta(room, payload, now = Date.now()) {
     if (!room?.id) return;
+
+    // A 60-bot Zone room can collect many items every tick.  Broadcasting each
+    // removal reliably creates a TCP queue which makes remote movement appear
+    // delayed. Zone aggregates deltas and flushes them as latest-wins packets.
+    if (room.zonePvpMode) {
+      this.queueZonePvpWorldDelta(room, payload, now);
+      return;
+    }
+
     const prefix = this.getRoomEventPrefix(room);
     const removedOrbIds = Array.isArray(payload?.removedOrbIds) ? payload.removedOrbIds : [];
     const removedEnergyIds = Array.isArray(payload?.removedEnergyIds) ? payload.removedEnergyIds : [];
@@ -2954,6 +3008,45 @@ export class GameGateway {
     if (!removedOrbIds.length && !removedEnergyIds.length && !removedCoreIds.length) return;
 
     this.server.to(room.id).compress(false).emit(`${prefix}:world-delta`, {
+      serverTime: now,
+      removedOrbIds,
+      removedEnergyIds,
+      removedCoreIds,
+    });
+  }
+
+  private queueZonePvpWorldDelta(room: any, payload: any, now = Date.now()) {
+    if (!room) return;
+    const pending = room.pendingZoneWorldDelta || {
+      removedOrbIds: new Set<string>(),
+      removedEnergyIds: new Set<string>(),
+      removedCoreIds: new Set<string>(),
+      queuedAt: now,
+    };
+
+    for (const id of payload?.removedOrbIds || []) pending.removedOrbIds.add(String(id));
+    for (const id of payload?.removedEnergyIds || []) pending.removedEnergyIds.add(String(id));
+    for (const id of payload?.removedCoreIds || []) pending.removedCoreIds.add(String(id));
+    room.pendingZoneWorldDelta = pending;
+  }
+
+  private flushZonePvpWorldDelta(room: any, now = Date.now()) {
+    if (!room?.zonePvpMode) return;
+    const pending = room.pendingZoneWorldDelta;
+    if (!pending) return;
+    if (now - Number(room.lastZoneWorldDeltaAt || 0) < ZONE_WORLD_DELTA_INTERVAL_MS) return;
+
+    const removedOrbIds = [...pending.removedOrbIds];
+    const removedEnergyIds = [...pending.removedEnergyIds];
+    const removedCoreIds = [...pending.removedCoreIds];
+    if (!removedOrbIds.length && !removedEnergyIds.length && !removedCoreIds.length) {
+      room.pendingZoneWorldDelta = null;
+      return;
+    }
+
+    room.lastZoneWorldDeltaAt = now;
+    room.pendingZoneWorldDelta = null;
+    this.server.to(room.id).volatile.compress(false).emit("zone-pvp:world-delta", {
       serverTime: now,
       removedOrbIds,
       removedEnergyIds,
@@ -4296,6 +4389,12 @@ export class GameGateway {
       // Monotonic version lets the client discard stale volatile countdown packets.
       phaseVersion: 0,
       roundId: null,
+      roundStarted: false,
+      lastZoneCollisionAt: 0,
+      lastZoneLootAt: 0,
+      lastZoneItemMaintenanceAt: 0,
+      lastZoneWorldDeltaAt: 0,
+      pendingZoneWorldDelta: null,
       players: new Map(),
       orbs: Array.from({ length: MAX_ORBS }, () =>
         this.createOrb(ZONE_START_RADIUS),

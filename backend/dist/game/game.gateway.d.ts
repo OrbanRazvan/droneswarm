@@ -72,6 +72,7 @@ export declare class GameGateway {
     handleZonePvpJoin(client: Socket, data: any): void;
     handleZonePvpLeave(client: Socket): void;
     handleZonePvpInput(client: Socket, input: any): void;
+    handleZonePvpInputStop(client: Socket, payload: any): void;
     startLoop(): void;
     updateRoomStatus(room: any, now: any): void;
     updateBattleRoyaleOnlineRoomStatus(room: any, now: any): void;
@@ -113,6 +114,8 @@ export declare class GameGateway {
     getRoomEventPrefix(room: any): "normal-pvp" | "zone-pvp" | "battle-royale-online" | "pvp";
     emitCollectSync(room: any, player: any, payload: any): void;
     emitWorldItemDelta(room: any, payload: any, now?: number): void;
+    private queueZonePvpWorldDelta;
+    private flushZonePvpWorldDelta;
     collectOrbs(room: any, zoneRadius: any): void;
     collectEnergy(room: any, zoneRadius: any): void;
     collectCores(room: any, zoneRadius: any): void;

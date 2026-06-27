@@ -221,9 +221,9 @@ function getRendererConfig(forceLowQuality) {
     maxPlayers: device.lowSpecDesktop ? 8 : device.weakMobile ? 10 : lightMobile ? 18 : MAX_RENDERED_PLAYERS,
     // Every visible remote unit gets a transform. Only the far ones are reduced
     // to cheap shared-context markers on constrained GPUs.
-    maxSimplePlayers: device.lowSpecDesktop ? 34 : device.weakMobile ? 40 : lightMobile ? 46 : 60,
-    maxProjectiles: device.lowSpecDesktop ? 8 : device.weakMobile ? 12 : lightMobile ? 20 : MAX_RENDERED_PROJECTILES,
-    maxSimpleProjectiles: device.lowSpecDesktop ? 18 : device.weakMobile ? 24 : lightMobile ? 30 : 48,
+    maxSimplePlayers: 60,
+    maxProjectiles: device.lowSpecDesktop ? 10 : device.weakMobile ? 12 : lightMobile ? 20 : MAX_RENDERED_PROJECTILES,
+    maxSimpleProjectiles: 48,
     staticSyncInterval: device.lowSpecDesktop ? 500 : device.weakMobile ? 420 : lightMobile ? 300 : STATIC_SYNC_INTERVAL_MS,
     animateStaticEvery: device.lowSpecDesktop ? 12 : device.weakMobile ? 10 : lightMobile ? 6 : 1,
     disableExpensiveTerrain: Boolean(device.lowSpecDesktop || device.weakMobile || lightMobile),
@@ -2328,7 +2328,9 @@ function PixiArenaRenderer({
           resources,
           parent: entitiesLayer,
           bounds,
-          max: adaptiveTier === 2 ? Math.min(config.maxSimplePlayers, 14) : adaptiveTier === 1 ? Math.min(config.maxSimplePlayers, 28) : config.maxSimplePlayers,
+          // Simple units are tiny cached graphics. Keep all of them visible;
+          // only detailed shells and static scenery are reduced under pressure.
+          max: config.maxSimplePlayers,
           now,
         });
         syncProjectilePool({
@@ -2346,11 +2348,7 @@ function PixiArenaRenderer({
           resources,
           parent: projectilesLayer,
           bounds,
-          max: adaptiveTier === 2
-            ? Math.min(10, config.maxSimpleProjectiles)
-            : adaptiveTier === 1
-              ? Math.min(18, config.maxSimpleProjectiles)
-              : config.maxSimpleProjectiles,
+          max: config.maxSimpleProjectiles,
           now,
         });
         // Normal PvP and Zone PvP request strict private combat text. In this
