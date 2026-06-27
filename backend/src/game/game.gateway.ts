@@ -91,8 +91,10 @@ const ZONE_PVP_START_COUNTDOWN_MS = 5000;
  // 3) the live round begins.
 const ZONE_PVP_MATCH_FOUND_DURATION_MS = 1500;
 const ZONE_PVP_FINAL_COUNTDOWN_DURATION_MS = 5000;
-// Existing combat-lock helpers use this name. Keep it tied to the final countdown.
-const ZONE_PVP_BATTLE_PREPARE_DURATION = ZONE_PVP_FINAL_COUNTDOWN_DURATION_MS;
+// Once the five-second final countdown ends, the actual round begins with the
+// original 60-second peace period: movement/loot are allowed, but attacks,
+// shields, collision damage and zone damage stay locked.
+const ZONE_PVP_BATTLE_PREPARE_DURATION = 60000;
 const ZONE_PVP_ZONE_SHRINK_DURATION = 420000;
 const ZONE_PVP_ZONE_DAMAGE = 10;
 const ZONE_PVP_ZONE_DAMAGE_INTERVAL = 1000;
@@ -918,6 +920,8 @@ export class GameGateway {
       matchFoundUntil: room.matchFoundUntil || null,
       matchFoundRealPlayerCount: Number(room.matchFoundRealPlayerCount || 0),
       matchFoundBotCount: Number(room.matchFoundBotCount || 0),
+      finalCountdownStartsAt: room.finalCountdownStartsAt || null,
+      finalCountdownUntil: room.finalCountdownUntil || null,
       battlePrepareStartsAt: room.battlePrepareStartsAt || null,
       battlePrepareUntil: room.battlePrepareUntil || null,
       battlePrepareRemainingMs: room.battlePrepareUntil ? Math.max(0, room.battlePrepareUntil - now) : 0,
@@ -2108,27 +2112,40 @@ export class GameGateway {
     }
   }
   updateZonePvpRoomStatus(room, now) {
-    // Zone PvP has an irreversible round once matchmaking closes:
-    // waiting -> human admission countdown -> MATCH FOUND -> final countdown -> playing.
-    // We keep the room's status as "playing" during the two short pre-start cards
-    // so no reconnect or stale lobby packet can ever create a second countdown.
+    // Zone PvP is irreversible once matchmaking closes:
+    // waiting -> human admission countdown -> MATCH FOUND -> final 5..1
+    // -> 60-second PREPARE PHASE -> live combat.
     if (room.status === "finished") return;
 
     if (room.status === "playing") {
-      // The final countdown is still combat-locked. Only when it reaches zero
-      // does the real round clock / shrinking zone begin.
+      const finalCountdownUntil = Number(room.finalCountdownUntil || 0);
+
+      // The five-second final countdown completed. Start the real round and
+      // restore the original 60-second peace period before combat is enabled.
+      if (!room.matchStartedAt && finalCountdownUntil > 0 && now >= finalCountdownUntil) {
+        room.matchStartedAt = now;
+        room.matchFoundUntil = null;
+        room.finalCountdownStartsAt = null;
+        room.finalCountdownUntil = null;
+        room.battlePrepareStartsAt = now;
+        room.battlePrepareUntil = now + ZONE_PVP_BATTLE_PREPARE_DURATION;
+        room.battleBeginFlashUntil = null;
+        room.phaseVersion = Number(room.phaseVersion || 0) + 1;
+        room.lastCoreWaveAt = now - CORE_RESPAWN_DELAY + CORE_WARNING_DELAY;
+        this.broadcastZonePvpRoomState(room, now, true);
+        return;
+      }
+
+      // The peace period completed: combat and damage are now live.
       if (
-        !room.matchStartedAt &&
+        room.matchStartedAt &&
         room.battlePrepareUntil &&
         now >= Number(room.battlePrepareUntil)
       ) {
-        room.matchStartedAt = now;
-        room.matchFoundUntil = null;
         room.battlePrepareStartsAt = null;
         room.battlePrepareUntil = null;
         room.battleBeginFlashUntil = now + 1800;
         room.phaseVersion = Number(room.phaseVersion || 0) + 1;
-        room.lastCoreWaveAt = now - CORE_RESPAWN_DELAY + CORE_WARNING_DELAY;
         this.broadcastZonePvpRoomState(room, now, true);
       }
       return;
@@ -2162,14 +2179,16 @@ export class GameGateway {
       room.matchStartedAt = null;
 
       // UI sequence:
-      // MATCH FOUND (briefly) -> 5..1 final countdown -> actual combat.
+      // MATCH FOUND -> final 5..1 -> 60s PREPARE PHASE -> BATTLE BEGIN.
       room.matchFoundAt = now;
       room.matchFoundUntil = now + ZONE_PVP_MATCH_FOUND_DURATION_MS;
       room.matchFoundRealPlayerCount = realPlayerCount;
       room.matchFoundBotCount = botCount;
-      room.battlePrepareStartsAt = room.matchFoundUntil;
-      room.battlePrepareUntil =
-        room.battlePrepareStartsAt + ZONE_PVP_FINAL_COUNTDOWN_DURATION_MS;
+      room.finalCountdownStartsAt = room.matchFoundUntil;
+      room.finalCountdownUntil =
+        room.finalCountdownStartsAt + ZONE_PVP_FINAL_COUNTDOWN_DURATION_MS;
+      room.battlePrepareStartsAt = null;
+      room.battlePrepareUntil = null;
       room.battleBeginFlashUntil = null;
       room.matchHadMultiplePlayers = true;
       room.phaseVersion = Number(room.phaseVersion || 0) + 1;
@@ -2181,8 +2200,13 @@ export class GameGateway {
   }
 
   isBattlePrepareLocked(room, now = Date.now()) {
+    if (!room?.zonePvpMode || room?.status !== "playing") return false;
+
+    // MATCH FOUND and the final 5..1 are also combat-locked. The 60-second
+    // PREPARE PHASE remains locked after the actual round clock begins.
+    if (!room.matchStartedAt) return true;
+
     return Boolean(
-      room?.zonePvpMode &&
       room?.battlePrepareUntil &&
       now < room.battlePrepareUntil,
     );
@@ -3617,6 +3641,8 @@ export class GameGateway {
     room.locked = true;
     room.countdownStartedAt = null;
     room.matchFoundUntil = null;
+    room.finalCountdownStartsAt = null;
+    room.finalCountdownUntil = null;
     room.battlePrepareStartsAt = null;
     room.battlePrepareUntil = null;
     room.battleBeginFlashUntil = null;
@@ -4479,6 +4505,8 @@ export class GameGateway {
       matchFoundUntil: null,
       matchFoundRealPlayerCount: 0,
       matchFoundBotCount: 0,
+      finalCountdownStartsAt: null,
+      finalCountdownUntil: null,
       battlePrepareStartsAt: null,
       battlePrepareUntil: null,
       battleBeginFlashUntil: null,
@@ -4539,6 +4567,10 @@ export class GameGateway {
           room.status = "finished";
           room.locked = true;
           room.countdownStartedAt = null;
+          room.matchFoundUntil = null;
+          room.finalCountdownStartsAt = null;
+          room.finalCountdownUntil = null;
+          room.battlePrepareStartsAt = null;
           room.battlePrepareUntil = null;
           room.winnerId = null;
           room.winnerName = null;
@@ -4705,8 +4737,11 @@ export class GameGateway {
             ),
           )
         : null;
-    const battlePrepareRemainingMs = room.battlePrepareUntil
-      ? Math.max(0, room.battlePrepareUntil - now)
+    const battlePrepareIsActive =
+      room.battlePrepareUntil &&
+      (!room.battlePrepareStartsAt || now >= Number(room.battlePrepareStartsAt));
+    const battlePrepareRemainingMs = battlePrepareIsActive
+      ? Math.max(0, Number(room.battlePrepareUntil) - now)
       : 0;
 
     const includeStaticState =
@@ -4853,6 +4888,12 @@ export class GameGateway {
         safeZoneRadius: zoneRadius,
         zoneShrinkDuration: ZONE_PVP_ZONE_SHRINK_DURATION,
         matchStartedAt: room.matchStartedAt,
+        matchFoundUntil: room.matchFoundUntil || null,
+        matchFoundRealPlayerCount: Number(room.matchFoundRealPlayerCount || 0),
+        matchFoundBotCount: Number(room.matchFoundBotCount || 0),
+        finalCountdownStartsAt: room.finalCountdownStartsAt || null,
+        finalCountdownUntil: room.finalCountdownUntil || null,
+        battlePrepareStartsAt: room.battlePrepareStartsAt || null,
         battlePrepareUntil: room.battlePrepareUntil || null,
         battlePrepareRemainingMs,
         battleBeginFlashUntil: room.battleBeginFlashUntil || null,
