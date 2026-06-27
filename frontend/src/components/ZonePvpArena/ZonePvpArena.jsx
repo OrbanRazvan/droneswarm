@@ -57,7 +57,7 @@ const LOCAL_PROJECTILE_MAX_DISTANCE = 4200;
 const PROJECTILE_HIT_VISUAL_RADIUS = 118;
 const LOCAL_PROJECTILE_SPEED = 4.4;
 const FIRE_COOLDOWN = 3000;
-const BATTLE_PREPARE_DURATION = 30000;
+const BATTLE_PREPARE_DURATION = 5000; // Final 5..1 countdown only; no hidden 30s prepare phase.
 const ORB_STABLE_TTL = 2400;
 const MINIMAP_STABLE_TTL = 8000;
 
@@ -1102,11 +1102,8 @@ function getBattlePrepareRemainingMs(data = {}) {
     return Math.max(0, prepareUntil - Date.now());
   }
 
-  const matchStartedAt = Number(data.matchStartedAt);
-  if (Number.isFinite(matchStartedAt) && matchStartedAt > 0) {
-    return Math.max(0, BATTLE_PREPARE_DURATION - (Date.now() - matchStartedAt));
-  }
-
+  // Do not invent a PREPARE PHASE after the match has begun. The server
+  // explicitly provides the final countdown deadline.
   return 0;
 }
 
@@ -1338,6 +1335,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     minPlayers: 3,
     maxPlayers: 60,
     countdown: null,
+    matchFoundUntil: null,
+    matchFoundRealPlayerCount: 0,
+    matchFoundBotCount: 0,
+    battlePrepareStartsAt: null,
+    battlePrepareUntil: null,
     coreDropCountdown: null,
     winnerId: null,
     winnerName: null,
@@ -1585,30 +1587,21 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         );
       }
 
-      // Sincronizare locala pentru PREPARE PHASE / BATTLE BEGIN.
-      // Serverul ramane autoritar, dar tinem si un fallback local ca HUD-ul sa nu dispara
-      // daca un packet ajunge fara battlePrepareRemainingMs/battlePrepareUntil.
+      // The server owns MATCH FOUND and the final 5..1 timer. Keep only the
+      // explicit deadline locally; never create a fake prepare period.
       if (state?.status === "playing") {
         const serverPrepareRemaining = getBattlePrepareRemainingMs(state);
         const serverPrepareUntil = state.battlePrepareUntil ? Number(state.battlePrepareUntil) : 0;
 
-        if (serverPrepareRemaining > 0 || serverPrepareUntil > nowWall) {
-          localBattlePrepareUntilRef.current = serverPrepareUntil > nowWall
+        localBattlePrepareUntilRef.current =
+          serverPrepareUntil > nowWall
             ? serverPrepareUntil
-            : nowWall + serverPrepareRemaining;
+            : serverPrepareRemaining > 0
+              ? nowWall + serverPrepareRemaining
+              : 0;
 
-          localBattleBeginFlashUntilRef.current = state.battleBeginFlashUntil
-            ? Number(state.battleBeginFlashUntil)
-            : localBattlePrepareUntilRef.current + 1800;
-        } else if (state.matchStartedAt) {
-          const localPrepareUntil = Number(state.matchStartedAt) + BATTLE_PREPARE_DURATION;
-          if (localPrepareUntil > nowWall) {
-            localBattlePrepareUntilRef.current = Math.max(localBattlePrepareUntilRef.current || 0, localPrepareUntil);
-            localBattleBeginFlashUntilRef.current = Math.max(localBattleBeginFlashUntilRef.current || 0, localPrepareUntil + 1800);
-          }
-        } else if (lastArenaStatusRef.current !== "playing" && !localBattlePrepareUntilRef.current) {
-          localBattlePrepareUntilRef.current = nowWall + BATTLE_PREPARE_DURATION;
-          localBattleBeginFlashUntilRef.current = localBattlePrepareUntilRef.current + 1800;
+        if (state.battleBeginFlashUntil) {
+          localBattleBeginFlashUntilRef.current = Number(state.battleBeginFlashUntil);
         }
       } else if (state?.status === "waiting" || state?.status === "countdown") {
         localBattlePrepareUntilRef.current = 0;
@@ -1991,6 +1984,19 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         const meta = netId > 0 ? (zoneProjectileMetaRef.current.get(netId) || {}) : {};
         const projectile = decodeZoneProjectileRow(row, meta);
         if (!projectile?.id) continue;
+
+        // The local shooter already renders its one immediate predicted attack
+        // drone. Ignore this matching authoritative transform while it is alive,
+        // otherwise a metadata race can show two drones for one attack.
+        const localUnit = predictedYouRef.current || worldRef.current.you;
+        const localNetId = Number(localUnit?.netId || 0);
+        if (
+          String(projectile.ownerId || "") === String(localUnit?.id || "") ||
+          (localNetId > 0 && Number(projectile.ownerNetId || 0) === localNetId)
+        ) {
+          continue;
+        }
+
         packetProjectileIds.add(projectile.id);
         const existing = movementProjectiles.get(projectile.id);
         movementProjectiles.set(projectile.id, {
@@ -2370,12 +2376,19 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         const wantsToAttack = Boolean(keysRef.current.mouseDown);
         const localCooldown = getLocalFireCooldown(predicted, now);
 
+        const hasOwnAttackDrone = [...projectilesRef.current.values()].some(
+          (projectile) =>
+            String(projectile?.ownerId || "") === String(predicted?.id || "") &&
+            now - Number(projectile?.createdAt || 0) < PROJECTILE_VISUAL_TTL
+        );
+
         if (
           data.status === "playing" &&
           !isBattlePrepareLocked(data) &&
           wantsToAttack &&
           predicted?.alive !== false &&
           (predicted?.drones || 0) > 0 &&
+          !hasOwnAttackDrone &&
           now - lastLocalProjectileAtRef.current >= localCooldown
         ) {
           const mouseWorldX = predicted.x + (mouseRef.current.x - window.innerWidth / 2);
@@ -3026,9 +3039,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y * cameraScale : 0;
   const bounds = getViewportBounds(cameraX, cameraY, viewport, 720, cameraScale);
   const reactiveRenderLimits = isMobileControls
-    ? { detailed: 6, total: 50, orbs: 48, energy: 16, cores: 4, projectiles: 5, simpleProjectiles: 26 }
+    ? { detailed: 6, total: 44, orbs: 42, energy: 14, cores: 4, projectiles: 5, simpleProjectiles: 22 }
     : constrainedDesktopRef.current
-      ? { detailed: 10, total: 60, orbs: 96, energy: 34, cores: 7, projectiles: 14, simpleProjectiles: 42 }
+      // Keep premium drones nearby, but reduce far objects and static loot
+      // first on older integrated GPUs.
+      ? { detailed: 8, total: 44, orbs: 72, energy: 24, cores: 5, projectiles: 10, simpleProjectiles: 30 }
       : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
   const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), reactiveRenderLimits.orbs);
@@ -3085,28 +3100,61 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     : hudStatus;
   const isWaiting = status === "waiting" || status === "connecting";
   const isCountdown = status === "countdown";
-  const isMatchmaking = isWaiting || isCountdown;
   const isFinished = status === "finished";
+  const nowForMatchFlow = Date.now();
+  const latestTimestamp = (key) => Math.max(
+    Number(renderData?.[key] || 0),
+    Number(hudData?.[key] || 0),
+  );
+
+  // The backend keeps the room live while these cards are shown, so a stale
+  // waiting packet can never rebuild matchmaking over an active round.
+  const matchFoundUntil = latestTimestamp("matchFoundUntil");
+  const finalCountdownStartsAt = latestTimestamp("battlePrepareStartsAt");
+  const finalCountdownUntil = Math.max(
+    latestTimestamp("battlePrepareUntil"),
+    Number(localBattlePrepareUntilRef.current || 0),
+  );
+  const isMatchFound = status === "playing" && matchFoundUntil > nowForMatchFlow;
+  const isFinalCountdown =
+    status === "playing" &&
+    !isMatchFound &&
+    finalCountdownUntil > nowForMatchFlow &&
+    (!finalCountdownStartsAt || finalCountdownStartsAt <= nowForMatchFlow);
+
+  const isMatchmaking = isWaiting || isCountdown || isMatchFound || isFinalCountdown;
   const playersAlive = Math.max(
     Number(hudData.playerCount || 0),
     Number(renderData.playerCount || 0),
     status === "playing" ? 1 : 0,
   );
-  const minPlayers = hudData.minPlayers || renderData.minPlayers || 3;
+  const minPlayers = hudData.minPlayers || renderData.minPlayers || 2;
   const maxPlayers = hudData.maxPlayers || renderData.maxPlayers || 60;
   const countdown = hudData.countdown || renderData.countdown || 5;
+  const realPlayerCount = Math.max(
+    Number(renderData.matchFoundRealPlayerCount || renderData.realPlayerCount || 0),
+    Number(hudData.matchFoundRealPlayerCount || hudData.realPlayerCount || 0),
+    isWaiting || isCountdown ? Math.min(playersAlive, minPlayers) : 0,
+  );
+  const botCount = Math.max(
+    Number(renderData.matchFoundBotCount || renderData.botCount || 0),
+    Number(hudData.matchFoundBotCount || hudData.botCount || 0),
+  );
+  const finalCountdown = Math.max(1, Math.ceil(Math.max(0, finalCountdownUntil - nowForMatchFlow) / 1000));
   const winnerName = hudData.winnerName || renderData.winnerName;
   const coreDropCountdown = hudData.coreDropCountdown || renderData.coreDropCountdown;
-  const battlePrepareSource = hudData.status ? hudData : renderData;
+  const battlePrepareSource = Number(renderData.battlePrepareUntil || 0) >= Number(hudData.battlePrepareUntil || 0)
+    ? renderData
+    : hudData;
   const serverBattlePrepareRemainingMs = getBattlePrepareRemainingMs(battlePrepareSource);
-  const localBattlePrepareRemainingMs = Math.max(0, (localBattlePrepareUntilRef.current || 0) - Date.now());
+  const localBattlePrepareRemainingMs = Math.max(0, (localBattlePrepareUntilRef.current || 0) - nowForMatchFlow);
   const battlePrepareRemainingMs = Math.max(serverBattlePrepareRemainingMs, localBattlePrepareRemainingMs);
-  const isBattlePrepare = status === "playing" && !isFinished && battlePrepareRemainingMs > 0;
-  const battlePrepareSeconds = Math.max(0, Math.ceil(battlePrepareRemainingMs / 1000));
+  const isBattlePrepare = isFinalCountdown;
+  const battlePrepareSeconds = finalCountdown;
   const showBattleBeginFlash = !isMatchmaking && !isFinished && !isBattlePrepare && (
     getBattleBeginFlashActive(battlePrepareSource) ||
-    ((localBattleBeginFlashUntilRef.current || 0) > Date.now()) ||
-    battleBeginFlashUntil > Date.now()
+    ((localBattleBeginFlashUntilRef.current || 0) > nowForMatchFlow) ||
+    battleBeginFlashUntil > nowForMatchFlow
   );
 
   // Fix vizual: cand PREPARE PHASE trece la 0, afisam sigur BATTLE BEGIN
@@ -3177,14 +3225,38 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const nextDroneAt = hudYou?.nextDroneAt ?? 5;
 
   return (
-    <div className={`game-arena pvp-dom-arena normal-pvp-dom-arena zone-pvp-dom-arena ${isMobileControls ? "is-mobile-device is-mobile-portrait" : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""} ${isBattlePrepare ? "is-battle-prepare" : ""}`}>
+    <div className={`game-arena pvp-dom-arena normal-pvp-dom-arena zone-pvp-dom-arena ${isMobileControls ? "is-mobile-device is-mobile-portrait" : ""} ${constrainedDesktopRef.current ? "is-constrained-desktop" : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""} ${isBattlePrepare ? "is-battle-prepare" : ""}`}>
       {isMatchmaking && !connectionError && (
         <div className="zone-pvp-matchmaking-screen">
-          <div className="zone-pvp-matchmaking-card">
-            <div className="zone-pvp-loader" />
-            <h1>{isCountdown ? "MATCH STARTS IN" : "WAITING FOR PLAYERS"}</h1>
-            <strong>{isCountdown ? countdown : `${Math.min(playersAlive, minPlayers)} / ${minPlayers}`}</strong>
-            <p>{isCountdown ? "Jucatorii au fost gasiti. Pregateste-te!" : "Se cauta inca un jucator pentru Zone PvP..."}</p>
+          <div className={`zone-pvp-matchmaking-card ${isMatchFound ? "is-match-found" : ""} ${isFinalCountdown ? "is-final-countdown" : ""}`}>
+            {!isMatchFound && <div className="zone-pvp-loader" />}
+            <h1>
+              {isMatchFound
+                ? "MATCHMAKING GĂSIT"
+                : isFinalCountdown
+                  ? "MATCH STARTS IN"
+                  : isCountdown
+                    ? "SE MAI AȘTEAPTĂ JUCĂTORI"
+                    : "WAITING FOR PLAYERS"}
+            </h1>
+            <strong className="zone-pvp-matchmaking-value">
+              {isMatchFound
+                ? `${realPlayerCount} REAL PLAYERS + ${botCount} BOTS`
+                : isFinalCountdown
+                  ? finalCountdown
+                  : isCountdown
+                    ? countdown
+                    : `${Math.min(playersAlive, minPlayers)} / ${minPlayers}`}
+            </strong>
+            <p>
+              {isMatchFound
+                ? "Camera este completată. Pregătește-te pentru start."
+                : isFinalCountdown
+                  ? "Lupta începe când countdown-ul ajunge la zero."
+                  : isCountdown
+                    ? `${Math.max(realPlayerCount, minPlayers)} / ${minPlayers} jucători reali găsiți. Mai pot intra alți jucători.`
+                    : "Se caută jucători reali pentru Zone PvP..."}
+            </p>
           </div>
         </div>
       )}
@@ -3221,7 +3293,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldWidth={worldWidth}
         worldHeight={worldHeight}
         worldTheme="premium-space-battle"
-        staticItemBudget={isRealMobileDevice() ? 52 : 110}
+        staticItemBudget={isRealMobileDevice() ? 52 : constrainedDesktopRef.current ? 72 : 110}
         safeZoneRadius={safeZoneRadius}
         showZone={true}
       />
@@ -3331,13 +3403,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       )}
 
 
-      {isBattlePrepare && (
-        <div className="battle-royale-peace-countdown zone-pvp-peace-countdown">
-          <strong>PREPARE PHASE</strong>
-          <b>{battlePrepareSeconds}s</b>
-          <span>Attack, shield and collision damage are locked.</span>
-        </div>
-      )}
+      {/* The full-screen MATCH FOUND / final countdown card replaces the
+          old bottom PREPARE PHASE panel in Zone PvP. */}
 
       {showBattleBeginFlash && !isBattlePrepare && (
         <div className="battle-royale-begin-flash zone-pvp-begin-flash">BATTLE BEGIN</div>

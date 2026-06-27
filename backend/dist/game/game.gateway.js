@@ -60,7 +60,9 @@ const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 60;
 const ZONE_PVP_ROOM_MAX_PLAYERS = 60;
 const ZONE_PVP_ROOM_MIN_PLAYERS = 2;
 const ZONE_PVP_START_COUNTDOWN_MS = 5000;
-const ZONE_PVP_BATTLE_PREPARE_DURATION = 30000;
+const ZONE_PVP_MATCH_FOUND_DURATION_MS = 1500;
+const ZONE_PVP_FINAL_COUNTDOWN_DURATION_MS = 5000;
+const ZONE_PVP_BATTLE_PREPARE_DURATION = ZONE_PVP_FINAL_COUNTDOWN_DURATION_MS;
 const ZONE_PVP_ZONE_SHRINK_DURATION = 420000;
 const ZONE_PVP_ZONE_DAMAGE = 10;
 const ZONE_PVP_ZONE_DAMAGE_INTERVAL = 1000;
@@ -529,7 +531,7 @@ let GameGateway = class GameGateway {
         return best ? { unit: best, distance: bestDistance } : null;
     }
     updateZonePvpBots(room, now, zoneRadius) {
-        if (!room?.zonePvpMode || room.status !== "playing")
+        if (!room?.zonePvpMode || room.status !== "playing" || !room.matchStartedAt)
             return;
         const everyone = [...room.players.values()];
         const alive = everyone.filter((unit) => unit?.alive !== false);
@@ -724,6 +726,10 @@ let GameGateway = class GameGateway {
             safeZoneRadius: zoneRadius,
             zoneShrinkDuration: ZONE_PVP_ZONE_SHRINK_DURATION,
             matchStartedAt: room.matchStartedAt,
+            matchFoundUntil: room.matchFoundUntil || null,
+            matchFoundRealPlayerCount: Number(room.matchFoundRealPlayerCount || 0),
+            matchFoundBotCount: Number(room.matchFoundBotCount || 0),
+            battlePrepareStartsAt: room.battlePrepareStartsAt || null,
             battlePrepareUntil: room.battlePrepareUntil || null,
             battlePrepareRemainingMs: room.battlePrepareUntil ? Math.max(0, room.battlePrepareUntil - now) : 0,
             battleBeginFlashUntil: room.battleBeginFlashUntil || null,
@@ -1644,8 +1650,23 @@ let GameGateway = class GameGateway {
         }
     }
     updateZonePvpRoomStatus(room, now) {
-        if (room.roundStarted || room.status === "playing" || room.status === "finished")
+        if (room.status === "finished")
             return;
+        if (room.status === "playing") {
+            if (!room.matchStartedAt &&
+                room.battlePrepareUntil &&
+                now >= Number(room.battlePrepareUntil)) {
+                room.matchStartedAt = now;
+                room.matchFoundUntil = null;
+                room.battlePrepareStartsAt = null;
+                room.battlePrepareUntil = null;
+                room.battleBeginFlashUntil = now + 1800;
+                room.phaseVersion = Number(room.phaseVersion || 0) + 1;
+                room.lastCoreWaveAt = now - CORE_RESPAWN_DELAY + CORE_WARNING_DELAY;
+                this.broadcastZonePvpRoomState(room, now, true);
+            }
+            return;
+        }
         if (room.status !== "countdown")
             return;
         if (this.getZoneHumanPlayerCount(room) < ZONE_PVP_ROOM_MIN_PLAYERS) {
@@ -1660,16 +1681,24 @@ let GameGateway = class GameGateway {
         if (now - room.countdownStartedAt >= ZONE_PVP_START_COUNTDOWN_MS) {
             const zoneRadius = this.getZonePvpZoneRadius(room);
             this.fillZonePvpBots(room, zoneRadius);
+            const realPlayerCount = this.getZoneHumanPlayerCount(room);
+            const botCount = this.getZoneBotCount(room);
             room.status = "playing";
             room.roundStarted = true;
             room.locked = true;
             room.countdownStartedAt = null;
-            room.matchStartedAt = now;
-            room.battlePrepareUntil = now + ZONE_PVP_BATTLE_PREPARE_DURATION;
-            room.battleBeginFlashUntil = room.battlePrepareUntil + 1800;
+            room.matchStartedAt = null;
+            room.matchFoundAt = now;
+            room.matchFoundUntil = now + ZONE_PVP_MATCH_FOUND_DURATION_MS;
+            room.matchFoundRealPlayerCount = realPlayerCount;
+            room.matchFoundBotCount = botCount;
+            room.battlePrepareStartsAt = room.matchFoundUntil;
+            room.battlePrepareUntil =
+                room.battlePrepareStartsAt + ZONE_PVP_FINAL_COUNTDOWN_DURATION_MS;
+            room.battleBeginFlashUntil = null;
             room.matchHadMultiplePlayers = true;
             room.phaseVersion = Number(room.phaseVersion || 0) + 1;
-            room.lastCoreWaveAt = now - CORE_RESPAWN_DELAY + CORE_WARNING_DELAY;
+            room.lastCoreWaveAt = 0;
             this.broadcastZonePvpRoomState(room, now, true);
         }
     }
@@ -1680,6 +1709,7 @@ let GameGateway = class GameGateway {
     }
     updatePlayers(room, now, zoneRadius, deltaFrames = 1) {
         const battleLocked = this.isBattlePrepareLocked(room, now);
+        const preMatchLocked = Boolean(room?.zonePvpMode && !room?.matchStartedAt);
         for (const player of room.players.values()) {
             if (!player.alive)
                 continue;
@@ -1702,6 +1732,10 @@ let GameGateway = class GameGateway {
             if (activeInput.mobileMove) {
                 dx += Number(activeInput.moveX || 0);
                 dy += Number(activeInput.moveY || 0);
+            }
+            if (preMatchLocked) {
+                dx = 0;
+                dy = 0;
             }
             const isMovingInput = dx !== 0 || dy !== 0;
             if (isMovingInput &&
@@ -2804,6 +2838,8 @@ let GameGateway = class GameGateway {
         room.status = "finished";
         room.locked = true;
         room.countdownStartedAt = null;
+        room.matchFoundUntil = null;
+        room.battlePrepareStartsAt = null;
         room.battlePrepareUntil = null;
         room.battleBeginFlashUntil = null;
         room.winnerId = winner?.id || null;
@@ -3357,6 +3393,10 @@ let GameGateway = class GameGateway {
                 safeZoneRadius: zoneRadius,
                 zoneShrinkDuration: BR_ONLINE_ZONE_SHRINK_DURATION,
                 matchStartedAt: room.matchStartedAt,
+                matchFoundUntil: room.matchFoundUntil || null,
+                matchFoundRealPlayerCount: Number(room.matchFoundRealPlayerCount || 0),
+                matchFoundBotCount: Number(room.matchFoundBotCount || 0),
+                battlePrepareStartsAt: room.battlePrepareStartsAt || null,
                 battlePrepareUntil: room.battlePrepareUntil || null,
                 battlePrepareRemainingMs,
                 battleBeginFlashUntil: room.battleBeginFlashUntil || null,
@@ -3415,6 +3455,11 @@ let GameGateway = class GameGateway {
             createdAt: Date.now(),
             emptySince: Date.now(),
             matchStartedAt: null,
+            matchFoundAt: null,
+            matchFoundUntil: null,
+            matchFoundRealPlayerCount: 0,
+            matchFoundBotCount: 0,
+            battlePrepareStartsAt: null,
             battlePrepareUntil: null,
             battleBeginFlashUntil: null,
             matchHadMultiplePlayers: false,

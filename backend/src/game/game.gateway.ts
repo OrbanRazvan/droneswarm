@@ -85,7 +85,14 @@ const ZONE_PVP_ROOM_MAX_PLAYERS = 60;
 // Bots never unlock the lobby; they are created only when the admission window ends.
 const ZONE_PVP_ROOM_MIN_PLAYERS = 2; // TEST: revert to 3 before public launch.
 const ZONE_PVP_START_COUNTDOWN_MS = 5000;
-const ZONE_PVP_BATTLE_PREPARE_DURATION = 30000;
+// Match flow after the five-second human admission window:
+ // 1) MATCH FOUND card briefly shows real players + bot fill;
+ // 2) final 5..1 countdown locks controls;
+ // 3) the live round begins.
+const ZONE_PVP_MATCH_FOUND_DURATION_MS = 1500;
+const ZONE_PVP_FINAL_COUNTDOWN_DURATION_MS = 5000;
+// Existing combat-lock helpers use this name. Keep it tied to the final countdown.
+const ZONE_PVP_BATTLE_PREPARE_DURATION = ZONE_PVP_FINAL_COUNTDOWN_DURATION_MS;
 const ZONE_PVP_ZONE_SHRINK_DURATION = 420000;
 const ZONE_PVP_ZONE_DAMAGE = 10;
 const ZONE_PVP_ZONE_DAMAGE_INTERVAL = 1000;
@@ -682,7 +689,9 @@ export class GameGateway {
   }
 
   private updateZonePvpBots(room: any, now: number, zoneRadius: number) {
-    if (!room?.zonePvpMode || room.status !== "playing") return;
+    // Bots are spawned before the final card, but never start moving or
+    // attacking until the visible 5..1 countdown has finished.
+    if (!room?.zonePvpMode || room.status !== "playing" || !room.matchStartedAt) return;
 
     const everyone = [...room.players.values()];
     const alive = everyone.filter((unit: any) => unit?.alive !== false);
@@ -906,6 +915,10 @@ export class GameGateway {
       safeZoneRadius: zoneRadius,
       zoneShrinkDuration: ZONE_PVP_ZONE_SHRINK_DURATION,
       matchStartedAt: room.matchStartedAt,
+      matchFoundUntil: room.matchFoundUntil || null,
+      matchFoundRealPlayerCount: Number(room.matchFoundRealPlayerCount || 0),
+      matchFoundBotCount: Number(room.matchFoundBotCount || 0),
+      battlePrepareStartsAt: room.battlePrepareStartsAt || null,
       battlePrepareUntil: room.battlePrepareUntil || null,
       battlePrepareRemainingMs: room.battlePrepareUntil ? Math.max(0, room.battlePrepareUntil - now) : 0,
       battleBeginFlashUntil: room.battleBeginFlashUntil || null,
@@ -2095,10 +2108,32 @@ export class GameGateway {
     }
   }
   updateZonePvpRoomStatus(room, now) {
-    // Zone PvP is one-way: waiting -> countdown -> playing -> finished.
-    // `roundStarted` survives reconnects and prevents any stale lobby branch
-    // from turning an active room back into WAITING.
-    if (room.roundStarted || room.status === "playing" || room.status === "finished") return;
+    // Zone PvP has an irreversible round once matchmaking closes:
+    // waiting -> human admission countdown -> MATCH FOUND -> final countdown -> playing.
+    // We keep the room's status as "playing" during the two short pre-start cards
+    // so no reconnect or stale lobby packet can ever create a second countdown.
+    if (room.status === "finished") return;
+
+    if (room.status === "playing") {
+      // The final countdown is still combat-locked. Only when it reaches zero
+      // does the real round clock / shrinking zone begin.
+      if (
+        !room.matchStartedAt &&
+        room.battlePrepareUntil &&
+        now >= Number(room.battlePrepareUntil)
+      ) {
+        room.matchStartedAt = now;
+        room.matchFoundUntil = null;
+        room.battlePrepareStartsAt = null;
+        room.battlePrepareUntil = null;
+        room.battleBeginFlashUntil = now + 1800;
+        room.phaseVersion = Number(room.phaseVersion || 0) + 1;
+        room.lastCoreWaveAt = now - CORE_RESPAWN_DELAY + CORE_WARNING_DELAY;
+        this.broadcastZonePvpRoomState(room, now, true);
+      }
+      return;
+    }
+
     if (room.status !== "countdown") return;
 
     if (this.getZoneHumanPlayerCount(room) < ZONE_PVP_ROOM_MIN_PLAYERS) {
@@ -2113,22 +2148,34 @@ export class GameGateway {
 
     if (now - room.countdownStartedAt >= ZONE_PVP_START_COUNTDOWN_MS) {
       const zoneRadius = this.getZonePvpZoneRadius(room);
-      // The human-only admission window has closed. Complete the exact 60-seat
-      // round once, then lock it permanently — never rebuild/reset this room.
+
+      // Lock the exact round once. Missing seats are filled only here, after
+      // the human admission window has fully expired.
       this.fillZonePvpBots(room, zoneRadius);
+
+      const realPlayerCount = this.getZoneHumanPlayerCount(room);
+      const botCount = this.getZoneBotCount(room);
       room.status = "playing";
       room.roundStarted = true;
       room.locked = true;
       room.countdownStartedAt = null;
-      room.matchStartedAt = now;
-      room.battlePrepareUntil = now + ZONE_PVP_BATTLE_PREPARE_DURATION;
-      room.battleBeginFlashUntil = room.battlePrepareUntil + 1800;
+      room.matchStartedAt = null;
+
+      // UI sequence:
+      // MATCH FOUND (briefly) -> 5..1 final countdown -> actual combat.
+      room.matchFoundAt = now;
+      room.matchFoundUntil = now + ZONE_PVP_MATCH_FOUND_DURATION_MS;
+      room.matchFoundRealPlayerCount = realPlayerCount;
+      room.matchFoundBotCount = botCount;
+      room.battlePrepareStartsAt = room.matchFoundUntil;
+      room.battlePrepareUntil =
+        room.battlePrepareStartsAt + ZONE_PVP_FINAL_COUNTDOWN_DURATION_MS;
+      room.battleBeginFlashUntil = null;
       room.matchHadMultiplePlayers = true;
       room.phaseVersion = Number(room.phaseVersion || 0) + 1;
-      room.lastCoreWaveAt = now - CORE_RESPAWN_DELAY + CORE_WARNING_DELAY;
+      room.lastCoreWaveAt = 0;
 
-      // Reliable phase boundary only. Continuous movement uses latest-wins
-      // transform packets below and therefore cannot build a stale queue.
+      // Reliable phase boundary only. Movement remains a latest-wins lane.
       this.broadcastZonePvpRoomState(room, now, true);
     }
   }
@@ -2143,6 +2190,7 @@ export class GameGateway {
 
   updatePlayers(room, now, zoneRadius, deltaFrames = 1) {
     const battleLocked = this.isBattlePrepareLocked(room, now);
+    const preMatchLocked = Boolean(room?.zonePvpMode && !room?.matchStartedAt);
     for (const player of room.players.values()) {
       if (!player.alive) continue;
       let dx = 0;
@@ -2167,6 +2215,13 @@ export class GameGateway {
         dx += Number(activeInput.moveX || 0);
         dy += Number(activeInput.moveY || 0);
       }
+      // During MATCH FOUND / final 5..1, the server deliberately keeps all
+      // drones still. This makes the countdown deterministic on every device.
+      if (preMatchLocked) {
+        dx = 0;
+        dy = 0;
+      }
+
       const isMovingInput = dx !== 0 || dy !== 0;
       if (
         isMovingInput &&
@@ -2764,6 +2819,8 @@ export class GameGateway {
         rapidBonus +
         overclockBonus) *
       progressionAttackDroneMultiplier;
+    // One input/cooldown cycle always consumes and launches exactly one escort
+    // drone. The projectile is the only attack entity created for this shot.
     player.lastFireAt = now;
     player.drones = Math.max(0, player.drones - 1);
     this.resetDroneProgress(player);
@@ -3559,6 +3616,8 @@ export class GameGateway {
     room.status = "finished";
     room.locked = true;
     room.countdownStartedAt = null;
+    room.matchFoundUntil = null;
+    room.battlePrepareStartsAt = null;
     room.battlePrepareUntil = null;
     room.battleBeginFlashUntil = null;
     room.winnerId = winner?.id || null;
@@ -4304,6 +4363,10 @@ export class GameGateway {
         safeZoneRadius: zoneRadius,
         zoneShrinkDuration: BR_ONLINE_ZONE_SHRINK_DURATION,
         matchStartedAt: room.matchStartedAt,
+        matchFoundUntil: room.matchFoundUntil || null,
+        matchFoundRealPlayerCount: Number(room.matchFoundRealPlayerCount || 0),
+        matchFoundBotCount: Number(room.matchFoundBotCount || 0),
+        battlePrepareStartsAt: room.battlePrepareStartsAt || null,
         battlePrepareUntil: room.battlePrepareUntil || null,
         battlePrepareRemainingMs,
         battleBeginFlashUntil: room.battleBeginFlashUntil || null,
@@ -4412,6 +4475,11 @@ export class GameGateway {
       createdAt: Date.now(),
       emptySince: Date.now(),
       matchStartedAt: null,
+      matchFoundAt: null,
+      matchFoundUntil: null,
+      matchFoundRealPlayerCount: 0,
+      matchFoundBotCount: 0,
+      battlePrepareStartsAt: null,
       battlePrepareUntil: null,
       battleBeginFlashUntil: null,
       matchHadMultiplePlayers: false,
