@@ -207,33 +207,34 @@ function getRendererConfig(forceLowQuality) {
   // nearby premium drones and readable loot. The adaptive tier reacts to
   // actual sustained frame pressure instead of pre-emptively showing dots.
   const resolution = device.lowSpecDesktop
-    ? 0.72
+    ? 0.68
     : device.weakMobile
-      ? 0.70
+      ? 0.66
       : visualFirstDesktop
-        ? Math.min(0.78, device.dpr)
+        ? Math.min(0.70, device.dpr)
         : lightMobile
-          ? 0.84
+          ? 0.80
           : Math.min(1.35, device.dpr);
 
   return {
     ...device,
     resolution,
-    antialias: !lowSpec && !lightMobile,
+    // MSAA is expensive on integrated GPUs and has almost no visible benefit
+    // once the renderer uses a reduced internal resolution. Keep it only on
+    // normal desktop hardware so weak laptops retain the same art at a stable FPS.
+    antialias: !lowSpec && !lightMobile && !visualFirstDesktop,
     // Weak laptops keep the same recognizable drones, engines and spinning
-    // propellers. The savings come from lower internal resolution, smaller
-    // nearby premium pool and fewer static pickups, not from turning enemies
-    // into points or freezing their animations.
-    maxStaticItems: device.lowSpecDesktop ? 50 : device.weakMobile ? 46 : visualFirstDesktop ? 68 : lightMobile ? 54 : 120,
-    maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : visualFirstDesktop ? 7 : lightMobile ? 5 : MAX_RENDERED_PLAYERS,
+    // propellers. The savings come from lower internal resolution, a smaller
+    // premium shell pool, slower accessory-only animation and fewer far pickups.
+    maxStaticItems: device.lowSpecDesktop ? 42 : device.weakMobile ? 40 : visualFirstDesktop ? 54 : lightMobile ? 48 : 120,
+    maxPlayers: device.lowSpecDesktop ? 3 : device.weakMobile ? 3 : visualFirstDesktop ? 5 : lightMobile ? 5 : MAX_RENDERED_PLAYERS,
     maxSimplePlayers: 60,
-    maxProjectiles: device.lowSpecDesktop ? 5 : device.weakMobile ? 4 : visualFirstDesktop ? 8 : lightMobile ? 6 : MAX_RENDERED_PROJECTILES,
-    maxSimpleProjectiles: device.lowSpecDesktop ? 28 : device.weakMobile ? 24 : visualFirstDesktop ? 30 : lightMobile ? 26 : 48,
-    staticSyncInterval: device.lowSpecDesktop ? 500 : device.weakMobile ? 560 : visualFirstDesktop ? 340 : lightMobile ? 400 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: device.lowSpecDesktop ? 8 : device.weakMobile ? 9 : visualFirstDesktop ? 4 : lightMobile ? 5 : 1,
-    // Weak desktops keep the same premium space terrain. Only mobile/manual
-    // low quality begins without it. Under real sustained load the adaptive
-    // tier hides the terrain last-resort and restores it automatically.
+    maxProjectiles: device.lowSpecDesktop ? 4 : device.weakMobile ? 4 : visualFirstDesktop ? 6 : lightMobile ? 5 : MAX_RENDERED_PROJECTILES,
+    maxSimpleProjectiles: device.lowSpecDesktop ? 22 : device.weakMobile ? 20 : visualFirstDesktop ? 24 : lightMobile ? 22 : 48,
+    staticSyncInterval: device.lowSpecDesktop ? 620 : device.weakMobile ? 700 : visualFirstDesktop ? 520 : lightMobile ? 520 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: device.lowSpecDesktop ? 10 : device.weakMobile ? 10 : visualFirstDesktop ? 7 : lightMobile ? 7 : 1,
+    // Keep the premium space terrain visible on weak desktops. It is one cached
+    // sprite; the expensive work is the hundreds of moving accessories, not it.
     disableExpensiveTerrain: Boolean(device.weakMobile || device.lowSpecDesktop || lightMobile),
   };
 }
@@ -925,6 +926,9 @@ function createSimpleVisual(resources) {
     facingReady: false,
     hoverSeed: Math.random() * Math.PI * 2,
     lastFrameAt: 0,
+    // Accessory transforms (rotors/escort orbit) may update at 30/15 FPS on
+    // weak hardware while the root position continues at display refresh rate.
+    lastAccessoryAt: 0,
     lastSeenAt: 0,
   };
 }
@@ -956,6 +960,7 @@ function createSimpleProjectileVisual(resources) {
     rotors,
     skin: "",
     flightSeed: Math.random() * Math.PI * 2,
+    lastAccessoryAt: 0,
     lastSeenAt: 0,
   };
 }
@@ -1481,7 +1486,7 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
   visual.lastSeenAt = now;
 }
 
-function updateSimpleVisual(visual, unit, resources, now) {
+function updateSimpleVisual(visual, unit, resources, now, accessoryInterval = 0) {
   const skin = normalizeSkin(unit.skin);
   if (visual.skin !== skin) {
     visual.skin = skin;
@@ -1519,6 +1524,20 @@ function updateSimpleVisual(visual, unit, resources, now) {
   visual.root.rotation = visual.facing;
   visual.root.scale.set(0.96);
   visual.root.alpha = unit.alive === false ? 0.32 : 0.98;
+
+  // Movement remains at display refresh rate. On older laptops the purely
+  // decorative motor/escort transforms run at 30 FPS (or 15 FPS under real
+  // pressure), which removes hundreds of property writes without making a
+  // drone look static.
+  const shouldUpdateAccessories =
+    accessoryInterval <= 0 ||
+    !visual.lastAccessoryAt ||
+    now - visual.lastAccessoryAt >= accessoryInterval;
+  if (!shouldUpdateAccessories) {
+    visual.lastSeenAt = now;
+    return;
+  }
+  visual.lastAccessoryAt = now;
 
   // Cheap transform-only propulsion: one engine scale/alpha plus four rotor
   // rotations. This costs far less than the premium aura/shield/escort layer.
@@ -1561,7 +1580,7 @@ function updateSimpleVisual(visual, unit, resources, now) {
   visual.lastSeenAt = now;
 }
 
-function updateSimpleProjectileVisual(visual, projectile, resources, now) {
+function updateSimpleProjectileVisual(visual, projectile, resources, now, accessoryInterval = 0) {
   const skin = normalizeSkin(projectile.skin);
   if (visual.skin !== skin) {
     visual.skin = skin;
@@ -1582,6 +1601,15 @@ function updateSimpleProjectileVisual(visual, projectile, resources, now) {
   visual.root.rotation = heading + Math.PI * 0.5;
   visual.root.scale.set(1.02);
   visual.root.alpha = 0.96;
+  const shouldUpdateAccessories =
+    accessoryInterval <= 0 ||
+    !visual.lastAccessoryAt ||
+    now - visual.lastAccessoryAt >= accessoryInterval;
+  if (!shouldUpdateAccessories) {
+    visual.lastSeenAt = now;
+    return;
+  }
+  visual.lastAccessoryAt = now;
   visual.body.position.set(0, Math.sin(phase) * 0.42);
   visual.rotors.forEach((rotor, index) => {
     const direction = index % 2 === 0 ? 1 : -1;
@@ -1660,7 +1688,7 @@ function syncUnitPool({ pool, source, resources, parent, bounds, max, now, isPla
   return ids;
 }
 
-function syncSimplePool({ pool, source, resources, parent, bounds, max, now, excludeIds = null }) {
+function syncSimplePool({ pool, source, resources, parent, bounds, max, now, excludeIds = null, accessoryInterval = 0 }) {
   const visible = [];
   const seen = new Set();
   for (const unit of source || []) {
@@ -1679,11 +1707,11 @@ function syncSimplePool({ pool, source, resources, parent, bounds, max, now, exc
       visual.root.visible = false;
       continue;
     }
-    updateSimpleVisual(visual, unit, resources, now);
+    updateSimpleVisual(visual, unit, resources, now, accessoryInterval);
   }
 }
 
-function syncProjectilePool({ pool, source, resources, parent, bounds, max, now, compact = false, simple = false, excludeIds = null }) {
+function syncProjectilePool({ pool, source, resources, parent, bounds, max, now, compact = false, simple = false, excludeIds = null, accessoryInterval = 0 }) {
   const visible = [];
   const ids = new Set();
   for (const projectile of source || []) {
@@ -1703,7 +1731,7 @@ function syncProjectilePool({ pool, source, resources, parent, bounds, max, now,
       continue;
     }
     if (simple) {
-      updateSimpleProjectileVisual(visual, projectile, resources, now);
+      updateSimpleProjectileVisual(visual, projectile, resources, now, accessoryInterval);
     } else {
       updateProjectileVisual(visual, projectile, resources, now, compact);
     }
@@ -2539,7 +2567,11 @@ function PixiArenaRenderer({
           }
         }
         setWorldTransform(world, camera.x, camera.y, camera.scale);
-        const bounds = getBounds(camera.x, camera.y, camera.scale, width, height, 360);
+        const boundsMargin =
+          config.visualFirstWeakDesktop || config.lowSpecDesktop || config.weakMobile
+            ? 180
+            : 360;
+        const bounds = getBounds(camera.x, camera.y, camera.scale, width, height, boundsMargin);
 
         // Transform-only pickup pulses. On a weak desktop they run every other
         // rendered frame, which keeps the look but removes dozens of needless
@@ -2569,7 +2601,14 @@ function PixiArenaRenderer({
           const rawStaticItemBudget = data.staticItemBudget;
           const hasRequestedStaticBudget = rawStaticItemBudget !== null && rawStaticItemBudget !== undefined && Number.isFinite(Number(rawStaticItemBudget));
           const requestedStaticBudget = hasRequestedStaticBudget ? Number(rawStaticItemBudget) : null;
-          const staticBudgetCeiling = config.mobile ? 190 : 300;
+          const staticBudgetCeiling =
+            config.visualFirstWeakDesktop
+              ? 58
+              : config.lowSpecDesktop || config.weakMobile
+                ? 46
+                : config.mobile
+                  ? 190
+                  : 300;
           const baseItemBudget = hasRequestedStaticBudget
             ? clamp(Math.round(requestedStaticBudget), 0, staticBudgetCeiling)
             : config.maxStaticItems;
@@ -2664,6 +2703,17 @@ function PixiArenaRenderer({
           effectTier: remoteEffectTier,
         });
         const fullEntityIds = new Set([...fullRemoteIds, ...fullBotIds]);
+        // Root positions always update every frame. Only decorative rotor/orbit
+        // transforms are sampled on weak hardware; 30 FPS still reads as a
+        // fast spinning propeller while avoiding a large CPU/GPU submission cost.
+        const accessoryInterval =
+          config.visualFirstWeakDesktop || config.lowSpecDesktop || config.weakMobile
+            ? adaptiveTier >= 1
+              ? 66
+              : 33
+            : adaptiveTier > 0
+              ? 33
+              : 0;
         syncSimplePool({
           pool: simpleBotPool,
           // When a device drops to a low tier, entities that no longer fit in
@@ -2675,6 +2725,7 @@ function PixiArenaRenderer({
           max: config.maxSimplePlayers,
           now,
           excludeIds: fullEntityIds,
+          accessoryInterval,
         });
         const fullProjectileCap = adaptiveTier === 2
           ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 5 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
@@ -2702,6 +2753,7 @@ function PixiArenaRenderer({
           compact: true,
           simple: true,
           excludeIds: fullProjectileIds,
+          accessoryInterval,
         });
         // Normal PvP and Zone PvP request strict private combat text. In this
         // mode an event must explicitly belong to the local player. Other

@@ -1282,6 +1282,20 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   // fewer expensive shells, all other drones as cheap live markers.
   const constrainedDesktopRef = useRef(isConstrainedDesktopDevice());
   const pixiLiveRef = useRef(null);
+  // Culling/sorting is independent from transform rendering. On older laptops
+  // recompute which IDs are visible a few times per second, then resolve their
+  // newest positions every frame. This removes the repeated Array.from/filter/
+  // sort allocation spike that was holding Zone PvP around 50 FPS.
+  const renderSelectionRef = useRef({
+    unitsAt: 0,
+    unitIds: [],
+    staticsAt: 0,
+    orbIds: [],
+    energyIds: [],
+    coreIds: [],
+    projectilesAt: 0,
+    projectileIds: [],
+  });
   const coreColorMapRef = useRef(
     CORE_TYPES.reduce((acc, core) => {
       acc[core.type] = core.color;
@@ -2616,57 +2630,105 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const liveCameraX = liveCameraSubject ? viewport.width / 2 - liveCameraSubject.x * liveCameraScale : 0;
       const liveCameraY = liveCameraSubject ? viewport.height / 2 - liveCameraSubject.y * liveCameraScale : 0;
 
-      const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 980, liveCameraScale);
+      const isLowEndRender = mobilePerformanceRef.current || constrainedDesktopRef.current;
+      const liveBounds = getViewportBounds(
+        liveCameraX,
+        liveCameraY,
+        viewport,
+        isLowEndRender ? 650 : 980,
+        liveCameraScale,
+      );
       const renderLimits = mobilePerformanceRef.current
-        ? { detailed: 6, total: 60, orbs: 42, energy: 14, cores: 4, projectiles: 5, simpleProjectiles: 30 }
+        ? { detailed: 5, total: 60, orbs: 38, energy: 12, cores: 4, projectiles: 5, simpleProjectiles: 24 }
         : constrainedDesktopRef.current
-          ? { detailed: 7, total: 60, orbs: 72, energy: 26, cores: 6, projectiles: 10, simpleProjectiles: 34 }
+          ? { detailed: 5, total: 60, orbs: 58, energy: 20, cores: 5, projectiles: 7, simpleProjectiles: 28 }
           : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
-      // Map insertion order is not distance order. Sort by the camera subject
-      // so the nearest threats keep detailed shells and every other visible
-      // drone stays on a very cheap marker pool instead of vanishing.
-      const visibleRemoteUnits = [...remoteMap.values()]
-        .filter((player) => player?.id !== liveYou?.id && player?.alive !== false && isVisible(player, liveBounds, 460))
-        .map((player) => ({ ...player, skin: normalizeSkin(player.skin), isBot: Boolean(player.isBot) }))
-        .sort((a, b) => {
-          const ax = Number(a.x || 0) - Number(liveCameraSubject?.x || 0);
-          const ay = Number(a.y || 0) - Number(liveCameraSubject?.y || 0);
-          const bx = Number(b.x || 0) - Number(liveCameraSubject?.x || 0);
-          const by = Number(b.y || 0) - Number(liveCameraSubject?.y || 0);
-          return ax * ax + ay * ay - (bx * bx + by * by);
-        })
-        .slice(0, renderLimits.total);
+      const selection = renderSelectionRef.current;
+      const unitSelectionInterval = isLowEndRender ? 110 : 42;
+      const staticSelectionInterval = isLowEndRender ? 180 : 90;
+      const projectileSelectionInterval = isLowEndRender ? 75 : 34;
+      const subjectX = Number(liveCameraSubject?.x || 0);
+      const subjectY = Number(liveCameraSubject?.y || 0);
+
+      // On a constrained CPU, sorting all remote drones every animation frame
+      // costs more than the actual WebGL transforms. Cache IDs briefly; each
+      // frame still resolves their newest coordinates from remoteMap.
+      if (now - selection.unitsAt >= unitSelectionInterval || !selection.unitIds.length) {
+        selection.unitsAt = now;
+        selection.unitIds = [...remoteMap.values()]
+          .filter((player) => player?.id !== liveYou?.id && player?.alive !== false && isVisible(player, liveBounds, 300))
+          .sort((a, b) => {
+            const ax = Number(a.x || 0) - subjectX;
+            const ay = Number(a.y || 0) - subjectY;
+            const bx = Number(b.x || 0) - subjectX;
+            const by = Number(b.y || 0) - subjectY;
+            return ax * ax + ay * ay - (bx * bx + by * by);
+          })
+          .slice(0, renderLimits.total)
+          .map((player) => String(player.id));
+      }
+
+      const visibleRemoteUnits = selection.unitIds
+        .map((id) => remoteMap.get(id))
+        .filter((player) => player?.id !== liveYou?.id && player?.alive !== false)
+        .map((player) => ({ ...player, skin: normalizeSkin(player.skin), isBot: Boolean(player.isBot) }));
 
       const detailedRemoteUnits = visibleRemoteUnits.slice(0, renderLimits.detailed);
       const simpleRemoteUnits = visibleRemoteUnits.slice(renderLimits.detailed);
       const livePlayers = detailedRemoteUnits.filter((player) => !player.isBot);
       const liveBots = detailedRemoteUnits.filter((player) => player.isBot);
 
-      const liveOrbs = collectVisible(
-        stableOrbMapRef.current.values(),
-        (orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id) && isVisible(orb, liveBounds, 45),
-        renderLimits?.orbs || 140
-      );
-      const liveEnergyCells = collectVisible(
-        stableEnergyMapRef.current.values(),
-        (cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id) && isVisible(cell, liveBounds, 70),
-        renderLimits?.energy || 50
-      );
-      const liveCores = collectVisible(
-        data.cores || [],
-        (core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id) && isVisible(core, liveBounds, 130),
-        renderLimits?.cores || 9
-      );
-      const sortedVisibleProjectiles = [...projectileMap.values()]
-        .filter((projectile) => isVisible(projectile, liveBounds, 220))
-        .sort((a, b) => {
-          const ax = Number(a.x || 0) - Number(liveCameraSubject?.x || 0);
-          const ay = Number(a.y || 0) - Number(liveCameraSubject?.y || 0);
-          const bx = Number(b.x || 0) - Number(liveCameraSubject?.x || 0);
-          const by = Number(b.y || 0) - Number(liveCameraSubject?.y || 0);
-          return ax * ax + ay * ay - (bx * bx + by * by);
-        });
+      if (now - selection.staticsAt >= staticSelectionInterval || !selection.orbIds.length) {
+        selection.staticsAt = now;
+        selection.orbIds = collectVisible(
+          stableOrbMapRef.current.values(),
+          (orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id) && isVisible(orb, liveBounds, 45),
+          renderLimits.orbs,
+          (orb) => String(orb.id),
+        );
+        selection.energyIds = collectVisible(
+          stableEnergyMapRef.current.values(),
+          (cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id) && isVisible(cell, liveBounds, 70),
+          renderLimits.energy,
+          (cell) => String(cell.id),
+        );
+        selection.coreIds = collectVisible(
+          data.cores || [],
+          (core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id) && isVisible(core, liveBounds, 130),
+          renderLimits.cores,
+          (core) => String(core.id),
+        );
+      }
+
+      const liveOrbs = selection.orbIds
+        .map((id) => stableOrbMapRef.current.get(id))
+        .filter((orb) => orb && !isHiddenCollected(hiddenOrbIdsRef.current, orb.id));
+      const liveEnergyCells = selection.energyIds
+        .map((id) => stableEnergyMapRef.current.get(id))
+        .filter((cell) => cell && !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id));
+      const coreById = new Map((data.cores || []).map((core) => [String(core.id), core]));
+      const liveCores = selection.coreIds
+        .map((id) => coreById.get(id))
+        .filter((core) => core && !isHiddenCollected(hiddenCoreIdsRef.current, core.id));
+
+      if (now - selection.projectilesAt >= projectileSelectionInterval || !selection.projectileIds.length) {
+        selection.projectilesAt = now;
+        selection.projectileIds = [...projectileMap.values()]
+          .filter((projectile) => isVisible(projectile, liveBounds, 150))
+          .sort((a, b) => {
+            const ax = Number(a.x || 0) - subjectX;
+            const ay = Number(a.y || 0) - subjectY;
+            const bx = Number(b.x || 0) - subjectX;
+            const by = Number(b.y || 0) - subjectY;
+            return ax * ax + ay * ay - (bx * bx + by * by);
+          })
+          .slice(0, renderLimits.projectiles + renderLimits.simpleProjectiles)
+          .map((projectile) => String(projectile.id));
+      }
+      const sortedVisibleProjectiles = selection.projectileIds
+        .map((id) => projectileMap.get(id))
+        .filter(Boolean);
       const liveProjectiles = sortedVisibleProjectiles.slice(0, renderLimits.projectiles);
       const liveSimpleProjectiles = sortedVisibleProjectiles.slice(
         renderLimits.projectiles,
@@ -2703,7 +2765,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         // Zone PvP shares the same premium space background as the good-desktop
         // profile. Pixi hides it only temporarily if emergency frame pressure is measured.
         worldTheme: "premium-space-battle",
-        staticItemBudget: mobilePerformanceRef.current ? 52 : 110,
+        staticItemBudget: mobilePerformanceRef.current ? 46 : constrainedDesktopRef.current ? 58 : 110,
         safeZoneRadius: zoneRadius,
         showZone: true,
         coreColorMap: coreColorMapRef.current,
@@ -3110,9 +3172,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y * cameraScale : 0;
   const bounds = getViewportBounds(cameraX, cameraY, viewport, 720, cameraScale);
   const reactiveRenderLimits = isMobileControls
-    ? { detailed: 6, total: 50, orbs: 48, energy: 16, cores: 4, projectiles: 5, simpleProjectiles: 26 }
+    ? { detailed: 5, total: 60, orbs: 38, energy: 12, cores: 4, projectiles: 5, simpleProjectiles: 24 }
     : constrainedDesktopRef.current
-      ? { detailed: 10, total: 60, orbs: 96, energy: 34, cores: 7, projectiles: 14, simpleProjectiles: 42 }
+      ? { detailed: 5, total: 60, orbs: 58, energy: 20, cores: 5, projectiles: 7, simpleProjectiles: 28 }
       : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
   const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), reactiveRenderLimits.orbs);
@@ -3345,7 +3407,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldWidth={worldWidth}
         worldHeight={worldHeight}
         worldTheme="premium-space-battle"
-        staticItemBudget={isRealMobileDevice() ? 52 : 110}
+        staticItemBudget={isRealMobileDevice() ? 46 : constrainedDesktopRef.current ? 58 : 110}
         safeZoneRadius={safeZoneRadius}
         showZone={true}
       />
