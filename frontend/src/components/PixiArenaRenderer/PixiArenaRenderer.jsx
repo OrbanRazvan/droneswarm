@@ -207,34 +207,33 @@ function getRendererConfig(forceLowQuality) {
   // nearby premium drones and readable loot. The adaptive tier reacts to
   // actual sustained frame pressure instead of pre-emptively showing dots.
   const resolution = device.lowSpecDesktop
-    ? 0.68
+    ? 0.72
     : device.weakMobile
-      ? 0.66
+      ? 0.70
       : visualFirstDesktop
-        ? Math.min(0.70, device.dpr)
+        ? Math.min(0.78, device.dpr)
         : lightMobile
-          ? 0.80
+          ? 0.84
           : Math.min(1.35, device.dpr);
 
   return {
     ...device,
     resolution,
-    // MSAA is expensive on integrated GPUs and has almost no visible benefit
-    // once the renderer uses a reduced internal resolution. Keep it only on
-    // normal desktop hardware so weak laptops retain the same art at a stable FPS.
-    antialias: !lowSpec && !lightMobile && !visualFirstDesktop,
+    antialias: !lowSpec && !lightMobile,
     // Weak laptops keep the same recognizable drones, engines and spinning
-    // propellers. The savings come from lower internal resolution, a smaller
-    // premium shell pool, slower accessory-only animation and fewer far pickups.
-    maxStaticItems: device.lowSpecDesktop ? 42 : device.weakMobile ? 40 : visualFirstDesktop ? 54 : lightMobile ? 48 : 120,
-    maxPlayers: device.lowSpecDesktop ? 3 : device.weakMobile ? 3 : visualFirstDesktop ? 5 : lightMobile ? 5 : MAX_RENDERED_PLAYERS,
+    // propellers. The savings come from lower internal resolution, smaller
+    // nearby premium pool and fewer static pickups, not from turning enemies
+    // into points or freezing their animations.
+    maxStaticItems: device.lowSpecDesktop ? 50 : device.weakMobile ? 46 : visualFirstDesktop ? 68 : lightMobile ? 54 : 120,
+    maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : visualFirstDesktop ? 7 : lightMobile ? 5 : MAX_RENDERED_PLAYERS,
     maxSimplePlayers: 60,
-    maxProjectiles: device.lowSpecDesktop ? 4 : device.weakMobile ? 4 : visualFirstDesktop ? 6 : lightMobile ? 5 : MAX_RENDERED_PROJECTILES,
-    maxSimpleProjectiles: device.lowSpecDesktop ? 22 : device.weakMobile ? 20 : visualFirstDesktop ? 24 : lightMobile ? 22 : 48,
-    staticSyncInterval: device.lowSpecDesktop ? 620 : device.weakMobile ? 700 : visualFirstDesktop ? 520 : lightMobile ? 520 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: device.lowSpecDesktop ? 10 : device.weakMobile ? 10 : visualFirstDesktop ? 7 : lightMobile ? 7 : 1,
-    // Keep the premium space terrain visible on weak desktops. It is one cached
-    // sprite; the expensive work is the hundreds of moving accessories, not it.
+    maxProjectiles: device.lowSpecDesktop ? 5 : device.weakMobile ? 4 : visualFirstDesktop ? 8 : lightMobile ? 6 : MAX_RENDERED_PROJECTILES,
+    maxSimpleProjectiles: device.lowSpecDesktop ? 28 : device.weakMobile ? 24 : visualFirstDesktop ? 30 : lightMobile ? 26 : 48,
+    staticSyncInterval: device.lowSpecDesktop ? 500 : device.weakMobile ? 560 : visualFirstDesktop ? 340 : lightMobile ? 400 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: device.lowSpecDesktop ? 8 : device.weakMobile ? 9 : visualFirstDesktop ? 4 : lightMobile ? 5 : 1,
+    // Weak desktops keep the same premium space terrain. Only mobile/manual
+    // low quality begins without it. Under real sustained load the adaptive
+    // tier hides the terrain last-resort and restores it automatically.
     disableExpensiveTerrain: Boolean(device.weakMobile || device.lowSpecDesktop || lightMobile),
   };
 }
@@ -926,9 +925,6 @@ function createSimpleVisual(resources) {
     facingReady: false,
     hoverSeed: Math.random() * Math.PI * 2,
     lastFrameAt: 0,
-    // Accessory transforms (rotors/escort orbit) may update at 30/15 FPS on
-    // weak hardware while the root position continues at display refresh rate.
-    lastAccessoryAt: 0,
     lastSeenAt: 0,
   };
 }
@@ -960,7 +956,6 @@ function createSimpleProjectileVisual(resources) {
     rotors,
     skin: "",
     flightSeed: Math.random() * Math.PI * 2,
-    lastAccessoryAt: 0,
     lastSeenAt: 0,
   };
 }
@@ -1486,18 +1481,19 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
   visual.lastSeenAt = now;
 }
 
-function updateSimpleVisual(visual, unit, resources, now, accessoryInterval = 0) {
+function updateSimpleVisual(visual, unit, resources, now, cosmeticIntervalMs = 0) {
   const skin = normalizeSkin(unit.skin);
-  if (visual.skin !== skin) {
+  const skinChanged = visual.skin !== skin;
+  if (skinChanged) {
     visual.skin = skin;
     visual.body.context = resources.simpleContexts[skin] || resources.simpleContexts.cyan;
     visual.engine.context = resources.engineVectorContexts[skin] || resources.engineVectorContexts.cyan;
-    visual.minis.forEach((mini) => {
-      mini.context = resources.miniContexts[skin] || resources.miniContexts.cyan;
-    });
-    visual.rotors.forEach((rotor) => {
-      rotor.context = resources.rotorSpinContexts[skin] || resources.rotorSpinContexts.cyan;
-    });
+    for (let index = 0; index < visual.minis.length; index += 1) {
+      visual.minis[index].context = resources.miniContexts[skin] || resources.miniContexts.cyan;
+    }
+    for (let index = 0; index < visual.rotors.length; index += 1) {
+      visual.rotors[index].context = resources.rotorSpinContexts[skin] || resources.rotorSpinContexts.cyan;
+    }
   }
 
   const deltaSeconds = clamp((now - (visual.lastFrameAt || now)) / 1000, 1 / 240, 0.05);
@@ -1505,10 +1501,14 @@ function updateSimpleVisual(visual, unit, resources, now, accessoryInterval = 0)
   const moveX = Number(unit.moveX || unit.velocityX || 0);
   const moveY = Number(unit.moveY || unit.velocityY || 0);
   const moving = Boolean(unit.isMoving) || Math.hypot(moveX, moveY) > 0.012;
-  const targetFacing = getUnitFacingTarget(
-    { ...unit, moveX, moveY, isMoving: moving },
-    visual.facing || 0,
-  );
+
+  let targetFacing = visual.facing || 0;
+  if (moving) {
+    const declaredAngle = Number(unit.moveAngle);
+    targetFacing = Number.isFinite(declaredAngle)
+      ? declaredAngle + Math.PI * 0.5
+      : Math.atan2(moveY, moveX) + Math.PI * 0.5;
+  }
 
   if (!visual.facingReady) {
     visual.facing = targetFacing;
@@ -1517,105 +1517,106 @@ function updateSimpleVisual(visual, unit, resources, now, accessoryInterval = 0)
     visual.facing = dampAngle(visual.facing, targetFacing, 15, deltaSeconds);
   }
 
-  const phase = now * 0.0052 + visual.hoverSeed;
-  const throttle = moving ? 1 : 0;
+  // Root movement and facing stay at display rate. Only the decorative child
+  // transforms below may be sampled at 30 Hz on protected low-end profiles.
+  // The visible model, engines, propellers and escorts are never removed.
   visual.root.visible = true;
   visual.root.position.set(Number(unit.x || 0), Number(unit.y || 0));
   visual.root.rotation = visual.facing;
   visual.root.scale.set(0.96);
   visual.root.alpha = unit.alive === false ? 0.32 : 0.98;
 
-  // Movement remains at display refresh rate. On older laptops the purely
-  // decorative motor/escort transforms run at 30 FPS (or 15 FPS under real
-  // pressure), which removes hundreds of property writes without making a
-  // drone look static.
-  const shouldUpdateAccessories =
-    accessoryInterval <= 0 ||
-    !visual.lastAccessoryAt ||
-    now - visual.lastAccessoryAt >= accessoryInterval;
-  if (!shouldUpdateAccessories) {
-    visual.lastSeenAt = now;
-    return;
-  }
-  visual.lastAccessoryAt = now;
+  const shouldUpdateCosmetics =
+    skinChanged ||
+    cosmeticIntervalMs <= 0 ||
+    now - Number(visual.lastCosmeticAt || 0) >= cosmeticIntervalMs;
 
-  // Cheap transform-only propulsion: one engine scale/alpha plus four rotor
-  // rotations. This costs far less than the premium aura/shield/escort layer.
-  visual.body.position.set(0, Math.sin(phase) * 0.72);
-  visual.engine.visible = true;
-  visual.engine.scale.set(
-    0.36 + throttle * 0.08,
-    0.34 + throttle * 0.15 + Math.sin(phase * 1.7) * 0.025,
-  );
-  visual.engine.alpha = moving ? 0.72 : 0.38;
-
-  visual.rotors.forEach((rotor, index) => {
-    const direction = index % 2 === 0 ? 1 : -1;
-    rotor.rotation = direction * now * 0.026 + index * Math.PI * 0.5;
-    rotor.alpha = moving ? 0.62 : 0.42;
-  });
-
-  // Escort drones are intentionally simpler than the near premium pool:
-  // no glow and no extra rotor objects, but the same skin, body and orbit
-  // count remain visible for every remote player/bot.
-  const escortCount = Math.min(MAX_MINI_DRONES, Math.max(0, Number(unit.drones || 0)));
-  const escortRadius = 56;
-  const escortSpin = now * (moving ? 0.00185 : 0.00125) + visual.hoverSeed;
-  visual.minis.forEach((mini, index) => {
-    const visible = index < escortCount;
-    mini.visible = visible;
-    if (!visible) return;
-
-    const angle = (index / Math.max(1, escortCount)) * Math.PI * 2 + escortSpin;
-    mini.position.set(
-      Math.cos(angle) * escortRadius,
-      Math.sin(angle) * escortRadius + Math.sin(now * 0.004 + index * 1.7) * 1.45,
+  if (shouldUpdateCosmetics) {
+    visual.lastCosmeticAt = now;
+    const phase = now * 0.0052 + visual.hoverSeed;
+    const throttle = moving ? 1 : 0;
+    visual.body.position.set(0, Math.sin(phase) * 0.72);
+    visual.engine.visible = true;
+    visual.engine.scale.set(
+      0.36 + throttle * 0.08,
+      0.34 + throttle * 0.15 + Math.sin(phase * 1.7) * 0.025,
     );
-    mini.rotation = Math.sin(now * 0.003 + index) * 0.05;
-    const pulse = 0.50 + Math.sin(now * 0.0045 + index) * 0.018;
-    mini.scale.set(pulse);
-    mini.alpha = 0.93;
-  });
+    visual.engine.alpha = moving ? 0.72 : 0.38;
+
+    for (let index = 0; index < visual.rotors.length; index += 1) {
+      const rotor = visual.rotors[index];
+      const direction = index % 2 === 0 ? 1 : -1;
+      rotor.rotation = direction * now * 0.026 + index * Math.PI * 0.5;
+      rotor.alpha = moving ? 0.62 : 0.42;
+    }
+
+    // Remote escort drones remain visible on every low-end profile. Their
+    // orbit is merely sampled less frequently; the parent drone itself still
+    // follows the server/client interpolation every rendered frame.
+    const escortCount = Math.min(MAX_MINI_DRONES, Math.max(0, Number(unit.drones || 0)));
+    const escortRadius = 56;
+    const escortSpin = now * (moving ? 0.00185 : 0.00125) + visual.hoverSeed;
+    for (let index = 0; index < visual.minis.length; index += 1) {
+      const mini = visual.minis[index];
+      const visible = index < escortCount;
+      mini.visible = visible;
+      if (!visible) continue;
+
+      const angle = (index / Math.max(1, escortCount)) * Math.PI * 2 + escortSpin;
+      mini.position.set(
+        Math.cos(angle) * escortRadius,
+        Math.sin(angle) * escortRadius + Math.sin(now * 0.004 + index * 1.7) * 1.45,
+      );
+      mini.rotation = Math.sin(now * 0.003 + index) * 0.05;
+      const pulse = 0.50 + Math.sin(now * 0.0045 + index) * 0.018;
+      mini.scale.set(pulse);
+      mini.alpha = 0.93;
+    }
+  }
 
   visual.lastSeenAt = now;
 }
 
-function updateSimpleProjectileVisual(visual, projectile, resources, now, accessoryInterval = 0) {
+function updateSimpleProjectileVisual(visual, projectile, resources, now, cosmeticIntervalMs = 0) {
   const skin = normalizeSkin(projectile.skin);
-  if (visual.skin !== skin) {
+  const skinChanged = visual.skin !== skin;
+  if (skinChanged) {
     visual.skin = skin;
     visual.body.context = resources.miniContexts[skin] || resources.miniContexts.cyan;
-    visual.rotors.forEach((rotor) => {
-      rotor.context = resources.rotorSpinContexts[skin] || resources.rotorSpinContexts.cyan;
-    });
+    for (let index = 0; index < visual.rotors.length; index += 1) {
+      visual.rotors[index].context = resources.rotorSpinContexts[skin] || resources.rotorSpinContexts.cyan;
+    }
   }
 
   const heading = Number(
     projectile.angle ??
       Math.atan2(Number(projectile.vy || 0), Number(projectile.vx || 1)),
   );
-  const phase = now * 0.017 + visual.flightSeed;
 
+  // Position/heading remain at display rate; only rotor decoration is sampled
+  // less often on weak hardware so fast attack drones never stutter.
   visual.root.visible = true;
   visual.root.position.set(Number(projectile.x || 0), Number(projectile.y || 0));
   visual.root.rotation = heading + Math.PI * 0.5;
   visual.root.scale.set(1.02);
   visual.root.alpha = 0.96;
-  const shouldUpdateAccessories =
-    accessoryInterval <= 0 ||
-    !visual.lastAccessoryAt ||
-    now - visual.lastAccessoryAt >= accessoryInterval;
-  if (!shouldUpdateAccessories) {
-    visual.lastSeenAt = now;
-    return;
+
+  const shouldUpdateCosmetics =
+    skinChanged ||
+    cosmeticIntervalMs <= 0 ||
+    now - Number(visual.lastCosmeticAt || 0) >= cosmeticIntervalMs;
+
+  if (shouldUpdateCosmetics) {
+    visual.lastCosmeticAt = now;
+    const phase = now * 0.017 + visual.flightSeed;
+    visual.body.position.set(0, Math.sin(phase) * 0.42);
+    for (let index = 0; index < visual.rotors.length; index += 1) {
+      const rotor = visual.rotors[index];
+      const direction = index % 2 === 0 ? 1 : -1;
+      rotor.rotation = direction * now * 0.036 + index * Math.PI * 0.5;
+      rotor.alpha = 0.68;
+    }
   }
-  visual.lastAccessoryAt = now;
-  visual.body.position.set(0, Math.sin(phase) * 0.42);
-  visual.rotors.forEach((rotor, index) => {
-    const direction = index % 2 === 0 ? 1 : -1;
-    rotor.rotation = direction * now * 0.036 + index * Math.PI * 0.5;
-    rotor.alpha = 0.68;
-  });
   visual.lastSeenAt = now;
 }
 
@@ -1665,19 +1666,44 @@ function updateProjectileVisual(visual, projectile, resources, now, compact = fa
   visual.lastSeenAt = now;
 }
 
-function syncUnitPool({ pool, source, resources, parent, bounds, max, now, isPlayer = false, compact = false, effectTier = 0 }) {
-  const visible = [];
-  const ids = new Set();
-  for (const unit of source || []) {
-    if (!unit || unit.alive === false || !isVisibleInBounds(unit, bounds, 320)) continue;
-    visible.push(unit);
-    ids.add(String(unit.id || ""));
-    if (visible.length >= max) break;
+function syncUnitPool({
+  pool,
+  source,
+  resources,
+  parent,
+  bounds,
+  max,
+  now,
+  isPlayer = false,
+  compact = false,
+  effectTier = 0,
+  preCulled = false,
+  collectIds = true,
+}) {
+  // Zone already selects only viewport-visible entries. Reusing that array
+  // avoids a second scan and a new `visible` array on every Pixi frame.
+  const visible = preCulled ? (source || []) : [];
+  let count = 0;
+  let ids = collectIds ? new Set() : null;
+
+  if (!preCulled) {
+    for (const unit of source || []) {
+      if (!unit || unit.alive === false || !isVisibleInBounds(unit, bounds, 320)) continue;
+      visible.push(unit);
+      if (ids) ids.add(String(unit.id || ""));
+      if (visible.length >= max) break;
+    }
+  } else if (ids) {
+    const capped = Math.min(max, visible.length);
+    for (let index = 0; index < capped; index += 1) {
+      ids.add(String(visible[index]?.id || ""));
+    }
   }
 
-  addToPool(pool, () => createUnitVisual(resources), parent, visible.length);
+  count = Math.min(max, visible.length);
+  addToPool(pool, () => createUnitVisual(resources), parent, count);
   for (let index = 0; index < pool.length; index += 1) {
-    const unit = visible[index];
+    const unit = index < count ? visible[index] : null;
     const visual = pool[index];
     if (!unit) {
       visual.root.visible = false;
@@ -1688,50 +1714,89 @@ function syncUnitPool({ pool, source, resources, parent, bounds, max, now, isPla
   return ids;
 }
 
-function syncSimplePool({ pool, source, resources, parent, bounds, max, now, excludeIds = null, accessoryInterval = 0 }) {
-  const visible = [];
-  const seen = new Set();
-  for (const unit of source || []) {
-    const id = String(unit?.id || "");
-    if (!unit || !id || seen.has(id) || (excludeIds && excludeIds.has(id)) || unit.alive === false || !isVisibleInBounds(unit, bounds, 120)) continue;
-    seen.add(id);
-    visible.push(unit);
-    if (visible.length >= max) break;
+function syncSimplePool({
+  pool,
+  source,
+  resources,
+  parent,
+  bounds,
+  max,
+  now,
+  excludeIds = null,
+  preCulled = false,
+  cosmeticIntervalMs = 0,
+}) {
+  const visible = preCulled ? (source || []) : [];
+  let count = 0;
+
+  if (!preCulled) {
+    const seen = new Set();
+    for (const unit of source || []) {
+      const id = String(unit?.id || "");
+      if (!unit || !id || seen.has(id) || (excludeIds && excludeIds.has(id)) || unit.alive === false || !isVisibleInBounds(unit, bounds, 120)) continue;
+      seen.add(id);
+      visible.push(unit);
+      if (visible.length >= max) break;
+    }
   }
 
-  addToPool(pool, () => createSimpleVisual(resources), parent, visible.length);
+  count = Math.min(max, visible.length);
+  addToPool(pool, () => createSimpleVisual(resources), parent, count);
   for (let index = 0; index < pool.length; index += 1) {
-    const unit = visible[index];
+    const unit = index < count ? visible[index] : null;
     const visual = pool[index];
     if (!unit) {
       visual.root.visible = false;
       continue;
     }
-    updateSimpleVisual(visual, unit, resources, now, accessoryInterval);
+    updateSimpleVisual(visual, unit, resources, now, cosmeticIntervalMs);
   }
 }
 
-function syncProjectilePool({ pool, source, resources, parent, bounds, max, now, compact = false, simple = false, excludeIds = null, accessoryInterval = 0 }) {
-  const visible = [];
-  const ids = new Set();
-  for (const projectile of source || []) {
-    const id = String(projectile?.id || "");
-    if (!projectile || !id || (excludeIds && excludeIds.has(id)) || !isVisibleInBounds(projectile, bounds, 120)) continue;
-    visible.push(projectile);
-    ids.add(id);
-    if (visible.length >= max) break;
+function syncProjectilePool({
+  pool,
+  source,
+  resources,
+  parent,
+  bounds,
+  max,
+  now,
+  compact = false,
+  simple = false,
+  excludeIds = null,
+  preCulled = false,
+  collectIds = true,
+  cosmeticIntervalMs = 0,
+}) {
+  const visible = preCulled ? (source || []) : [];
+  const ids = collectIds ? new Set() : null;
+
+  if (!preCulled) {
+    for (const projectile of source || []) {
+      const id = String(projectile?.id || "");
+      if (!projectile || !id || (excludeIds && excludeIds.has(id)) || !isVisibleInBounds(projectile, bounds, 120)) continue;
+      visible.push(projectile);
+      if (ids) ids.add(id);
+      if (visible.length >= max) break;
+    }
+  } else if (ids) {
+    const capped = Math.min(max, visible.length);
+    for (let index = 0; index < capped; index += 1) {
+      ids.add(String(visible[index]?.id || ""));
+    }
   }
 
-  addToPool(pool, () => simple ? createSimpleProjectileVisual(resources) : createProjectileVisual(resources), parent, visible.length);
+  const count = Math.min(max, visible.length);
+  addToPool(pool, () => simple ? createSimpleProjectileVisual(resources) : createProjectileVisual(resources), parent, count);
   for (let index = 0; index < pool.length; index += 1) {
-    const projectile = visible[index];
+    const projectile = index < count ? visible[index] : null;
     const visual = pool[index];
     if (!projectile) {
       visual.root.visible = false;
       continue;
     }
     if (simple) {
-      updateSimpleProjectileVisual(visual, projectile, resources, now, accessoryInterval);
+      updateSimpleProjectileVisual(visual, projectile, resources, now, cosmeticIntervalMs);
     } else {
       updateProjectileVisual(visual, projectile, resources, now, compact);
     }
@@ -2284,6 +2349,10 @@ function PixiArenaRenderer({
   safeZoneRadius = null,
   showZone = false,
   worldTheme = "default",
+  // Zone PvP sends viewport-filtered, pre-split arrays through liveDataRef.
+  // Keeping this optional preserves the existing behavior for every other mode.
+  preCulled = false,
+  lockVisualQuality = false,
 }) {
   const hostRef = useRef(null);
   const latestRef = useRef(null);
@@ -2312,6 +2381,8 @@ function PixiArenaRenderer({
     showZone,
     worldTheme,
     staticItemBudget,
+    preCulled,
+    lockVisualQuality,
   };
 
   useEffect(() => {
@@ -2511,6 +2582,13 @@ function PixiArenaRenderer({
         const data = liveDataRef?.current || latestRef.current;
         if (!data) return;
 
+        // ZonePvpArena sends pre-split viewport arrays and asks us to preserve
+        // its current visual quality. The renderer still keeps its normal
+        // adaptive path for Battle Royale / Normal PvP.
+        const sourcePreCulled = Boolean(data.preCulled);
+        const lockVisualQuality = Boolean(data.lockVisualQuality);
+        const effectiveAdaptiveTier = lockVisualQuality ? 0 : adaptiveTier;
+
         const now = performance.now();
         const tickMs = Math.min(80, Math.max(1, Number(app.ticker.deltaMS || 16.7)));
         frameTimeEma = frameTimeEma * 0.92 + tickMs * 0.08;
@@ -2532,7 +2610,9 @@ function PixiArenaRenderer({
             // Static pools converge only when the stable tier changes, never
             // every few frames. This keeps weak-laptop fights smooth.
             lastStaticSync = 0;
-            applyAdaptiveResolution();
+            if (!lockVisualQuality) {
+              applyAdaptiveResolution();
+            }
           }
         }
 
@@ -2567,11 +2647,7 @@ function PixiArenaRenderer({
           }
         }
         setWorldTransform(world, camera.x, camera.y, camera.scale);
-        const boundsMargin =
-          config.visualFirstWeakDesktop || config.lowSpecDesktop || config.weakMobile
-            ? 180
-            : 360;
-        const bounds = getBounds(camera.x, camera.y, camera.scale, width, height, boundsMargin);
+        const bounds = getBounds(camera.x, camera.y, camera.scale, width, height, 360);
 
         // Transform-only pickup pulses. On a weak desktop they run every other
         // rendered frame, which keeps the look but removes dozens of needless
@@ -2601,21 +2677,14 @@ function PixiArenaRenderer({
           const rawStaticItemBudget = data.staticItemBudget;
           const hasRequestedStaticBudget = rawStaticItemBudget !== null && rawStaticItemBudget !== undefined && Number.isFinite(Number(rawStaticItemBudget));
           const requestedStaticBudget = hasRequestedStaticBudget ? Number(rawStaticItemBudget) : null;
-          const staticBudgetCeiling =
-            config.visualFirstWeakDesktop
-              ? 58
-              : config.lowSpecDesktop || config.weakMobile
-                ? 46
-                : config.mobile
-                  ? 190
-                  : 300;
+          const staticBudgetCeiling = config.mobile ? 190 : 300;
           const baseItemBudget = hasRequestedStaticBudget
             ? clamp(Math.round(requestedStaticBudget), 0, staticBudgetCeiling)
             : config.maxStaticItems;
           const adaptiveItemCap =
-            adaptiveTier === 2
+            effectiveAdaptiveTier === 2
               ? Math.min(baseItemBudget, config.visualFirstWeakDesktop ? 48 : config.lowSpecDesktop ? 30 : 48)
-              : adaptiveTier === 1
+              : effectiveAdaptiveTier === 1
                 ? Math.min(baseItemBudget, config.visualFirstWeakDesktop ? 70 : config.lowSpecDesktop ? 38 : 78)
                 : baseItemBudget;
           const itemBudget = adaptiveItemCap;
@@ -2659,12 +2728,14 @@ function PixiArenaRenderer({
         }
 
         const playerSource = data.player && data.player.alive !== false ? [data.player] : [];
-        // Player keeps the complete visual treatment. Remote/bot effects scale
-        // down only when the actual device profile or adaptive frame budget
-        // needs it; gameplay simulation remains untouched.
-        // Keep nearby remote drones visually close to desktop quality at tier 0.
-        // Effects are removed only after actual frame-time pressure is detected.
-        const remoteEffectTier = adaptiveTier;
+        // Position/heading are still written at display rate. On a protected
+        // device only the decorative rotor/escort transforms are sampled at
+        // 30 Hz; nothing is hidden or downgraded visually.
+        const cosmeticIntervalMs =
+          sourcePreCulled && (config.visualFirstWeakDesktop || config.lowSpecDesktop || config.weakMobile)
+            ? 33
+            : 0;
+        const remoteEffectTier = effectiveAdaptiveTier;
         syncUnitPool({
           pool: playerPool,
           source: playerSource,
@@ -2675,11 +2746,13 @@ function PixiArenaRenderer({
           now,
           isPlayer: true,
         });
-        const fullUnitCap = adaptiveTier === 2
-          ? Math.min(config.maxPlayers, config.visualFirstWeakDesktop ? 5 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
-          : adaptiveTier === 1
-            ? Math.min(config.maxPlayers, config.visualFirstWeakDesktop ? 7 : config.lowSpecDesktop || config.weakMobile ? 3 : 5)
-            : config.maxPlayers;
+        const fullUnitCap = sourcePreCulled
+          ? Math.max(Number(data.players?.length || 0), Number(data.bots?.length || 0))
+          : effectiveAdaptiveTier === 2
+            ? Math.min(config.maxPlayers, config.visualFirstWeakDesktop ? 5 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
+            : effectiveAdaptiveTier === 1
+              ? Math.min(config.maxPlayers, config.visualFirstWeakDesktop ? 7 : config.lowSpecDesktop || config.weakMobile ? 3 : 5)
+              : config.maxPlayers;
         const fullRemoteIds = syncUnitPool({
           pool: remotePool,
           source: data.players,
@@ -2688,8 +2761,10 @@ function PixiArenaRenderer({
           bounds,
           max: fullUnitCap,
           now,
-          compact: adaptiveTier > 0,
+          compact: effectiveAdaptiveTier > 0,
           effectTier: remoteEffectTier,
+          preCulled: sourcePreCulled,
+          collectIds: !sourcePreCulled,
         });
         const fullBotIds = syncUnitPool({
           pool: botPool,
@@ -2699,39 +2774,39 @@ function PixiArenaRenderer({
           bounds,
           max: fullUnitCap,
           now,
-          compact: adaptiveTier > 0,
+          compact: effectiveAdaptiveTier > 0,
           effectTier: remoteEffectTier,
+          preCulled: sourcePreCulled,
+          collectIds: !sourcePreCulled,
         });
-        const fullEntityIds = new Set([...fullRemoteIds, ...fullBotIds]);
-        // Root positions always update every frame. Only decorative rotor/orbit
-        // transforms are sampled on weak hardware; 30 FPS still reads as a
-        // fast spinning propeller while avoiding a large CPU/GPU submission cost.
-        const accessoryInterval =
-          config.visualFirstWeakDesktop || config.lowSpecDesktop || config.weakMobile
-            ? adaptiveTier >= 1
-              ? 66
-              : 33
-            : adaptiveTier > 0
-              ? 33
-              : 0;
+        const fullEntityIds = sourcePreCulled
+          ? null
+          : new Set([...(fullRemoteIds || []), ...(fullBotIds || [])]);
         syncSimplePool({
           pool: simpleBotPool,
-          // When a device drops to a low tier, entities that no longer fit in
-          // the premium pools are promoted here instead of disappearing.
-          source: [...(data.players || []), ...(data.bots || []), ...(data.simpleBots || [])],
+          // Zone already excludes premium entries. Other arena modes retain
+          // the original merge/filter path.
+          source: sourcePreCulled
+            ? data.simpleBots
+            : [...(data.players || []), ...(data.bots || []), ...(data.simpleBots || [])],
           resources,
           parent: entitiesLayer,
           bounds,
-          max: config.maxSimplePlayers,
+          max: sourcePreCulled
+            ? Number(data.simpleBots?.length || 0)
+            : config.maxSimplePlayers,
           now,
           excludeIds: fullEntityIds,
-          accessoryInterval,
+          preCulled: sourcePreCulled,
+          cosmeticIntervalMs,
         });
-        const fullProjectileCap = adaptiveTier === 2
-          ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 5 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
-          : adaptiveTier === 1
-            ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 8 : config.lowSpecDesktop || config.weakMobile ? 3 : 5)
-            : config.maxProjectiles;
+        const fullProjectileCap = sourcePreCulled
+          ? Number(data.projectiles?.length || 0)
+          : effectiveAdaptiveTier === 2
+            ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 5 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
+            : effectiveAdaptiveTier === 1
+              ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 8 : config.lowSpecDesktop || config.weakMobile ? 3 : 5)
+              : config.maxProjectiles;
         const fullProjectileIds = syncProjectilePool({
           pool: projectilePool,
           source: data.projectiles,
@@ -2740,21 +2815,30 @@ function PixiArenaRenderer({
           bounds,
           max: fullProjectileCap,
           now,
-          compact: adaptiveTier > 0,
+          compact: effectiveAdaptiveTier > 0,
+          preCulled: sourcePreCulled,
+          collectIds: !sourcePreCulled,
         });
         syncProjectilePool({
           pool: simpleProjectilePool,
-          source: [...(data.projectiles || []), ...(data.simpleProjectiles || [])],
+          source: sourcePreCulled
+            ? data.simpleProjectiles
+            : [...(data.projectiles || []), ...(data.simpleProjectiles || [])],
           resources,
           parent: projectilesLayer,
           bounds,
-          max: config.maxSimpleProjectiles,
+          max: sourcePreCulled
+            ? Number(data.simpleProjectiles?.length || 0)
+            : config.maxSimpleProjectiles,
           now,
           compact: true,
           simple: true,
-          excludeIds: fullProjectileIds,
-          accessoryInterval,
+          excludeIds: sourcePreCulled ? null : fullProjectileIds,
+          preCulled: sourcePreCulled,
+          collectIds: false,
+          cosmeticIntervalMs,
         });
+
         // Normal PvP and Zone PvP request strict private combat text. In this
         // mode an event must explicitly belong to the local player. Other
         // renderer modes keep their own existing combat-event behavior.

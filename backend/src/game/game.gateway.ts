@@ -139,7 +139,7 @@ const ZONE_PROJECTILE_DEFINITION_INTERVAL_MS = 800;
 // Forty transform updates/second plus local display-rate interpolation is a
 // better mobile trade-off than 60 large JSON payloads.  The server always sends
 // the newest transform and clients discard an obsolete packet before processing.
-const ZONE_TRANSFORM_INTERVAL_MS = 33; // 30 Hz latest-wins transforms; client extrapolates drones/projectiles at display refresh rate.
+const ZONE_TRANSFORM_INTERVAL_MS = 25; // 40 Hz compact latest-wins transforms for smoother attack drones.
 const ZONE_TRANSFORM_PLAYER_LIMIT = 60;
 const ZONE_TRANSFORM_PROJECTILE_LIMIT = 36;
 const ZONE_TRANSFORM_RANGE_PADDING = 820;
