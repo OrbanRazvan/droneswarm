@@ -207,26 +207,30 @@ function getRendererConfig(forceLowQuality) {
   // nearby premium drones and readable loot. The adaptive tier reacts to
   // actual sustained frame pressure instead of pre-emptively showing dots.
   const resolution = device.lowSpecDesktop
-    ? 0.78
+    ? 0.72
     : device.weakMobile
-      ? 0.74
+      ? 0.70
       : visualFirstDesktop
-        ? Math.min(1.0, device.dpr)
+        ? Math.min(0.82, device.dpr)
         : lightMobile
-          ? 0.90
+          ? 0.84
           : Math.min(1.35, device.dpr);
 
   return {
     ...device,
     resolution,
     antialias: !lowSpec && !lightMobile,
-    maxStaticItems: device.lowSpecDesktop ? 76 : device.weakMobile ? 62 : visualFirstDesktop ? 110 : lightMobile ? 76 : 120,
-    maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : visualFirstDesktop ? 10 : lightMobile ? 7 : MAX_RENDERED_PLAYERS,
-    maxSimplePlayers: device.lowSpecDesktop ? 56 : device.weakMobile ? 52 : visualFirstDesktop ? 60 : lightMobile ? 54 : 60,
-    maxProjectiles: device.lowSpecDesktop ? 5 : device.weakMobile ? 4 : visualFirstDesktop ? 14 : lightMobile ? 7 : MAX_RENDERED_PROJECTILES,
-    maxSimpleProjectiles: device.lowSpecDesktop ? 34 : device.weakMobile ? 28 : visualFirstDesktop ? 42 : lightMobile ? 32 : 48,
-    staticSyncInterval: device.lowSpecDesktop ? 340 : device.weakMobile ? 420 : visualFirstDesktop ? 170 : lightMobile ? 280 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: device.lowSpecDesktop ? 5 : device.weakMobile ? 6 : visualFirstDesktop ? 2 : lightMobile ? 3 : 1,
+    // Weak laptops keep the same recognizable drones, engines and spinning
+    // propellers. The savings come from lower internal resolution, smaller
+    // nearby premium pool and fewer static pickups, not from turning enemies
+    // into points or freezing their animations.
+    maxStaticItems: device.lowSpecDesktop ? 54 : device.weakMobile ? 48 : visualFirstDesktop ? 76 : lightMobile ? 58 : 120,
+    maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : visualFirstDesktop ? 7 : lightMobile ? 5 : MAX_RENDERED_PLAYERS,
+    maxSimplePlayers: 60,
+    maxProjectiles: device.lowSpecDesktop ? 5 : device.weakMobile ? 4 : visualFirstDesktop ? 10 : lightMobile ? 6 : MAX_RENDERED_PROJECTILES,
+    maxSimpleProjectiles: device.lowSpecDesktop ? 30 : device.weakMobile ? 26 : visualFirstDesktop ? 34 : lightMobile ? 28 : 48,
+    staticSyncInterval: device.lowSpecDesktop ? 460 : device.weakMobile ? 520 : visualFirstDesktop ? 300 : lightMobile ? 360 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: device.lowSpecDesktop ? 8 : device.weakMobile ? 9 : visualFirstDesktop ? 4 : lightMobile ? 5 : 1,
     // Weak desktops keep the same premium space terrain. Only mobile/manual
     // low quality begins without it. Under real sustained load the adaptive
     // tier hides the terrain last-resort and restores it automatically.
@@ -863,22 +867,82 @@ function createUnitVisual(resources) {
 }
 
 function createSimpleVisual(resources) {
-  const root = new PIXI.Graphics(resources.simpleContexts.cyan);
+  // Lightweight remote drone used after the nearby premium pool fills.
+  // It deliberately keeps a small plasma engine and four spinning propellers,
+  // so distant bots/players stay alive visually on old laptops without paying
+  // for aura, shields, escort drones or large glow geometry.
+  const root = new PIXI.Container();
   root.eventMode = "none";
+  root.sortableChildren = false;
+
+  const engine = new PIXI.Graphics(resources.engineVectorContexts.cyan);
+  engine.eventMode = "none";
+  engine.position.set(0, 11);
+  engine.scale.set(0.42);
+  root.addChild(engine);
+
+  const body = new PIXI.Graphics(resources.simpleContexts.cyan);
+  body.eventMode = "none";
+  root.addChild(body);
+
+  const rotors = [
+    [-23, -18],
+    [23, -18],
+    [-23, 18],
+    [23, 18],
+  ].map(([x, y]) => {
+    const rotor = new PIXI.Graphics(resources.rotorSpinContexts.cyan);
+    rotor.eventMode = "none";
+    rotor.position.set(x, y);
+    rotor.scale.set(0.36);
+    rotor.alpha = 0.48;
+    root.addChild(rotor);
+    return rotor;
+  });
+
   return {
     root,
+    body,
+    engine,
+    rotors,
     skin: "",
     facing: 0,
     facingReady: false,
+    hoverSeed: Math.random() * Math.PI * 2,
     lastFrameAt: 0,
     lastSeenAt: 0,
   };
 }
 
 function createSimpleProjectileVisual(resources) {
-  const root = new PIXI.Graphics(resources.simpleProjectileContexts.cyan);
+  // Far attack drones must still be drones, never a triangle/arrow. This
+  // compact sibling has the same four-propeller silhouette as the full one.
+  const root = new PIXI.Container();
   root.eventMode = "none";
-  return { root, skin: "", lastSeenAt: 0 };
+  root.sortableChildren = false;
+
+  const body = new PIXI.Graphics(resources.miniContexts.cyan);
+  body.eventMode = "none";
+  root.addChild(body);
+
+  const rotors = MINI_ROTOR_POINTS.map(([x, y]) => {
+    const rotor = new PIXI.Graphics(resources.rotorSpinContexts.cyan);
+    rotor.eventMode = "none";
+    rotor.position.set(x, y);
+    rotor.scale.set(0.38);
+    rotor.alpha = 0.64;
+    root.addChild(rotor);
+    return rotor;
+  });
+
+  return {
+    root,
+    body,
+    rotors,
+    skin: "",
+    flightSeed: Math.random() * Math.PI * 2,
+    lastSeenAt: 0,
+  };
 }
 
 function createProjectileVisual(resources) {
@@ -1286,36 +1350,38 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
     visual.aura.alpha = glowStrength * (0.66 + Math.sin(now * 0.006 + visual.hoverSeed) * 0.16);
   }
 
-  visual.engineGlow.visible = !reducedRemoteVisual;
-  visual.engineVector.visible = !reducedRemoteVisual;
-  if (!reducedRemoteVisual) {
-    visual.engineGlow.position.set(0, 47);
-    visual.engineGlow.scale.set(
-      0.94 + throttle * 0.22 + Math.sin(now * 0.010 + visual.hoverSeed) * 0.04,
-    );
-    visual.engineGlow.alpha =
-      (hasMovement ? 0.84 : 0.52) *
-      (safeEffectTier === 2 && !isPlayer ? 0.72 : 1);
+  // Even the compact profile keeps physical flight cues. Aura, large shield
+  // extras and escort drones are optional; engines and propellers are not.
+  // That keeps every visible player/bot alive and readable on old laptops.
+  const compactMotionScale = reducedRemoteVisual ? 0.68 : 1;
+  visual.engineGlow.visible = true;
+  visual.engineVector.visible = true;
+  visual.engineGlow.position.set(0, 47);
+  visual.engineGlow.scale.set(
+    (0.94 + throttle * 0.22 + Math.sin(now * 0.010 + visual.hoverSeed) * 0.04) * compactMotionScale,
+  );
+  visual.engineGlow.alpha =
+    (hasMovement ? 0.84 : 0.52) *
+    (reducedRemoteVisual ? 0.58 : 1) *
+    (safeEffectTier === 2 && !isPlayer ? 0.72 : 1);
 
-    visual.engineVector.position.set(0, 49);
-    visual.engineVector.scale.set(
-      0.78 + throttle * 0.38,
-      0.72 + throttle * 0.54 + Math.sin(now * 0.014 + visual.hoverSeed) * 0.08,
-    );
-    visual.engineVector.alpha =
-      (hasMovement ? 0.82 : 0.38) *
-      (safeEffectTier === 2 && !isPlayer ? 0.68 : 1);
-  }
+  visual.engineVector.position.set(0, 49);
+  visual.engineVector.scale.set(
+    (0.78 + throttle * 0.38) * compactMotionScale,
+    (0.72 + throttle * 0.54 + Math.sin(now * 0.014 + visual.hoverSeed) * 0.08) * compactMotionScale,
+  );
+  visual.engineVector.alpha =
+    (hasMovement ? 0.82 : 0.38) *
+    (reducedRemoteVisual ? 0.62 : 1) *
+    (safeEffectTier === 2 && !isPlayer ? 0.68 : 1);
 
-  const rotorSpeed = 0.016;
-  const rotorAlpha = 0.48;
+  const rotorSpeed = reducedRemoteVisual ? 0.013 : 0.016;
+  const rotorAlpha = reducedRemoteVisual ? 0.38 : 0.48;
   visual.rotorSpins.forEach((rotor, index) => {
     const direction = index % 2 === 0 ? 1 : -1;
-    rotor.visible = !reducedRemoteVisual;
-    if (!reducedRemoteVisual) {
-      rotor.rotation = direction * now * rotorSpeed + index * Math.PI * 0.5;
-      rotor.alpha = rotorAlpha;
-    }
+    rotor.visible = true;
+    rotor.rotation = direction * now * rotorSpeed + index * Math.PI * 0.5;
+    rotor.alpha = rotorAlpha;
   });
 
   const shieldActive = Boolean(unit.shieldActive || unit.isShieldActive || Number(unit.shieldUntil || 0) > Date.now());
@@ -1401,28 +1467,54 @@ function updateSimpleVisual(visual, unit, resources, now) {
   const skin = normalizeSkin(unit.skin);
   if (visual.skin !== skin) {
     visual.skin = skin;
-    visual.root.context = resources.simpleContexts[skin] || resources.simpleContexts.cyan;
+    visual.body.context = resources.simpleContexts[skin] || resources.simpleContexts.cyan;
+    visual.engine.context = resources.engineVectorContexts[skin] || resources.engineVectorContexts.cyan;
+    visual.rotors.forEach((rotor) => {
+      rotor.context = resources.rotorSpinContexts[skin] || resources.rotorSpinContexts.cyan;
+    });
   }
 
   const deltaSeconds = clamp((now - (visual.lastFrameAt || now)) / 1000, 1 / 240, 0.05);
   visual.lastFrameAt = now;
-  const moveX = Number(unit.moveX || 0);
-  const moveY = Number(unit.moveY || 0);
+  const moveX = Number(unit.moveX || unit.velocityX || 0);
+  const moveY = Number(unit.moveY || unit.velocityY || 0);
   const moving = Boolean(unit.isMoving) || Math.hypot(moveX, moveY) > 0.012;
-  const targetFacing = getUnitFacingTarget(unit, visual.facing || 0);
+  const targetFacing = getUnitFacingTarget(
+    { ...unit, moveX, moveY, isMoving: moving },
+    visual.facing || 0,
+  );
 
   if (!visual.facingReady) {
     visual.facing = targetFacing;
     visual.facingReady = true;
   } else if (moving) {
-    visual.facing = dampAngle(visual.facing, targetFacing, 16, deltaSeconds);
+    visual.facing = dampAngle(visual.facing, targetFacing, 15, deltaSeconds);
   }
 
+  const phase = now * 0.0052 + visual.hoverSeed;
+  const throttle = moving ? 1 : 0;
   visual.root.visible = true;
   visual.root.position.set(Number(unit.x || 0), Number(unit.y || 0));
   visual.root.rotation = visual.facing;
   visual.root.scale.set(0.96);
   visual.root.alpha = unit.alive === false ? 0.32 : 0.98;
+
+  // Cheap transform-only propulsion: one engine scale/alpha plus four rotor
+  // rotations. This costs far less than the premium aura/shield/escort layer.
+  visual.body.position.set(0, Math.sin(phase) * 0.72);
+  visual.engine.visible = true;
+  visual.engine.scale.set(
+    0.36 + throttle * 0.08,
+    0.34 + throttle * 0.15 + Math.sin(phase * 1.7) * 0.025,
+  );
+  visual.engine.alpha = moving ? 0.72 : 0.38;
+
+  visual.rotors.forEach((rotor, index) => {
+    const direction = index % 2 === 0 ? 1 : -1;
+    rotor.rotation = direction * now * 0.026 + index * Math.PI * 0.5;
+    rotor.alpha = moving ? 0.62 : 0.42;
+  });
+
   visual.lastSeenAt = now;
 }
 
@@ -1430,13 +1522,29 @@ function updateSimpleProjectileVisual(visual, projectile, resources, now) {
   const skin = normalizeSkin(projectile.skin);
   if (visual.skin !== skin) {
     visual.skin = skin;
-    visual.root.context = resources.simpleProjectileContexts[skin] || resources.simpleProjectileContexts.cyan;
+    visual.body.context = resources.miniContexts[skin] || resources.miniContexts.cyan;
+    visual.rotors.forEach((rotor) => {
+      rotor.context = resources.rotorSpinContexts[skin] || resources.rotorSpinContexts.cyan;
+    });
   }
-  const heading = Number(projectile.angle ?? Math.atan2(Number(projectile.vy || 0), Number(projectile.vx || 1)));
+
+  const heading = Number(
+    projectile.angle ??
+      Math.atan2(Number(projectile.vy || 0), Number(projectile.vx || 1)),
+  );
+  const phase = now * 0.017 + visual.flightSeed;
+
   visual.root.visible = true;
   visual.root.position.set(Number(projectile.x || 0), Number(projectile.y || 0));
-  visual.root.rotation = heading;
-  visual.root.alpha = 0.95;
+  visual.root.rotation = heading + Math.PI * 0.5;
+  visual.root.scale.set(1.02);
+  visual.root.alpha = 0.96;
+  visual.body.position.set(0, Math.sin(phase) * 0.42);
+  visual.rotors.forEach((rotor, index) => {
+    const direction = index % 2 === 0 ? 1 : -1;
+    rotor.rotation = direction * now * 0.036 + index * Math.PI * 0.5;
+    rotor.alpha = 0.68;
+  });
   visual.lastSeenAt = now;
 }
 
@@ -1470,26 +1578,18 @@ function updateProjectileVisual(visual, projectile, resources, now, compact = fa
   visual.root.scale.set(flightScale);
   visual.root.alpha = projectile.localOnly ? 0.92 : 1;
 
-  visual.aura.visible = !compact;
-  visual.jet.visible = !compact;
-  if (!compact) {
-    visual.aura.rotation = -phase * 0.65;
-    visual.aura.scale.set(pulse * (projectile.pierceLeft > 1 ? 1.12 : 1));
-    visual.aura.alpha = projectile.localOnly ? 0.68 : 0.84;
-
-    visual.jet.position.set(0, 19);
-    visual.jet.scale.set(0.78 + Math.sin(phase * 1.7) * 0.07, 0.92 + Math.sin(phase * 2.1) * 0.16);
-    visual.jet.alpha = projectile.shieldBreaker || projectile.piercesShield ? 1 : 0.82;
-  }
+  // The attack is one object: a small attack drone. The old lock-on halo and
+  // plasma jet looked like a second projectile/arrow, especially on low DPI
+  // screens, so they are intentionally never rendered.
+  visual.aura.visible = false;
+  visual.jet.visible = false;
 
   visual.body.position.set(0, compact ? 0 : hover);
   visual.rotorSpins.forEach((rotor, index) => {
     const direction = index % 2 === 0 ? 1 : -1;
-    rotor.visible = !compact;
-    if (!compact) {
-      rotor.rotation = direction * now * 0.032 + index * Math.PI * 0.5;
-      rotor.alpha = 0.78;
-    }
+    rotor.visible = true;
+    rotor.rotation = direction * now * (compact ? 0.026 : 0.032) + index * Math.PI * 0.5;
+    rotor.alpha = compact ? 0.60 : 0.78;
   });
   visual.lastSeenAt = now;
 }

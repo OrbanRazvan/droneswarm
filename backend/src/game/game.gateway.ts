@@ -85,7 +85,7 @@ const ZONE_PVP_ROOM_MAX_PLAYERS = 60;
 // Bots never unlock the lobby; they are created only when the admission window ends.
 const ZONE_PVP_ROOM_MIN_PLAYERS = 2; // TEST: revert to 3 before public launch.
 const ZONE_PVP_START_COUNTDOWN_MS = 5000;
-const ZONE_PVP_BATTLE_PREPARE_DURATION = 30000;
+const ZONE_PVP_BATTLE_PREPARE_DURATION = 10000; // 10 seconds: movement/loot allowed, combat locked.
 const ZONE_PVP_ZONE_SHRINK_DURATION = 420000;
 const ZONE_PVP_ZONE_DAMAGE = 10;
 const ZONE_PVP_ZONE_DAMAGE_INTERVAL = 1000;
@@ -139,7 +139,7 @@ const ZONE_PROJECTILE_DEFINITION_INTERVAL_MS = 800;
 // Forty transform updates/second plus local display-rate interpolation is a
 // better mobile trade-off than 60 large JSON payloads.  The server always sends
 // the newest transform and clients discard an obsolete packet before processing.
-const ZONE_TRANSFORM_INTERVAL_MS = 33;
+const ZONE_TRANSFORM_INTERVAL_MS = 25; // 40 Hz compact latest-wins transforms for smoother attack drones.
 const ZONE_TRANSFORM_PLAYER_LIMIT = 60;
 const ZONE_TRANSFORM_PROJECTILE_LIMIT = 36;
 const ZONE_TRANSFORM_RANGE_PADDING = 820;

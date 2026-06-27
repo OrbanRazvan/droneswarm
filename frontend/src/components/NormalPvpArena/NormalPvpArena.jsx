@@ -48,7 +48,9 @@ const HUD_SYNC_INTERVAL_MS = 125;
 const MOBILE_REACT_RENDER_SYNC_INTERVAL_MS = 260;
 const MOBILE_HUD_SYNC_INTERVAL_MS = 250;
 const MOBILE_RENDER_LIMITS = Object.freeze({
-  players: 12,
+  // Pixi renders the nearest few with the premium shell and all remaining
+  // visible enemies through its animated lightweight drone pool.
+  players: 60,
   // Normal PvP now has a denser server world. These limits remain modest
   // enough for older phones, while showing substantially more nearby loot.
   orbs: 140,
@@ -2991,7 +2993,9 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         `}</style>
       )}
 
-      {you && !isDead && (!isMobileControls || mobileAttackActive) && (
+      {/* Hide the cyan aim reticle in PvP: the launched mini-drone is the
+          only attack object visible to the player. */}
+      {false && you && !isDead && (!isMobileControls || mobileAttackActive) && (
         <svg className={`aim-svg ${isMobileControls ? "mobile-aim-svg" : ""}`} aria-hidden="true">
           <line
             className="aim-svg-line"

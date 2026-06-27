@@ -57,7 +57,7 @@ const LOCAL_PROJECTILE_MAX_DISTANCE = 4200;
 const PROJECTILE_HIT_VISUAL_RADIUS = 118;
 const LOCAL_PROJECTILE_SPEED = 4.4;
 const FIRE_COOLDOWN = 3000;
-const BATTLE_PREPARE_DURATION = 30000;
+const BATTLE_PREPARE_DURATION = 10000; // 10-second peace phase before combat.
 const ORB_STABLE_TTL = 2400;
 const MINIMAP_STABLE_TTL = 8000;
 
@@ -1549,10 +1549,29 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           const currentKey = String(projectile.id);
           zoneProjectileMetaRef.current.set(netId, { ...projectile });
           if (previousKey !== currentKey) {
+            // A transform can arrive one frame before the low-frequency
+            // projectile definition. Migrate *both* transform and rendered
+            // maps from the temporary net key to the UUID; otherwise Pixi
+            // receives the same attack drone twice for one server projectile.
             const temporary = projectileMovementRef.current.get(previousKey);
             if (temporary) {
               projectileMovementRef.current.delete(previousKey);
               projectileMovementRef.current.set(currentKey, { ...temporary, ...projectile, id: currentKey });
+            }
+
+            const rendered = projectilesRef.current.get(previousKey);
+            if (rendered) {
+              projectilesRef.current.delete(previousKey);
+              const currentRendered = projectilesRef.current.get(currentKey);
+              if (!currentRendered) {
+                projectilesRef.current.set(currentKey, {
+                  ...rendered,
+                  ...projectile,
+                  id: currentKey,
+                  localOnly: false,
+                  __seenAt: now,
+                });
+              }
             }
           }
         }
@@ -1988,8 +2007,16 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const projectileRows = Array.isArray(packet?.q) ? packet.q : (packet?.projectiles || []);
       for (const row of projectileRows) {
         const netId = Array.isArray(row) ? Number(row[0] || 0) : Number(row?.netId || 0);
+        const ownerNetId = Array.isArray(row) ? Number(row[1] || 0) : Number(row?.ownerNetId || 0);
         const meta = netId > 0 ? (zoneProjectileMetaRef.current.get(netId) || {}) : {};
-        const projectile = decodeZoneProjectileRow(row, meta);
+        const ownerMeta = ownerNetId > 0 ? (zoneEntityMetaRef.current.get(ownerNetId) || {}) : {};
+        const localOwner = Number(worldRef.current?.you?.netId || 0) === ownerNetId
+          ? worldRef.current?.you
+          : null;
+        const projectile = decodeZoneProjectileRow(row, {
+          ...meta,
+          ownerId: meta?.ownerId || ownerMeta?.id || localOwner?.id || meta?.ownerId,
+        });
         if (!projectile?.id) continue;
         packetProjectileIds.add(projectile.id);
         const existing = movementProjectiles.get(projectile.id);
@@ -2459,7 +2486,19 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       for (const [id, target] of incomingProjectiles.entries()) {
         const current = projectileMap.get(id) || target;
 
-        if (target.ownerId && target.ownerId === me?.id) {
+        const belongsToLocalPlayer =
+          Boolean(me?.id) &&
+          (
+            String(target.ownerId || "") === String(me.id) ||
+            Number(target.ownerNetId || 0) === Number(me.netId || -1) ||
+            String(target.ownerId || "") === zoneNetKey(me.netId)
+          );
+
+        // Keep the Normal PvP behavior: the shooter sees its one locally
+        // predicted mini-drone, while every other viewer sees the authoritative
+        // server copy. Do not add a second copy during Zone net-id migration.
+        if (belongsToLocalPlayer) {
+          if (!String(id).startsWith("local-")) projectileMap.delete(id);
           continue;
         }
 
@@ -2534,9 +2573,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 980, liveCameraScale);
       const renderLimits = mobilePerformanceRef.current
-        ? { detailed: 6, total: 50, orbs: 48, energy: 16, cores: 4, projectiles: 5, simpleProjectiles: 26 }
+        ? { detailed: 6, total: 60, orbs: 42, energy: 14, cores: 4, projectiles: 5, simpleProjectiles: 30 }
         : constrainedDesktopRef.current
-          ? { detailed: 10, total: 60, orbs: 96, energy: 34, cores: 7, projectiles: 14, simpleProjectiles: 42 }
+          ? { detailed: 7, total: 60, orbs: 72, energy: 26, cores: 6, projectiles: 10, simpleProjectiles: 34 }
           : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
       // Map insertion order is not distance order. Sort by the camera subject
@@ -3238,7 +3277,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         `}</style>
       )}
 
-      {you && !isDead && (!isMobileControls || mobileAttackActive) && (
+      {/* Attack drone is the only combat visual. The old cyan aim circle/arrow
+          looked like a second launched drone, so it stays disabled in PvP. */}
+      {false && you && !isDead && (!isMobileControls || mobileAttackActive) && (
         <svg className={`aim-svg ${isMobileControls ? "mobile-aim-svg" : ""}`} aria-hidden="true">
           <line className="aim-svg-line" ref={mobileAimLineRef} x1={viewport.width / 2} y1={viewport.height / 2} x2={mouseRef.current.x} y2={mouseRef.current.y} />
           <circle className="aim-svg-circle" ref={mobileAimCircleRef} cx={mouseRef.current.x} cy={mouseRef.current.y} r="34" />
