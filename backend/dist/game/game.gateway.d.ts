@@ -196,6 +196,7 @@ export declare class GameGateway {
     cleanupZonePvpRoom(room: any, now: any): void;
     getZonePvpZoneRadius(room: any): number;
     private serializeZonePvpMovement;
+    private serializeZonePvpProjectileMovement;
     private broadcastZonePvpMovement;
     broadcastZonePvpRoomState(room: any, now: any, reliable?: boolean): void;
     findOrCreateRoom(): any;

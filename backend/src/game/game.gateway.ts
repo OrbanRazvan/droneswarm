@@ -138,9 +138,14 @@ const ZONE_STATE_INTERVAL_HEAVY_MS = 50; // 20 Hz at 28+ players
 // slower sender's render/input cadence and from heavier loot/HUD payloads.
 // Transform packets are disposable: newer coordinates replace older ones
 // instead of forming a backlog on slow devices.
-const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 20; // 50 Hz for small human groups
-const ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS = 33; // 30 Hz for many humans
+// Zone PvP uses a dedicated transform stream. It runs every simulation tick
+// in bot-filled matches (normally only a few real browser clients) so remote
+// drones and attack drones never wait behind the heavier HUD/loot snapshot.
+const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 16; // 60 Hz (one stream per server tick)
+const ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS = 25; // 40 Hz only for genuinely human-crowded rooms
 const ZONE_MOVEMENT_STREAM_MAX_PLAYERS = ZONE_PVP_ROOM_MAX_PLAYERS;
+const ZONE_MOVEMENT_STREAM_PROJECTILE_LIMIT = 32;
+const ZONE_MOVEMENT_STREAM_RANGE_PADDING = 560;
 const STATIC_STATE_INTERVAL_MS = 500; // minimap + leaderboard
 const VIEWPORT_ITEM_STATE_INTERVAL_MS = 125; // static nearby loot, per player
 const PVP_CROWDED_STATE_THRESHOLD = 12;
@@ -1980,7 +1985,7 @@ export class GameGateway {
           // Keep those viewers at 50 Hz; reduce only genuinely human-crowded
           // rooms to 30 Hz.
           const movementInterval =
-            this.getZoneHumanPlayerCount(room) >= PVP_CROWDED_STATE_THRESHOLD
+            this.getZoneHumanPlayerCount(room) >= PVP_HEAVY_STATE_THRESHOLD
               ? ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS
               : ZONE_MOVEMENT_STREAM_INTERVAL_MS;
 
@@ -4394,20 +4399,43 @@ export class GameGateway {
   }
 
   private serializeZonePvpMovement(player: any) {
+    // One decimal is well below a pixel at the game camera scale while making
+    // the 60 Hz JSON stream materially smaller on lower-end phones.
+    const roundMotion = (value: any) => Math.round(Number(value || 0) * 10) / 10;
+
     return {
       id: player.id,
       isBot: Boolean(player.isBot),
-      x: Math.round(Number(player.x || 0) * 100) / 100,
-      y: Math.round(Number(player.y || 0) * 100) / 100,
-      moveX: Number(player.moveX || 0),
-      moveY: Number(player.moveY || 0),
-      velocityX: Number(player.velocityX || 0),
-      velocityY: Number(player.velocityY || 0),
-      moveAngle: Number(player.moveAngle || 0),
+      x: roundMotion(player.x),
+      y: roundMotion(player.y),
+      moveX: roundMotion(player.moveX),
+      moveY: roundMotion(player.moveY),
+      velocityX: roundMotion(player.velocityX),
+      velocityY: roundMotion(player.velocityY),
+      moveAngle: roundMotion(player.moveAngle),
       isMoving: Boolean(player.isMoving),
       attacking: Boolean(player.input?.attacking),
       shieldActive: Boolean(player.shieldActive),
       alive: player.alive !== false,
+    };
+  }
+
+  private serializeZonePvpProjectileMovement(projectile: any) {
+    const roundMotion = (value: any) => Math.round(Number(value || 0) * 10) / 10;
+
+    return {
+      id: projectile.id,
+      ownerId: projectile.ownerId,
+      x: roundMotion(projectile.x),
+      y: roundMotion(projectile.y),
+      vx: roundMotion(projectile.vx),
+      vy: roundMotion(projectile.vy),
+      angle: Number(projectile.angle || 0),
+      skin: projectile.skin || "cyan",
+      pierceLeft: Number(projectile.pierceLeft || 1),
+      shieldBreaker: Boolean(projectile.shieldBreaker),
+      piercesShield: Boolean(projectile.piercesShield),
+      createdAt: Number(projectile.createdAt || 0),
     };
   }
 
@@ -4433,6 +4461,7 @@ export class GameGateway {
           : null;
       const viewAnchor = spectatorTarget || viewer;
       const range = viewer.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + 260;
+      const projectileRange = range + ZONE_MOVEMENT_STREAM_RANGE_PADDING;
 
       const movementPlayers = players
         .filter(
@@ -4451,6 +4480,17 @@ export class GameGateway {
         .slice(0, ZONE_PVP_VISIBLE_PLAYERS_LIMIT)
         .map((other) => this.serializeZonePvpMovement(other));
 
+      // Attack drones need the same high-rate transform path as the large
+      // drones. Full snapshots are intentionally slower because they contain
+      // HUD/loot data; putting projectile transforms here prevents a 30 Hz
+      // "slow motion" look on receivers.
+      const movementProjectiles = this.filterNear(
+        viewAnchor,
+        room.projectiles || [],
+        projectileRange,
+        ZONE_MOVEMENT_STREAM_PROJECTILE_LIMIT,
+      ).map((projectile) => this.serializeZonePvpProjectileMovement(projectile));
+
       // Real-time transforms must never queue behind old transforms. A dropped
       // frame is harmless because the next packet/full snapshot replaces it;
       // a queued old frame is what causes visible surges on weak hardware.
@@ -4462,6 +4502,7 @@ export class GameGateway {
         phaseVersion: Number(room.phaseVersion || 0),
         status: room.status,
         players: movementPlayers,
+        projectiles: movementProjectiles,
       });
     }
   }

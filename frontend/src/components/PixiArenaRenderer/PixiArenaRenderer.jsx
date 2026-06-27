@@ -1329,7 +1329,7 @@ function updateSimpleVisual(visual, unit, resources, now) {
   visual.lastSeenAt = now;
 }
 
-function updateProjectileVisual(visual, projectile, resources, now) {
+function updateProjectileVisual(visual, projectile, resources, now, compact = false) {
   const skin = normalizeSkin(projectile.skin);
   if (visual.skin !== skin) {
     visual.skin = skin;
@@ -1359,16 +1359,19 @@ function updateProjectileVisual(visual, projectile, resources, now) {
   visual.root.scale.set(flightScale);
   visual.root.alpha = projectile.localOnly ? 0.92 : 1;
 
+  visual.aura.visible = !compact;
   visual.aura.rotation = -phase * 0.65;
   visual.aura.scale.set(pulse * (projectile.pierceLeft > 1 ? 1.12 : 1));
   visual.aura.alpha = projectile.localOnly ? 0.68 : 0.84;
 
+  visual.jet.visible = !compact;
   visual.jet.position.set(0, 19);
   visual.jet.scale.set(0.78 + Math.sin(phase * 1.7) * 0.07, 0.92 + Math.sin(phase * 2.1) * 0.16);
   visual.jet.alpha = projectile.shieldBreaker || projectile.piercesShield ? 1 : 0.82;
 
-  visual.body.position.set(0, hover);
+  visual.body.position.set(0, compact ? 0 : hover);
   visual.rotorSpins.forEach((rotor, index) => {
+    rotor.visible = !compact;
     const direction = index % 2 === 0 ? 1 : -1;
     rotor.rotation = direction * now * 0.032 + index * Math.PI * 0.5;
     rotor.alpha = 0.78;
@@ -1378,9 +1381,11 @@ function updateProjectileVisual(visual, projectile, resources, now) {
 
 function syncUnitPool({ pool, source, resources, parent, bounds, max, now, isPlayer = false, compact = false, effectTier = 0 }) {
   const visible = [];
+  const visibleIds = new Set();
   for (const unit of source || []) {
     if (!unit || unit.alive === false || !isVisibleInBounds(unit, bounds, 320)) continue;
     visible.push(unit);
+    visibleIds.add(String(unit.id));
     if (visible.length >= max) break;
   }
 
@@ -1394,12 +1399,13 @@ function syncUnitPool({ pool, source, resources, parent, bounds, max, now, isPla
     }
     updateUnitVisual(visual, unit, resources, now, isPlayer, compact, effectTier);
   }
+  return visibleIds;
 }
 
-function syncSimplePool({ pool, source, resources, parent, bounds, max, now }) {
+function syncSimplePool({ pool, source, resources, parent, bounds, max, now, excludeIds = null }) {
   const visible = [];
   for (const unit of source || []) {
-    if (!unit || unit.alive === false || !isVisibleInBounds(unit, bounds, 120)) continue;
+    if (!unit || unit.alive === false || (excludeIds && excludeIds.has(String(unit.id))) || !isVisibleInBounds(unit, bounds, 120)) continue;
     visible.push(unit);
     if (visible.length >= max) break;
   }
@@ -1416,11 +1422,13 @@ function syncSimplePool({ pool, source, resources, parent, bounds, max, now }) {
   }
 }
 
-function syncProjectilePool({ pool, source, resources, parent, bounds, max, now }) {
+function syncProjectilePool({ pool, source, resources, parent, bounds, max, now, compact = false, excludeIds = null }) {
   const visible = [];
+  const visibleIds = new Set();
   for (const projectile of source || []) {
-    if (!projectile || !isVisibleInBounds(projectile, bounds, 120)) continue;
+    if (!projectile || (excludeIds && excludeIds.has(String(projectile.id))) || !isVisibleInBounds(projectile, bounds, 120)) continue;
     visible.push(projectile);
+    visibleIds.add(String(projectile.id));
     if (visible.length >= max) break;
   }
 
@@ -1432,8 +1440,9 @@ function syncProjectilePool({ pool, source, resources, parent, bounds, max, now 
       visual.root.visible = false;
       continue;
     }
-    updateProjectileVisual(visual, projectile, resources, now);
+    updateProjectileVisual(visual, projectile, resources, now, compact);
   }
+  return visibleIds;
 }
 
 function createResources(coreTypes = []) {
@@ -1970,6 +1979,10 @@ function PixiArenaRenderer({
   viewportHeight = typeof window !== "undefined" ? window.innerHeight : 720,
   coreTypes = [],
   liveDataRef = null,
+  // Zone feeds the same remote entities to a simple marker pool. The pool is
+  // enabled only when the actual frame time needs it, avoiding vanished bots
+  // on old laptops while keeping strong devices fully detailed.
+  useAdaptiveSimpleFallback = false,
   forceLowQuality = false,
   staticItemBudget = null,
   worldWidth = DEFAULT_WORLD_WIDTH,
@@ -2005,6 +2018,7 @@ function PixiArenaRenderer({
     showZone,
     worldTheme,
     staticItemBudget,
+    useAdaptiveSimpleFallback,
   };
 
   useEffect(() => {
@@ -2129,6 +2143,7 @@ function PixiArenaRenderer({
       let staticAnimationFrame = 0;
       let lastZoneRadius = null;
       let lastZoneVisible = false;
+      let appliedResolution = Number(config.resolution || 1);
 
       // Adaptive visual budgets: weak devices keep the same simulation but
       // progressively trim only far/static visuals when the actual render loop
@@ -2145,6 +2160,21 @@ function PixiArenaRenderer({
         drawBackground(background, width, height);
       };
 
+      const setAdaptiveResolution = (nextResolution) => {
+        const safeResolution = Math.max(0.65, Number(nextResolution || 1));
+        if (Math.abs(safeResolution - appliedResolution) < 0.01) return;
+
+        try {
+          app.renderer.resolution = safeResolution;
+          appliedResolution = safeResolution;
+          resize();
+        } catch {
+          // Some browser drivers keep this property immutable. The visual
+          // budget still reduces effects/items even when resolution cannot be
+          // switched at runtime.
+        }
+      };
+
       onResize = resize;
       window.addEventListener("resize", onResize, { passive: true });
       resize();
@@ -2157,15 +2187,24 @@ function PixiArenaRenderer({
         const tickMs = Math.min(80, Math.max(1, Number(app.ticker.deltaMS || 16.7)));
         frameTimeEma = frameTimeEma * 0.92 + tickMs * 0.08;
 
-        if (now - lastAdaptiveChangeAt > 700) {
+        if (now - lastAdaptiveChangeAt > 850) {
+          // Start saving GPU work as soon as a 60 Hz screen consistently falls
+          // below ~55 FPS, instead of waiting until it is already visibly slow.
           const desiredTier =
-            frameTimeEma > 31 ? 2 :
-            frameTimeEma > 22 ? 1 :
-            frameTimeEma < 18.2 ? 0 :
+            frameTimeEma > 24.5 ? 2 :
+            frameTimeEma > 18.4 ? 1 :
+            frameTimeEma < 17.25 ? 0 :
             adaptiveTier;
           if (desiredTier !== adaptiveTier) {
             adaptiveTier = desiredTier;
             lastAdaptiveChangeAt = now;
+            setAdaptiveResolution(
+              adaptiveTier === 2
+                ? Math.min(config.resolution, 0.75)
+                : adaptiveTier === 1
+                  ? Math.min(config.resolution, 1)
+                  : config.resolution,
+            );
             // Force a controlled refresh so pooled static visuals converge to
             // the new budget without one large per-frame rebuild.
             lastStaticSync = 0;
@@ -2188,7 +2227,7 @@ function PixiArenaRenderer({
           syncWorldTerrain(
             terrainLayer,
             terrainState,
-            config.disableExpensiveTerrain ? "default" : data.worldTheme,
+            (config.disableExpensiveTerrain || adaptiveTier > 0) ? "default" : data.worldTheme,
             data.worldWidth,
             data.worldHeight,
           );
@@ -2204,7 +2243,15 @@ function PixiArenaRenderer({
         // rendered frame, which keeps the look but removes dozens of needless
         // property writes per second.
         staticAnimationFrame += 1;
-        if (staticAnimationFrame % config.animateStaticEvery === 0) {
+        // Static pickups are decorative. When frame time starts rising, stop
+        // spending per-frame property writes on hundreds of them before ever
+        // touching player/projectile transforms.
+        const staticAnimationEvery = adaptiveTier === 2
+          ? Math.max(config.animateStaticEvery, 6)
+          : adaptiveTier === 1
+            ? Math.max(config.animateStaticEvery, 3)
+            : config.animateStaticEvery;
+        if (staticAnimationFrame % staticAnimationEvery === 0) {
           animateStaticPickups(staticMap, now);
         }
 
@@ -2231,8 +2278,8 @@ function PixiArenaRenderer({
             ? clamp(Math.round(requestedStaticBudget), 40, staticBudgetCeiling)
             : config.maxStaticItems;
           const adaptiveItemCap =
-            adaptiveTier === 2 ? Math.min(baseItemBudget, config.lowSpecDesktop ? 34 : 54) :
-            adaptiveTier === 1 ? Math.min(baseItemBudget, config.lowSpecDesktop ? 42 : 92) :
+            adaptiveTier === 2 ? Math.min(baseItemBudget, config.lowSpecDesktop ? 24 : 34) :
+            adaptiveTier === 1 ? Math.min(baseItemBudget, config.lowSpecDesktop ? 32 : 52) :
             baseItemBudget;
           const itemBudget = adaptiveItemCap;
           const orbBudget = Math.floor(itemBudget * 0.70);
@@ -2292,54 +2339,63 @@ function PixiArenaRenderer({
           now,
           isPlayer: true,
         });
-        syncUnitPool({
+        const fullRemoteIds = syncUnitPool({
           pool: remotePool,
           source: data.players,
           resources,
           parent: entitiesLayer,
           bounds,
-          max: adaptiveTier === 2 ? Math.min(config.maxPlayers, 12) : adaptiveTier === 1 ? Math.min(config.maxPlayers, 24) : config.maxPlayers,
+          max: adaptiveTier === 2 ? Math.min(config.maxPlayers, 9) : adaptiveTier === 1 ? Math.min(config.maxPlayers, 18) : config.maxPlayers,
           now,
           compact: config.weakMobile || adaptiveTier > 0,
           effectTier: remoteEffectTier,
         });
-        syncUnitPool({
+        const fullBotIds = syncUnitPool({
           pool: botPool,
           source: data.bots,
           resources,
           parent: entitiesLayer,
           bounds,
-          max: adaptiveTier === 2 ? Math.min(config.maxPlayers, 12) : adaptiveTier === 1 ? Math.min(config.maxPlayers, 24) : config.maxPlayers,
+          max: adaptiveTier === 2 ? Math.min(config.maxPlayers, 9) : adaptiveTier === 1 ? Math.min(config.maxPlayers, 18) : config.maxPlayers,
           now,
           compact: config.weakMobile || adaptiveTier > 0,
           effectTier: remoteEffectTier,
         });
+        const fullEntityIds = new Set([...fullRemoteIds, ...fullBotIds]);
+        const adaptiveSimpleFallback = Boolean(data.useAdaptiveSimpleFallback);
         syncSimplePool({
           pool: simpleBotPool,
-          source: data.simpleBots,
+          source: adaptiveSimpleFallback && adaptiveTier === 0 && !config.lowSpecDesktop && !config.weakMobile
+            ? []
+            : data.simpleBots,
           resources,
           parent: entitiesLayer,
           bounds,
-          max: adaptiveTier === 2 ? Math.min(config.maxSimplePlayers, 14) : adaptiveTier === 1 ? Math.min(config.maxSimplePlayers, 28) : config.maxSimplePlayers,
+          max: adaptiveTier === 2 ? Math.min(config.maxSimplePlayers, 32) : adaptiveTier === 1 ? Math.min(config.maxSimplePlayers, 44) : config.maxSimplePlayers,
           now,
+          excludeIds: fullEntityIds,
         });
-        syncProjectilePool({
+        const fullProjectileIds = syncProjectilePool({
           pool: projectilePool,
           source: data.projectiles,
           resources,
           parent: projectilesLayer,
           bounds,
-          max: adaptiveTier === 2 ? Math.min(config.maxProjectiles, 10) : adaptiveTier === 1 ? Math.min(config.maxProjectiles, 28) : config.maxProjectiles,
+          max: adaptiveTier === 2 ? Math.min(config.maxProjectiles, 8) : adaptiveTier === 1 ? Math.min(config.maxProjectiles, 16) : config.maxProjectiles,
           now,
         });
         syncProjectilePool({
           pool: simpleProjectilePool,
-          source: data.simpleProjectiles,
+          source: adaptiveSimpleFallback && adaptiveTier === 0 && !config.lowSpecDesktop && !config.weakMobile
+            ? []
+            : data.simpleProjectiles,
           resources,
           parent: projectilesLayer,
           bounds,
-          max: adaptiveTier === 2 ? 5 : adaptiveTier === 1 ? Math.min(14, Math.floor(config.maxProjectiles * 0.55)) : Math.floor(config.maxProjectiles * 0.55),
+          max: adaptiveTier === 2 ? 16 : adaptiveTier === 1 ? Math.min(28, config.maxProjectiles) : Math.floor(config.maxProjectiles * 0.55),
           now,
+          compact: adaptiveTier > 0 || config.lowSpecDesktop || config.weakMobile,
+          excludeIds: fullProjectileIds,
         });
         // Normal PvP and Zone PvP request strict private combat text. In this
         // mode an event must explicitly belong to the local player. Other

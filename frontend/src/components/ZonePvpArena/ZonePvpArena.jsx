@@ -34,12 +34,19 @@ const SELF_IDLE_FREEZE_DISTANCE = 360;
 // Remote entities come from a server-timestamped interpolation buffer.
  // Slightly more buffer eliminates packet-burst jitter while the local drone
  // stays fully client-predicted and instant.
-const REMOTE_SMOOTHING = 18;
-const REMOTE_PREDICTION = 0.82;
-const REMOTE_HARD_SNAP_DISTANCE = 620;
-const REMOTE_MAX_EXTRAPOLATE_MS = 160;
+// The transform stream is 60 Hz in normal Zone matches. Keep only a tiny
+// buffer for packet ordering, then render at the current server time.
+const REMOTE_SMOOTHING = 28;
+const REMOTE_PREDICTION = 1;
+const REMOTE_HARD_SNAP_DISTANCE = 720;
+const REMOTE_MAX_EXTRAPOLATE_MS = 240;
 
-const PROJECTILE_SMOOTHING = 18;
+// Projectiles are locally advanced every animation frame. Server updates only
+// correct drift; they never pull a projectile backwards to an older packet.
+const PROJECTILE_SMOOTHING = 42;
+const PROJECTILE_REMOTE_HARD_RESYNC_DISTANCE = 150;
+const PROJECTILE_REMOTE_MAX_AHEAD_MS = 220;
+const PROJECTILE_MOVEMENT_STALE_MS = 300;
 const PROJECTILE_FRAME_SCALE = 60;
 const PROJECTILE_VISUAL_TTL = 10000;
 const LOCAL_PROJECTILE_MIN_VISUAL_MS = 85;
@@ -64,8 +71,8 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 // Client-side prediction + server reconciliation + remote snapshot buffer.
 const INPUT_SEND_INTERVAL_MS = 20;
 const INPUT_HEARTBEAT_MS = 240;
-const SNAPSHOT_INTERPOLATION_DELAY_MS = 62;
-const SNAPSHOT_BUFFER_TTL_MS = 760;
+const SNAPSHOT_INTERPOLATION_DELAY_MS = 18;
+const SNAPSHOT_BUFFER_TTL_MS = 520;
 
 // Keep PvP desktop framing exactly locked to BattleRoyaleMode.
 // BattleRoyaleMode uses 0.72 on desktop; do not change only one mode or the
@@ -567,6 +574,26 @@ function collectVisible(source, predicate, limit, mapFn) {
   return result;
 }
 
+// Keep nearby crafts detailed first. On an adaptive low-render frame Pixi can
+// turn only the overflow into simple markers without making distant drones
+// disappear or changing their network movement.
+function collectVisibleNearest(source, predicate, limit, origin, mapFn) {
+  const ox = Number(origin?.x || 0);
+  const oy = Number(origin?.y || 0);
+  const candidates = [];
+
+  for (const item of source) {
+    if (!predicate(item)) continue;
+    const mapped = mapFn ? mapFn(item) : item;
+    const dx = Number(mapped?.x || 0) - ox;
+    const dy = Number(mapped?.y || 0) - oy;
+    candidates.push({ mapped, distanceSq: dx * dx + dy * dy });
+  }
+
+  candidates.sort((a, b) => a.distanceSq - b.distanceSq);
+  return candidates.slice(0, limit).map((entry) => entry.mapped);
+}
+
 function advanceProjectile(projectile, dt) {
   if (!projectile) return projectile;
 
@@ -574,6 +601,26 @@ function advanceProjectile(projectile, dt) {
     ...projectile,
     x: projectile.x + (projectile.vx || 0) * dt * PROJECTILE_FRAME_SCALE,
     y: projectile.y + (projectile.vy || 0) * dt * PROJECTILE_FRAME_SCALE,
+  };
+}
+
+// A network projectile snapshot was produced on the server in the past.
+// Advance it from that exact server timestamp to the receiver's estimated
+// current server time before comparing it with the rAF-predicted visual.
+function projectProjectileToPresent(projectile, serverNow, serverClockOffset) {
+  if (!projectile) return projectile;
+
+  const packetServerTime = Number(serverNow || projectile.__serverNow || 0);
+  const estimatedServerNow = Date.now() - Number(serverClockOffset || 0);
+  const aheadMs = packetServerTime > 0
+    ? clamp(estimatedServerNow - packetServerTime, 0, PROJECTILE_REMOTE_MAX_AHEAD_MS)
+    : 0;
+
+  return {
+    ...projectile,
+    x: Number(projectile.x || 0) + Number(projectile.vx || 0) * (aheadMs / 1000) * PROJECTILE_FRAME_SCALE,
+    y: Number(projectile.y || 0) + Number(projectile.vy || 0) * (aheadMs / 1000) * PROJECTILE_FRAME_SCALE,
+    __serverNow: packetServerTime || Number(projectile.__serverNow || 0),
   };
 }
 
@@ -941,13 +988,20 @@ function interpolateSnapshotBuffer(buffer = [], renderTimelineTime) {
   const oldVelocity = getRemoteVelocity(older);
   const newVelocity = getRemoteVelocity(newer);
 
-  // Velocity-aware Hermite interpolation maintains a continuous trajectory
-  // between authoritative transforms. It is much smoother than plain linear
-  // interpolation when the sender runs at a lower frame rate.
+  // Hermite is excellent for sparse snapshots, but at 60 Hz a sudden stop or
+  // turn can overshoot a 16 ms segment. Use a direct linear segment there and
+  // reserve Hermite for wider/steady intervals.
+  const velocityJump = Math.hypot(newVelocity.x - oldVelocity.x, newVelocity.y - oldVelocity.y);
+  const useHermite = span >= 24 && velocityJump < 900;
+  const startX = Number(older.x ?? newer.x ?? 0);
+  const startY = Number(older.y ?? newer.y ?? 0);
+  const endX = Number(newer.x ?? older.x ?? 0);
+  const endY = Number(newer.y ?? older.y ?? 0);
+
   return {
     ...newer,
-    x: cubicHermite(Number(older.x ?? newer.x ?? 0), oldVelocity.x, Number(newer.x ?? older.x ?? 0), newVelocity.x, t, durationSeconds),
-    y: cubicHermite(Number(older.y ?? newer.y ?? 0), oldVelocity.y, Number(newer.y ?? older.y ?? 0), newVelocity.y, t, durationSeconds),
+    x: useHermite ? cubicHermite(startX, oldVelocity.x, endX, newVelocity.x, t, durationSeconds) : lerp(startX, endX, t),
+    y: useHermite ? cubicHermite(startY, oldVelocity.y, endY, newVelocity.y, t, durationSeconds) : lerp(startY, endY, t),
     hp: newer.hp,
     energy: newer.energy,
     drones: newer.drones,
@@ -1086,6 +1140,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const lastInputSignatureRef = useRef("");
   const pendingInputsRef = useRef([]);
   const remoteSnapshotBufferRef = useRef(new Map());
+  // High-rate projectile transforms are kept outside React state so receiving
+  // a 60 Hz stream never triggers HUD re-renders.
+  const projectileMovementRef = useRef(new Map());
   // Interpolate with the authoritative server clock rather than browser packet
   // arrival time, which varies far more with mobile/old-laptop senders.
   const serverClockOffsetRef = useRef(null);
@@ -1278,6 +1335,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         stableMinimapEnergyMapRef.current.clear();
         stableCoreMapRef.current.clear();
         remoteSnapshotBufferRef.current.clear();
+        projectileMovementRef.current.clear();
         serverClockOffsetRef.current = null;
         lastMovementSequenceRef.current = 0;
         lastCollisionVersionRef.current = 0;
@@ -1498,8 +1556,15 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         );
       });
 
-      for (const id of snapshotsById.keys()) {
-        if (!activeRemoteIds.has(id)) snapshotsById.delete(id);
+      // A full state has a slightly tighter viewport than the 60 Hz movement
+      // stream. Do not erase a transform merely because it sits in that small
+      // outer ring; remove it only after the stream has actually gone stale.
+      for (const [id, buffer] of snapshotsById.entries()) {
+        const newest = buffer?.[buffer.length - 1];
+        const lastSeenAt = Number(newest?.__receivedAt || now);
+        if (!activeRemoteIds.has(id) && now - lastSeenAt > SNAPSHOT_BUFFER_TTL_MS) {
+          snapshotsById.delete(id);
+        }
       }
 
       if (state.you?.alive === false) {
@@ -1702,6 +1767,22 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           movement.id,
           appendRemoteSnapshot(oldBuffer, movement, now, serverNow),
         );
+      }
+
+      const projectileMotion = projectileMovementRef.current;
+      for (const projectile of packet?.projectiles || []) {
+        if (!projectile?.id) continue;
+        projectileMotion.set(projectile.id, {
+          ...projectile,
+          __serverNow: serverNow,
+          __movementSeenAt: now,
+        });
+      }
+
+      for (const [id, projectile] of projectileMotion.entries()) {
+        if (now - Number(projectile?.__movementSeenAt || now) > PROJECTILE_MOVEMENT_STALE_MS) {
+          projectileMotion.delete(id);
+        }
       }
     };
 
@@ -2021,25 +2102,72 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
 
       const projectileMap = projectilesRef.current;
-      const incomingProjectiles = new Map((data.projectiles || []).filter((p) => p?.id).map((p) => [p.id, p]));
+      const incomingProjectiles = new Map(
+        (data.projectiles || [])
+          .filter((projectile) => projectile?.id)
+          .map((projectile) => [projectile.id, {
+            ...projectile,
+            __serverNow: Number(data.serverNow || projectile.__serverNow || 0),
+          }]),
+      );
+
+      // The movement stream arrives every server tick and supersedes the
+      // heavier 30 Hz state snapshot for transform purposes.
+      for (const [id, projectile] of projectileMovementRef.current.entries()) {
+        if (now - Number(projectile?.__movementSeenAt || now) <= PROJECTILE_MOVEMENT_STALE_MS) {
+          incomingProjectiles.set(id, projectile);
+        }
+      }
 
       for (const [id, current] of projectileMap.entries()) {
         projectileMap.set(id, advanceProjectile(current, dt));
       }
 
       for (const [id, target] of incomingProjectiles.entries()) {
-        const current = projectileMap.get(id) || target;
-
         if (target.ownerId && target.ownerId === me?.id) {
           continue;
         }
 
+        const projectedTarget = projectProjectileToPresent(
+          target,
+          target.__serverNow || data.serverNow,
+          serverClockOffset,
+        );
+        const current = projectileMap.get(id);
+
+        if (!current) {
+          projectileMap.set(id, {
+            ...projectedTarget,
+            localOnly: false,
+            __seenAt: now,
+          });
+          continue;
+        }
+
+        const correctionDistance = Math.hypot(
+          Number(projectedTarget.x || 0) - Number(current.x || 0),
+          Number(projectedTarget.y || 0) - Number(current.y || 0),
+        );
+        const shouldHardResync = correctionDistance >= PROJECTILE_REMOTE_HARD_RESYNC_DISTANCE;
+
         projectileMap.set(id, {
-          ...target,
+          ...current,
+          ...projectedTarget,
           localOnly: false,
           __seenAt: now,
-          x: damp(current.x ?? target.x, target.x, PROJECTILE_SMOOTHING, dt),
-          y: damp(current.y ?? target.y, target.y, PROJECTILE_SMOOTHING, dt),
+          // Preserve client-side rAF prediction when it is already correct.
+          // Only a real drift is blended, or hard-resynced after a long tab
+          // stall / packet gap. This removes the former "slow-motion" pullback.
+          x: shouldHardResync
+            ? Number(projectedTarget.x || 0)
+            : correctionDistance > 0.35
+              ? damp(Number(current.x || 0), Number(projectedTarget.x || 0), PROJECTILE_SMOOTHING, dt)
+              : Number(current.x || 0),
+          y: shouldHardResync
+            ? Number(projectedTarget.y || 0)
+            : correctionDistance > 0.35
+              ? damp(Number(current.y || 0), Number(projectedTarget.y || 0), PROJECTILE_SMOOTHING, dt)
+              : Number(current.y || 0),
         });
       }
 
@@ -2098,15 +2226,16 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 980, liveCameraScale);
       const lowVisualMode = constrainedDeviceRef.current || lowGraphicsRef.current;
-      // Weak devices drop far/static visuals first. Movement transforms are
-      // retained and interpolated at the same cadence for every device.
+      // Never truncate remote transforms on weak hardware. Pixi keeps close
+      // drones detailed and converts only overflow into very cheap markers.
       const renderLimits = lowVisualMode
-        ? { players: 16, orbs: 72, energy: 20, cores: 5, projectiles: 18 }
+        ? { orbs: 72, energy: 20, cores: 5, projectiles: 28 }
         : null;
-      const livePlayers = collectVisible(
+      const livePlayers = collectVisibleNearest(
         remoteMap.values(),
         (player) => player?.id !== liveYou?.id && isVisible(player, liveBounds, 380),
-        renderLimits?.players || MAX_VISIBLE_REMOTE_PLAYERS,
+        MAX_VISIBLE_REMOTE_PLAYERS,
+        liveCameraSubject,
         (player) => ({ ...player, skin: normalizeSkin(player.skin), isBot: Boolean(player.isBot) })
       );
       const liveOrbs = collectVisible(
@@ -2134,12 +2263,15 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         player: liveYou,
         players: livePlayers,
         bots: [],
-        simpleBots: [],
+        // Pixi uses these only after its frame-time governor drops detail.
+        // They remain the same live objects, so marker motion is just as
+        // current as the detailed version.
+        simpleBots: livePlayers,
         orbs: liveOrbs,
         energyCells: liveEnergyCells,
         cores: liveCores,
         projectiles: liveProjectiles,
-        simpleProjectiles: [],
+        simpleProjectiles: liveProjectiles,
         // Keep combat text private even on the render hot path.
         combatEvents: (data.combatEvents || []).filter(
           (event) =>
@@ -2163,6 +2295,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         coreColorMap: coreColorMapRef.current,
         otherPlayerSize: 112,
         otherPlayerQuality: 0,
+        useAdaptiveSimpleFallback: true,
       };
 
       if (now - lastRenderSyncRef.current >= (mobilePerformanceRef.current ? 240 : 100)) {
@@ -2729,6 +2862,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         otherPlayerSize={112}
         otherPlayerQuality={0}
         liveDataRef={pixiLiveRef}
+        useAdaptiveSimpleFallback
         forceLowQuality={graphicsQuality === "low"}
         worldWidth={worldWidth}
         worldHeight={worldHeight}

@@ -97,9 +97,11 @@ const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
 const ZONE_STATE_INTERVAL_MS = 25;
 const ZONE_STATE_INTERVAL_CROWDED_MS = 33;
 const ZONE_STATE_INTERVAL_HEAVY_MS = 50;
-const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 20;
-const ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS = 33;
+const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 16;
+const ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS = 25;
 const ZONE_MOVEMENT_STREAM_MAX_PLAYERS = ZONE_PVP_ROOM_MAX_PLAYERS;
+const ZONE_MOVEMENT_STREAM_PROJECTILE_LIMIT = 32;
+const ZONE_MOVEMENT_STREAM_RANGE_PADDING = 560;
 const STATIC_STATE_INTERVAL_MS = 500;
 const VIEWPORT_ITEM_STATE_INTERVAL_MS = 125;
 const PVP_CROWDED_STATE_THRESHOLD = 12;
@@ -1565,7 +1567,7 @@ let GameGateway = class GameGateway {
                 }
                 if (room.status === "playing" &&
                     room.players.size <= ZONE_MOVEMENT_STREAM_MAX_PLAYERS) {
-                    const movementInterval = this.getZoneHumanPlayerCount(room) >= PVP_CROWDED_STATE_THRESHOLD
+                    const movementInterval = this.getZoneHumanPlayerCount(room) >= PVP_HEAVY_STATE_THRESHOLD
                         ? ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS
                         : ZONE_MOVEMENT_STREAM_INTERVAL_MS;
                     if (!room.lastMovementBroadcastAt ||
@@ -3414,20 +3416,38 @@ let GameGateway = class GameGateway {
         return ZONE_START_RADIUS + (ZONE_END_RADIUS - ZONE_START_RADIUS) * progress;
     }
     serializeZonePvpMovement(player) {
+        const roundMotion = (value) => Math.round(Number(value || 0) * 10) / 10;
         return {
             id: player.id,
             isBot: Boolean(player.isBot),
-            x: Math.round(Number(player.x || 0) * 100) / 100,
-            y: Math.round(Number(player.y || 0) * 100) / 100,
-            moveX: Number(player.moveX || 0),
-            moveY: Number(player.moveY || 0),
-            velocityX: Number(player.velocityX || 0),
-            velocityY: Number(player.velocityY || 0),
-            moveAngle: Number(player.moveAngle || 0),
+            x: roundMotion(player.x),
+            y: roundMotion(player.y),
+            moveX: roundMotion(player.moveX),
+            moveY: roundMotion(player.moveY),
+            velocityX: roundMotion(player.velocityX),
+            velocityY: roundMotion(player.velocityY),
+            moveAngle: roundMotion(player.moveAngle),
             isMoving: Boolean(player.isMoving),
             attacking: Boolean(player.input?.attacking),
             shieldActive: Boolean(player.shieldActive),
             alive: player.alive !== false,
+        };
+    }
+    serializeZonePvpProjectileMovement(projectile) {
+        const roundMotion = (value) => Math.round(Number(value || 0) * 10) / 10;
+        return {
+            id: projectile.id,
+            ownerId: projectile.ownerId,
+            x: roundMotion(projectile.x),
+            y: roundMotion(projectile.y),
+            vx: roundMotion(projectile.vx),
+            vy: roundMotion(projectile.vy),
+            angle: Number(projectile.angle || 0),
+            skin: projectile.skin || "cyan",
+            pierceLeft: Number(projectile.pierceLeft || 1),
+            shieldBreaker: Boolean(projectile.shieldBreaker),
+            piercesShield: Boolean(projectile.piercesShield),
+            createdAt: Number(projectile.createdAt || 0),
         };
     }
     broadcastZonePvpMovement(room, now) {
@@ -3448,6 +3468,7 @@ let GameGateway = class GameGateway {
                 : null;
             const viewAnchor = spectatorTarget || viewer;
             const range = viewer.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + 260;
+            const projectileRange = range + ZONE_MOVEMENT_STREAM_RANGE_PADDING;
             const movementPlayers = players
                 .filter((other) => other.id !== viewer.id &&
                 (viewer.alive !== false || other.alive !== false) &&
@@ -3461,6 +3482,7 @@ let GameGateway = class GameGateway {
             })
                 .slice(0, ZONE_PVP_VISIBLE_PLAYERS_LIMIT)
                 .map((other) => this.serializeZonePvpMovement(other));
+            const movementProjectiles = this.filterNear(viewAnchor, room.projectiles || [], projectileRange, ZONE_MOVEMENT_STREAM_PROJECTILE_LIMIT).map((projectile) => this.serializeZonePvpProjectileMovement(projectile));
             socket.volatile.compress(false).emit("zone-pvp:movement", {
                 serverNow: now,
                 sequence: movementSequence,
@@ -3469,6 +3491,7 @@ let GameGateway = class GameGateway {
                 phaseVersion: Number(room.phaseVersion || 0),
                 status: room.status,
                 players: movementPlayers,
+                projectiles: movementProjectiles,
             });
         }
     }
