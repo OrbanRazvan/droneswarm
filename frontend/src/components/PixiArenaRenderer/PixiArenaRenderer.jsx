@@ -199,33 +199,30 @@ function getRendererConfig(forceLowQuality) {
   const lowSpec = device.weakMobile || device.lowSpecDesktop;
   const lightMobile = device.forcedMobileQuality && !device.weakMobile;
 
-  // Keep entity transforms at display refresh rate. On weak hardware the
-  // savings come from the backbuffer, terrain and static decorations rather
-  // than from throttling the ticker or remote drone updates.
+  // On integrated GPUs, pixel shading and full drone effects are the actual
+  // bottleneck. A smaller WebGL buffer preserves transform cadence while the
+  // DOM HUD stays sharp.
   const resolution = device.lowSpecDesktop
-    ? 0.72
+    ? 0.50
     : device.weakMobile
-      ? 0.78
+      ? 0.66
       : lightMobile
-        ? 0.9
+        ? 0.82
         : Math.min(1.35, device.dpr);
 
   return {
     ...device,
     resolution,
     antialias: !lowSpec && !lightMobile,
-    // A 60-seat Zone round must protect transforms first. Detailed drone shells
-    // are restricted on constrained devices; distant units remain cheap markers
-    // and still receive every frame of binary transform data.
-    maxStaticItems: device.lowSpecDesktop ? 14 : device.weakMobile ? 16 : lightMobile ? 30 : 120,
-    maxPlayers: device.lowSpecDesktop ? 8 : device.weakMobile ? 10 : lightMobile ? 18 : MAX_RENDERED_PLAYERS,
-    // Every visible remote unit gets a transform. Only the far ones are reduced
-    // to cheap shared-context markers on constrained GPUs.
-    maxSimplePlayers: 60,
-    maxProjectiles: device.lowSpecDesktop ? 10 : device.weakMobile ? 12 : lightMobile ? 20 : MAX_RENDERED_PROJECTILES,
-    maxSimpleProjectiles: 48,
-    staticSyncInterval: device.lowSpecDesktop ? 500 : device.weakMobile ? 420 : lightMobile ? 300 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: device.lowSpecDesktop ? 12 : device.weakMobile ? 10 : lightMobile ? 6 : 1,
+    // The local drone stays premium. Only a few nearby remote drones are full;
+    // all other visible drones remain in the cheap marker pool every frame.
+    maxStaticItems: device.lowSpecDesktop ? 0 : device.weakMobile ? 0 : lightMobile ? 12 : 120,
+    maxPlayers: device.lowSpecDesktop ? 1 : device.weakMobile ? 1 : lightMobile ? 6 : MAX_RENDERED_PLAYERS,
+    maxSimplePlayers: device.lowSpecDesktop ? 60 : device.weakMobile ? 58 : lightMobile ? 54 : 60,
+    maxProjectiles: device.lowSpecDesktop ? 1 : device.weakMobile ? 1 : lightMobile ? 6 : MAX_RENDERED_PROJECTILES,
+    maxSimpleProjectiles: device.lowSpecDesktop ? 36 : device.weakMobile ? 32 : lightMobile ? 32 : 48,
+    staticSyncInterval: device.lowSpecDesktop ? 1200 : device.weakMobile ? 900 : lightMobile ? 500 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: device.lowSpecDesktop ? 240 : device.weakMobile ? 120 : lightMobile ? 32 : 1,
     disableExpensiveTerrain: Boolean(device.lowSpecDesktop || device.weakMobile || lightMobile),
   };
 }
@@ -816,6 +813,12 @@ function createSimpleVisual(resources) {
   return { root, skin: "", lastSeenAt: 0 };
 }
 
+function createSimpleProjectileVisual(resources) {
+  const root = new PIXI.Graphics(resources.simpleProjectileContexts.cyan);
+  root.eventMode = "none";
+  return { root, skin: "", lastSeenAt: 0 };
+}
+
 function createProjectileVisual(resources) {
   // Launched attack drone: a miniature drone with a bright skin-specific
   // lock-on halo, plasma vector and spinning rotors. All parts use shared
@@ -1206,44 +1209,51 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
   // puffs: all effects are attached directly to each drone so spectator view
   // remains as sharp as live play.
   const safeEffectTier = clamp(Number(effectTier || 0), 0, 2);
+  // Compact remote shells must not keep aura, engine and rotor animation alive
+  // on a weak GPU. Their body still follows every render frame exactly.
+  const reducedRemoteVisual = !isPlayer && (compact || safeEffectTier >= 1);
   const glowStrength =
     (isPlayer ? 0.72 : 0.50) *
     (safeEffectTier === 2 && !isPlayer ? 0.62 : 1);
   const glowPulse = 1 + Math.sin(now * 0.0055 + visual.hoverSeed) * 0.06;
 
-  visual.aura.visible = true;
-  visual.aura.rotation = now * 0.00018 + visual.hoverSeed * 0.09;
-  visual.aura.scale.set(glowPulse * (1 + throttle * 0.075));
-  visual.aura.alpha = glowStrength * (0.66 + Math.sin(now * 0.006 + visual.hoverSeed) * 0.16);
+  visual.aura.visible = !reducedRemoteVisual;
+  if (!reducedRemoteVisual) {
+    visual.aura.rotation = now * 0.00018 + visual.hoverSeed * 0.09;
+    visual.aura.scale.set(glowPulse * (1 + throttle * 0.075));
+    visual.aura.alpha = glowStrength * (0.66 + Math.sin(now * 0.006 + visual.hoverSeed) * 0.16);
+  }
 
-  visual.engineGlow.visible = true;
-  visual.engineGlow.position.set(0, 47);
-  visual.engineGlow.scale.set(
-    0.94 + throttle * 0.22 + Math.sin(now * 0.010 + visual.hoverSeed) * 0.04,
-  );
-  visual.engineGlow.alpha =
-    (hasMovement ? 0.84 : 0.52) *
-    (safeEffectTier === 2 && !isPlayer ? 0.72 : 1);
+  visual.engineGlow.visible = !reducedRemoteVisual;
+  visual.engineVector.visible = !reducedRemoteVisual;
+  if (!reducedRemoteVisual) {
+    visual.engineGlow.position.set(0, 47);
+    visual.engineGlow.scale.set(
+      0.94 + throttle * 0.22 + Math.sin(now * 0.010 + visual.hoverSeed) * 0.04,
+    );
+    visual.engineGlow.alpha =
+      (hasMovement ? 0.84 : 0.52) *
+      (safeEffectTier === 2 && !isPlayer ? 0.72 : 1);
 
-  visual.engineVector.visible = true;
-  visual.engineVector.position.set(0, 49);
-  visual.engineVector.scale.set(
-    0.78 + throttle * 0.38,
-    0.72 + throttle * 0.54 + Math.sin(now * 0.014 + visual.hoverSeed) * 0.08,
-  );
-  visual.engineVector.alpha =
-    (hasMovement ? 0.82 : 0.38) *
-    (safeEffectTier === 2 && !isPlayer ? 0.68 : 1);
+    visual.engineVector.position.set(0, 49);
+    visual.engineVector.scale.set(
+      0.78 + throttle * 0.38,
+      0.72 + throttle * 0.54 + Math.sin(now * 0.014 + visual.hoverSeed) * 0.08,
+    );
+    visual.engineVector.alpha =
+      (hasMovement ? 0.82 : 0.38) *
+      (safeEffectTier === 2 && !isPlayer ? 0.68 : 1);
+  }
 
-  // Rotor animation stays deliberately identical while stationary or moving.
-  // Movement already has banking/hover feedback; accelerating propeller spin
-  // made remote drones look visually different and added needless motion.
   const rotorSpeed = 0.016;
   const rotorAlpha = 0.48;
   visual.rotorSpins.forEach((rotor, index) => {
     const direction = index % 2 === 0 ? 1 : -1;
-    rotor.rotation = direction * now * rotorSpeed + index * Math.PI * 0.5;
-    rotor.alpha = rotorAlpha;
+    rotor.visible = !reducedRemoteVisual;
+    if (!reducedRemoteVisual) {
+      rotor.rotation = direction * now * rotorSpeed + index * Math.PI * 0.5;
+      rotor.alpha = rotorAlpha;
+    }
   });
 
   const shieldActive = Boolean(unit.shieldActive || unit.isShieldActive || Number(unit.shieldUntil || 0) > Date.now());
@@ -1275,7 +1285,9 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
     visual.shieldPulse.alpha = (1 - shieldPulsePhase) * 0.34 * shieldAlpha;
   }
 
-  const count = Math.min(MAX_MINI_DRONES, Math.max(0, Number(unit.drones || 0)));
+  const count = reducedRemoteVisual
+    ? 0
+    : Math.min(MAX_MINI_DRONES, Math.max(0, Number(unit.drones || 0)));
   visual.orbit.visible = count > 0;
   const attacking = Boolean(unit.attacking);
   const orbitRadius = attacking && isPlayer ? 175 : 145;
@@ -1335,7 +1347,21 @@ function updateSimpleVisual(visual, unit, resources, now) {
   visual.lastSeenAt = now;
 }
 
-function updateProjectileVisual(visual, projectile, resources, now) {
+function updateSimpleProjectileVisual(visual, projectile, resources, now) {
+  const skin = normalizeSkin(projectile.skin);
+  if (visual.skin !== skin) {
+    visual.skin = skin;
+    visual.root.context = resources.simpleProjectileContexts[skin] || resources.simpleProjectileContexts.cyan;
+  }
+  const heading = Number(projectile.angle ?? Math.atan2(Number(projectile.vy || 0), Number(projectile.vx || 1)));
+  visual.root.visible = true;
+  visual.root.position.set(Number(projectile.x || 0), Number(projectile.y || 0));
+  visual.root.rotation = heading;
+  visual.root.alpha = 0.95;
+  visual.lastSeenAt = now;
+}
+
+function updateProjectileVisual(visual, projectile, resources, now, compact = false) {
   const skin = normalizeSkin(projectile.skin);
   if (visual.skin !== skin) {
     visual.skin = skin;
@@ -1365,28 +1391,37 @@ function updateProjectileVisual(visual, projectile, resources, now) {
   visual.root.scale.set(flightScale);
   visual.root.alpha = projectile.localOnly ? 0.92 : 1;
 
-  visual.aura.rotation = -phase * 0.65;
-  visual.aura.scale.set(pulse * (projectile.pierceLeft > 1 ? 1.12 : 1));
-  visual.aura.alpha = projectile.localOnly ? 0.68 : 0.84;
+  visual.aura.visible = !compact;
+  visual.jet.visible = !compact;
+  if (!compact) {
+    visual.aura.rotation = -phase * 0.65;
+    visual.aura.scale.set(pulse * (projectile.pierceLeft > 1 ? 1.12 : 1));
+    visual.aura.alpha = projectile.localOnly ? 0.68 : 0.84;
 
-  visual.jet.position.set(0, 19);
-  visual.jet.scale.set(0.78 + Math.sin(phase * 1.7) * 0.07, 0.92 + Math.sin(phase * 2.1) * 0.16);
-  visual.jet.alpha = projectile.shieldBreaker || projectile.piercesShield ? 1 : 0.82;
+    visual.jet.position.set(0, 19);
+    visual.jet.scale.set(0.78 + Math.sin(phase * 1.7) * 0.07, 0.92 + Math.sin(phase * 2.1) * 0.16);
+    visual.jet.alpha = projectile.shieldBreaker || projectile.piercesShield ? 1 : 0.82;
+  }
 
-  visual.body.position.set(0, hover);
+  visual.body.position.set(0, compact ? 0 : hover);
   visual.rotorSpins.forEach((rotor, index) => {
     const direction = index % 2 === 0 ? 1 : -1;
-    rotor.rotation = direction * now * 0.032 + index * Math.PI * 0.5;
-    rotor.alpha = 0.78;
+    rotor.visible = !compact;
+    if (!compact) {
+      rotor.rotation = direction * now * 0.032 + index * Math.PI * 0.5;
+      rotor.alpha = 0.78;
+    }
   });
   visual.lastSeenAt = now;
 }
 
 function syncUnitPool({ pool, source, resources, parent, bounds, max, now, isPlayer = false, compact = false, effectTier = 0 }) {
   const visible = [];
+  const ids = new Set();
   for (const unit of source || []) {
     if (!unit || unit.alive === false || !isVisibleInBounds(unit, bounds, 320)) continue;
     visible.push(unit);
+    ids.add(String(unit.id || ""));
     if (visible.length >= max) break;
   }
 
@@ -1400,12 +1435,16 @@ function syncUnitPool({ pool, source, resources, parent, bounds, max, now, isPla
     }
     updateUnitVisual(visual, unit, resources, now, isPlayer, compact, effectTier);
   }
+  return ids;
 }
 
-function syncSimplePool({ pool, source, resources, parent, bounds, max, now }) {
+function syncSimplePool({ pool, source, resources, parent, bounds, max, now, excludeIds = null }) {
   const visible = [];
+  const seen = new Set();
   for (const unit of source || []) {
-    if (!unit || unit.alive === false || !isVisibleInBounds(unit, bounds, 120)) continue;
+    const id = String(unit?.id || "");
+    if (!unit || !id || seen.has(id) || (excludeIds && excludeIds.has(id)) || unit.alive === false || !isVisibleInBounds(unit, bounds, 120)) continue;
+    seen.add(id);
     visible.push(unit);
     if (visible.length >= max) break;
   }
@@ -1422,15 +1461,18 @@ function syncSimplePool({ pool, source, resources, parent, bounds, max, now }) {
   }
 }
 
-function syncProjectilePool({ pool, source, resources, parent, bounds, max, now }) {
+function syncProjectilePool({ pool, source, resources, parent, bounds, max, now, compact = false, simple = false, excludeIds = null }) {
   const visible = [];
+  const ids = new Set();
   for (const projectile of source || []) {
-    if (!projectile || !isVisibleInBounds(projectile, bounds, 120)) continue;
+    const id = String(projectile?.id || "");
+    if (!projectile || !id || (excludeIds && excludeIds.has(id)) || !isVisibleInBounds(projectile, bounds, 120)) continue;
     visible.push(projectile);
+    ids.add(id);
     if (visible.length >= max) break;
   }
 
-  addToPool(pool, () => createProjectileVisual(resources), parent, visible.length);
+  addToPool(pool, () => simple ? createSimpleProjectileVisual(resources) : createProjectileVisual(resources), parent, visible.length);
   for (let index = 0; index < pool.length; index += 1) {
     const projectile = visible[index];
     const visual = pool[index];
@@ -1438,14 +1480,20 @@ function syncProjectilePool({ pool, source, resources, parent, bounds, max, now 
       visual.root.visible = false;
       continue;
     }
-    updateProjectileVisual(visual, projectile, resources, now);
+    if (simple) {
+      updateSimpleProjectileVisual(visual, projectile, resources, now);
+    } else {
+      updateProjectileVisual(visual, projectile, resources, now, compact);
+    }
   }
+  return ids;
 }
 
 function createResources(coreTypes = []) {
   const droneContexts = {};
   const miniContexts = {};
   const simpleContexts = {};
+  const simpleProjectileContexts = {};
   const rotorSpinContexts = {};
   const droneAuraContexts = {};
   const engineGlowContexts = {};
@@ -1476,6 +1524,10 @@ function createResources(coreTypes = []) {
     const simple = new PIXI.GraphicsContext();
     simple.circle(0, 0, 10).fill({ color: colors[0], alpha: 0.9 });
     simpleContexts[skin] = simple;
+
+    const simpleProjectile = new PIXI.GraphicsContext();
+    simpleProjectile.poly([9, 0, -6, -5, -6, 5]).fill({ color: colors[0], alpha: 0.96 });
+    simpleProjectileContexts[skin] = simpleProjectile;
   });
 
   const coreContexts = {};
@@ -1487,6 +1539,7 @@ function createResources(coreTypes = []) {
     droneContexts,
     miniContexts,
     simpleContexts,
+    simpleProjectileContexts,
     rotorSpinContexts,
     droneAuraContexts,
     engineGlowContexts,
@@ -2143,6 +2196,19 @@ function PixiArenaRenderer({
       let frameTimeEma = 16.7;
       let adaptiveTier = 0; // 0 = full, 1 = reduced, 2 = emergency low
       let lastAdaptiveChangeAt = 0;
+      let dynamicResolution = config.resolution;
+
+      const applyAdaptiveResolution = () => {
+        if (!app?.renderer || !config.lowSpecDesktop && !config.weakMobile && !config.forcedMobileQuality) return;
+        const ratio = adaptiveTier === 2 ? 0.68 : adaptiveTier === 1 ? 0.84 : 1;
+        const nextResolution = Math.max(0.34, Number((config.resolution * ratio).toFixed(2)));
+        if (Math.abs(nextResolution - dynamicResolution) < 0.01) return;
+        dynamicResolution = nextResolution;
+        app.renderer.resolution = dynamicResolution;
+        const width = Math.max(1, hostRef.current?.clientWidth || window.innerWidth);
+        const height = Math.max(1, hostRef.current?.clientHeight || window.innerHeight);
+        app.renderer.resize(width, height);
+      };
 
       const resize = () => {
         const width = Math.max(1, hostRef.current?.clientWidth || window.innerWidth);
@@ -2165,9 +2231,9 @@ function PixiArenaRenderer({
 
         if (now - lastAdaptiveChangeAt > 700) {
           const desiredTier =
-            frameTimeEma > 24 ? 2 :
-            frameTimeEma > 18.2 ? 1 :
-            frameTimeEma < 16.9 ? 0 :
+            frameTimeEma > 21.5 ? 2 :
+            frameTimeEma > 17.2 ? 1 :
+            frameTimeEma < 16.6 ? 0 :
             adaptiveTier;
           if (desiredTier !== adaptiveTier) {
             adaptiveTier = desiredTier;
@@ -2175,6 +2241,7 @@ function PixiArenaRenderer({
             // Force a controlled refresh so pooled static visuals converge to
             // the new budget without one large per-frame rebuild.
             lastStaticSync = 0;
+            applyAdaptiveResolution();
           }
         }
 
@@ -2233,10 +2300,12 @@ function PixiArenaRenderer({
           lastStaticSync = now;
           // Normal PvP can request a denser loot budget without changing
           // other game modes. Clamp it to a safe device-specific ceiling.
-          const requestedStaticBudget = Number(data.staticItemBudget || 0);
+          const rawStaticItemBudget = data.staticItemBudget;
+          const hasRequestedStaticBudget = rawStaticItemBudget !== null && rawStaticItemBudget !== undefined && Number.isFinite(Number(rawStaticItemBudget));
+          const requestedStaticBudget = hasRequestedStaticBudget ? Number(rawStaticItemBudget) : null;
           const staticBudgetCeiling = config.mobile ? 190 : 300;
-          const baseItemBudget = requestedStaticBudget > 0
-            ? clamp(Math.round(requestedStaticBudget), 40, staticBudgetCeiling)
+          const baseItemBudget = hasRequestedStaticBudget
+            ? clamp(Math.round(requestedStaticBudget), 0, staticBudgetCeiling)
             : config.maxStaticItems;
           const adaptiveItemCap =
             adaptiveTier === 2 ? Math.min(baseItemBudget, config.lowSpecDesktop ? 34 : 54) :
@@ -2300,56 +2369,72 @@ function PixiArenaRenderer({
           now,
           isPlayer: true,
         });
-        syncUnitPool({
+        const fullUnitCap = adaptiveTier === 2
+          ? Math.min(config.maxPlayers, 1)
+          : adaptiveTier === 1
+            ? Math.min(config.maxPlayers, config.lowSpecDesktop || config.weakMobile ? 1 : 3)
+            : config.maxPlayers;
+        const fullRemoteIds = syncUnitPool({
           pool: remotePool,
           source: data.players,
           resources,
           parent: entitiesLayer,
           bounds,
-          max: adaptiveTier === 2 ? Math.min(config.maxPlayers, 12) : adaptiveTier === 1 ? Math.min(config.maxPlayers, 24) : config.maxPlayers,
+          max: fullUnitCap,
           now,
-          compact: config.weakMobile || adaptiveTier > 0,
+          compact: config.lowSpecDesktop || config.weakMobile || adaptiveTier > 0,
           effectTier: remoteEffectTier,
         });
-        syncUnitPool({
+        const fullBotIds = syncUnitPool({
           pool: botPool,
           source: data.bots,
           resources,
           parent: entitiesLayer,
           bounds,
-          max: adaptiveTier === 2 ? Math.min(config.maxPlayers, 12) : adaptiveTier === 1 ? Math.min(config.maxPlayers, 24) : config.maxPlayers,
+          max: fullUnitCap,
           now,
-          compact: config.weakMobile || adaptiveTier > 0,
+          compact: config.lowSpecDesktop || config.weakMobile || adaptiveTier > 0,
           effectTier: remoteEffectTier,
         });
+        const fullEntityIds = new Set([...fullRemoteIds, ...fullBotIds]);
         syncSimplePool({
           pool: simpleBotPool,
-          source: data.simpleBots,
+          // When a device drops to a low tier, entities that no longer fit in
+          // the premium pools are promoted here instead of disappearing.
+          source: [...(data.players || []), ...(data.bots || []), ...(data.simpleBots || [])],
           resources,
           parent: entitiesLayer,
           bounds,
-          // Simple units are tiny cached graphics. Keep all of them visible;
-          // only detailed shells and static scenery are reduced under pressure.
           max: config.maxSimplePlayers,
           now,
+          excludeIds: fullEntityIds,
         });
-        syncProjectilePool({
+        const fullProjectileCap = adaptiveTier === 2
+          ? Math.min(config.maxProjectiles, 1)
+          : adaptiveTier === 1
+            ? Math.min(config.maxProjectiles, config.lowSpecDesktop || config.weakMobile ? 1 : 4)
+            : config.maxProjectiles;
+        const fullProjectileIds = syncProjectilePool({
           pool: projectilePool,
           source: data.projectiles,
           resources,
           parent: projectilesLayer,
           bounds,
-          max: adaptiveTier === 2 ? Math.min(config.maxProjectiles, 10) : adaptiveTier === 1 ? Math.min(config.maxProjectiles, 28) : config.maxProjectiles,
+          max: fullProjectileCap,
           now,
+          compact: config.lowSpecDesktop || config.weakMobile || adaptiveTier > 0,
         });
         syncProjectilePool({
           pool: simpleProjectilePool,
-          source: data.simpleProjectiles,
+          source: [...(data.projectiles || []), ...(data.simpleProjectiles || [])],
           resources,
           parent: projectilesLayer,
           bounds,
           max: config.maxSimpleProjectiles,
           now,
+          compact: true,
+          simple: true,
+          excludeIds: fullProjectileIds,
         });
         // Normal PvP and Zone PvP request strict private combat text. In this
         // mode an event must explicitly belong to the local player. Other

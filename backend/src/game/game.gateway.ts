@@ -83,7 +83,7 @@ const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 60;
 const ZONE_PVP_ROOM_MAX_PLAYERS = 60;
 // A Zone PvP lobby starts only after three real browser players have joined.
 // Bots never unlock the lobby; they are created only when the admission window ends.
-const ZONE_PVP_ROOM_MIN_PLAYERS = 3;
+const ZONE_PVP_ROOM_MIN_PLAYERS = 2; // TEST: revert to 3 before public launch.
 const ZONE_PVP_START_COUNTDOWN_MS = 5000;
 const ZONE_PVP_BATTLE_PREPARE_DURATION = 30000;
 const ZONE_PVP_ZONE_SHRINK_DURATION = 420000;
@@ -130,19 +130,19 @@ const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
 // Zone PvP has a strict split between simulation and replication.  The full
 // JSON state is deliberately slow; transforms travel on their own latest-wins
 // WebSocket lane.  This prevents loot/minimap/HUD work from delaying drones.
-const ZONE_STATE_INTERVAL_MS = 360;
-const ZONE_STATE_INTERVAL_CROWDED_MS = 440;
-const ZONE_STATE_INTERVAL_HEAVY_MS = 520;
-const ZONE_ENTITY_DEFINITION_INTERVAL_MS = 1500;
+const ZONE_STATE_INTERVAL_MS = 500;
+const ZONE_STATE_INTERVAL_CROWDED_MS = 620;
+const ZONE_STATE_INTERVAL_HEAVY_MS = 760;
+const ZONE_ENTITY_DEFINITION_INTERVAL_MS = 900;
 const ZONE_PROJECTILE_DEFINITION_INTERVAL_MS = 800;
 
 // Forty transform updates/second plus local display-rate interpolation is a
 // better mobile trade-off than 60 large JSON payloads.  The server always sends
 // the newest transform and clients discard an obsolete packet before processing.
-const ZONE_TRANSFORM_INTERVAL_MS = 25;
+const ZONE_TRANSFORM_INTERVAL_MS = 33;
 const ZONE_TRANSFORM_PLAYER_LIMIT = 60;
-const ZONE_TRANSFORM_PROJECTILE_LIMIT = 48;
-const ZONE_TRANSFORM_RANGE_PADDING = 900;
+const ZONE_TRANSFORM_PROJECTILE_LIMIT = 36;
+const ZONE_TRANSFORM_RANGE_PADDING = 820;
 const ZONE_WORLD_DELTA_INTERVAL_MS = 250;
 const ZONE_LOOT_TICK_INTERVAL_MS = 50;
 const ZONE_COLLISION_TICK_INTERVAL_MS = 34;
@@ -152,7 +152,7 @@ const ZONE_ITEM_MAINTENANCE_INTERVAL_MS = 260;
 const ZONE_TRANSFORM_PROTOCOL_VERSION = 1;
 const ZONE_TRANSFORM_PLAYER_BYTES = 32;
 const ZONE_TRANSFORM_PROJECTILE_BYTES = 28;
-const STATIC_STATE_INTERVAL_MS = 1100; // minimap + leaderboard
+const STATIC_STATE_INTERVAL_MS = 1400; // minimap + leaderboard
 const VIEWPORT_ITEM_STATE_INTERVAL_MS = 550; // static nearby loot, per player
 const PVP_CROWDED_STATE_THRESHOLD = 12;
 const PVP_HEAVY_STATE_THRESHOLD = 28;
@@ -2046,7 +2046,7 @@ export class GameGateway {
           this.broadcastZonePvpRoomState(room, now);
         }
 
-        // Transforms have their own binary latest-wins lane. Never let HUD/loot
+        // Transforms have their own compact latest-wins tuple lane. Never let HUD/loot
         // payloads queue in front of remote drone or attack-drone positions.
         if (room.status === "playing") {
           if (
@@ -4541,6 +4541,11 @@ export class GameGateway {
     const sequence = Number(room.zoneTransformSequence || 0) + 1;
     room.zoneTransformSequence = sequence;
 
+    // Hot lane: compact tuples only. A normal JSON object repeats property
+    // names and skins for 60 entities on every packet; old CPUs spend more
+    // time parsing that than drawing. Static metadata still travels on the
+    // slower zone-pvp:state lane. A tuple is intentionally easy to debug and
+    // keeps compatibility with Socket.IO without the binary metadata race.
     for (const viewer of units) {
       if (viewer?.isBot) continue;
 
@@ -4555,11 +4560,7 @@ export class GameGateway {
         ? VIEW_DISTANCE + 1700
         : VIEW_DISTANCE + ZONE_TRANSFORM_RANGE_PADDING;
 
-      // This deliberately contains only transform/combat fields. It does not
-      // carry loot, leaderboard, minimap, core metadata or large player objects.
-      // Older phones can parse it consistently, and Socket.IO can discard an
-      // obsolete packet when a new one is ready.
-      const visiblePlayers = this.filterNear(
+      const playerRows = this.filterNear(
         viewAnchor,
         units.filter(
           (other: any) =>
@@ -4568,54 +4569,56 @@ export class GameGateway {
         ),
         range,
         ZONE_TRANSFORM_PLAYER_LIMIT,
-      ).map((unit: any) => ({
-        id: unit.id,
-        x: Number(unit.x || 0),
-        y: Number(unit.y || 0),
-        velocityX: Number(unit.velocityX || 0),
-        velocityY: Number(unit.velocityY || 0),
-        moveAngle: Number(unit.moveAngle || 0),
-        isMoving: Boolean(unit.isMoving),
-        attacking: Boolean(unit.input?.attacking),
-        shieldActive: Boolean(unit.shieldActive),
-        alive: unit.alive !== false,
-        isBot: Boolean(unit.isBot),
-        drones: Math.max(0, Number(unit.drones || 0)),
-        hp: Number(unit.hp || 0),
-        // Skin is intentionally included here. A bot may become visible before
-        // its slow metadata packet reaches this client; it must still render.
-        skin: normalizeSkin(unit.skin),
-      }));
+      ).map((unit: any) => {
+        const flags =
+          (unit.isMoving ? 1 : 0) |
+          (unit.input?.attacking ? 2 : 0) |
+          (unit.shieldActive ? 4 : 0) |
+          (unit.alive !== false ? 8 : 0) |
+          (unit.isBot ? 16 : 0);
+        return [
+          this.ensureZonePvpNetId(room, unit.id),
+          Math.round(Number(unit.x || 0) * 10) / 10,
+          Math.round(Number(unit.y || 0) * 10) / 10,
+          Math.round(Number(unit.velocityX || 0) * 10) / 10,
+          Math.round(Number(unit.velocityY || 0) * 10) / 10,
+          Math.round(Number(unit.moveAngle || 0) * 10000) / 10000,
+          flags,
+          Math.max(0, Math.min(MAX_DRONES, Number(unit.drones || 0))),
+        ];
+      });
 
-      const visibleProjectiles = this.filterNear(
+      const projectileRows = this.filterNear(
         viewAnchor,
         room.projectiles || [],
         range + 460,
         ZONE_TRANSFORM_PROJECTILE_LIMIT,
-      ).map((projectile: any) => ({
-        id: projectile.id,
-        ownerId: projectile.ownerId,
-        skin: normalizeSkin(projectile.skin),
-        x: Number(projectile.x || 0),
-        y: Number(projectile.y || 0),
-        vx: Number(projectile.vx || 0),
-        vy: Number(projectile.vy || 0),
-        angle: Number(projectile.angle || 0),
-        pierceLeft: Number(projectile.pierceLeft || 1),
-        shieldBreaker: Boolean(projectile.shieldBreaker),
-        piercesShield: Boolean(projectile.piercesShield),
-        createdAt: Number(projectile.createdAt || now),
-      }));
+      ).map((projectile: any) => {
+        const flags =
+          (Number(projectile.pierceLeft || 1) > 1 ? 1 : 0) |
+          (projectile.shieldBreaker ? 2 : 0) |
+          (projectile.piercesShield ? 4 : 0);
+        return [
+          this.ensureZonePvpNetId(room, projectile.id),
+          this.ensureZonePvpNetId(room, projectile.ownerId),
+          Math.round(Number(projectile.x || 0) * 10) / 10,
+          Math.round(Number(projectile.y || 0) * 10) / 10,
+          Math.round(Number(projectile.vx || 0) * 10) / 10,
+          Math.round(Number(projectile.vy || 0) * 10) / 10,
+          Math.round(Number(projectile.angle || 0) * 10000) / 10000,
+          flags,
+          Number(projectile.createdAt || now),
+        ];
+      });
 
       socket.volatile.compress(false).emit("zone-pvp:movement", {
-        roomId: room.id,
-        roundId: room.roundId || null,
-        phaseVersion: Number(room.phaseVersion || 0),
-        status: room.status,
-        sequence,
-        serverNow: now,
-        players: visiblePlayers,
-        projectiles: visibleProjectiles,
+        r: room.id,
+        rd: room.roundId || null,
+        pv: Number(room.phaseVersion || 0),
+        s: sequence,
+        t: now,
+        p: playerRows,
+        q: projectileRows,
       });
     }
   }
