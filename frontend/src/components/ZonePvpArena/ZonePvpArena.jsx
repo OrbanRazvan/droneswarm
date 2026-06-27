@@ -57,7 +57,7 @@ const LOCAL_PROJECTILE_MAX_DISTANCE = 4200;
 const PROJECTILE_HIT_VISUAL_RADIUS = 118;
 const LOCAL_PROJECTILE_SPEED = 4.4;
 const FIRE_COOLDOWN = 3000;
-const BATTLE_PREPARE_DURATION = 10000; // 10-second peace phase before combat.
+const BATTLE_PREPARE_DURATION = 30000;
 const ORB_STABLE_TTL = 2400;
 const MINIMAP_STABLE_TTL = 8000;
 
@@ -183,9 +183,8 @@ function isConstrainedDesktopDevice() {
     ? Number(navigator.deviceMemory)
     : null;
 
-  // This only selects nearby-object budgets. The Pixi renderer now starts
-  // older office laptops in the premium visual profile and adapts from real
-  // frame time instead of permanently removing the background.
+  // This is intentionally conservative. It catches older office laptops and
+  // integrated-GPU machines before their renderer starts producing a backlog.
   return cores <= 4 || (memory !== null && memory <= 6);
 }
 
@@ -1092,13 +1091,6 @@ function resolveRemoteMotion(motion, now, dt) {
 function getBattlePrepareRemainingMs(data = {}) {
   if (!data || data.status !== "playing") return 0;
 
-  const now = Date.now();
-  const prepareStartsAt = Number(data.battlePrepareStartsAt || 0);
-  // `battlePrepareUntil` is intentionally absent until the five-second final
-  // countdown finishes. This guard also keeps an out-of-order packet from
-  // showing the 10-second panel early.
-  if (prepareStartsAt > now) return 0;
-
   const explicitRemaining = Number(data.battlePrepareRemainingMs);
   if (Number.isFinite(explicitRemaining) && explicitRemaining > 0) {
     return explicitRemaining;
@@ -1106,7 +1098,12 @@ function getBattlePrepareRemainingMs(data = {}) {
 
   const prepareUntil = Number(data.battlePrepareUntil);
   if (Number.isFinite(prepareUntil) && prepareUntil > 0) {
-    return Math.max(0, prepareUntil - now);
+    return Math.max(0, prepareUntil - Date.now());
+  }
+
+  const matchStartedAt = Number(data.matchStartedAt);
+  if (Number.isFinite(matchStartedAt) && matchStartedAt > 0) {
+    return Math.max(0, BATTLE_PREPARE_DURATION - (Date.now() - matchStartedAt));
   }
 
   return 0;
@@ -1114,14 +1111,6 @@ function getBattlePrepareRemainingMs(data = {}) {
 
 function isBattlePrepareLocked(data = {}) {
   return getBattlePrepareRemainingMs(data) > 0;
-}
-
-// Match found and the final 5..1 are locked too, even though the visible
-// 10-second PREPARE PHASE has not started yet.
-function isZoneCombatLocked(data = {}) {
-  if (!data || data.status !== "playing") return true;
-  if (!data.matchStartedAt) return true;
-  return isBattlePrepareLocked(data);
 }
 
 function getBattleBeginFlashActive(data = {}) {
@@ -1345,16 +1334,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     phaseVersion: -1,
     status: "connecting",
     playerCount: 0,
-    minPlayers: 2,
+    minPlayers: 3,
     maxPlayers: 60,
     countdown: null,
-    matchFoundUntil: null,
-    matchFoundRealPlayerCount: 0,
-    matchFoundBotCount: 0,
-    finalCountdownStartsAt: null,
-    finalCountdownUntil: null,
-    battlePrepareStartsAt: null,
-    battlePrepareUntil: null,
     coreDropCountdown: null,
     winnerId: null,
     winnerName: null,
@@ -1571,23 +1553,6 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
               projectileMovementRef.current.delete(previousKey);
               projectileMovementRef.current.set(currentKey, { ...temporary, ...projectile, id: currentKey });
             }
-
-            // The transform stream can arrive before the metadata packet. The
-            // old code migrated only projectileMovementRef, leaving the already
-            // rendered temporary key in projectilesRef. That produced one mini
-            // drone under zone-net:<id> plus the same mini drone under its UUID.
-            const renderedTemporary = projectilesRef.current.get(previousKey);
-            if (renderedTemporary) {
-              const renderedCanonical = projectilesRef.current.get(currentKey);
-              projectilesRef.current.delete(previousKey);
-              projectilesRef.current.set(currentKey, {
-                ...renderedTemporary,
-                ...renderedCanonical,
-                ...projectile,
-                id: currentKey,
-                localOnly: false,
-              });
-            }
           }
         }
       }
@@ -1619,23 +1584,30 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         );
       }
 
-      // The server owns MATCH FOUND, the final 5..1, and the 10-second
-      // peace period. Cache only an already-started PREPARE PHASE locally so
-      // packet jitter cannot turn the final countdown into BATTLE BEGIN.
+      // Sincronizare locala pentru PREPARE PHASE / BATTLE BEGIN.
+      // Serverul ramane autoritar, dar tinem si un fallback local ca HUD-ul sa nu dispara
+      // daca un packet ajunge fara battlePrepareRemainingMs/battlePrepareUntil.
       if (state?.status === "playing") {
         const serverPrepareRemaining = getBattlePrepareRemainingMs(state);
         const serverPrepareUntil = state.battlePrepareUntil ? Number(state.battlePrepareUntil) : 0;
-        const serverPrepareStartsAt = state.battlePrepareStartsAt ? Number(state.battlePrepareStartsAt) : 0;
 
-        localBattlePrepareUntilRef.current =
-          serverPrepareStartsAt <= nowWall && serverPrepareUntil > nowWall
+        if (serverPrepareRemaining > 0 || serverPrepareUntil > nowWall) {
+          localBattlePrepareUntilRef.current = serverPrepareUntil > nowWall
             ? serverPrepareUntil
-            : serverPrepareRemaining > 0
-              ? nowWall + serverPrepareRemaining
-              : 0;
+            : nowWall + serverPrepareRemaining;
 
-        if (state.battleBeginFlashUntil) {
-          localBattleBeginFlashUntilRef.current = Number(state.battleBeginFlashUntil);
+          localBattleBeginFlashUntilRef.current = state.battleBeginFlashUntil
+            ? Number(state.battleBeginFlashUntil)
+            : localBattlePrepareUntilRef.current + 1800;
+        } else if (state.matchStartedAt) {
+          const localPrepareUntil = Number(state.matchStartedAt) + BATTLE_PREPARE_DURATION;
+          if (localPrepareUntil > nowWall) {
+            localBattlePrepareUntilRef.current = Math.max(localBattlePrepareUntilRef.current || 0, localPrepareUntil);
+            localBattleBeginFlashUntilRef.current = Math.max(localBattleBeginFlashUntilRef.current || 0, localPrepareUntil + 1800);
+          }
+        } else if (lastArenaStatusRef.current !== "playing" && !localBattlePrepareUntilRef.current) {
+          localBattlePrepareUntilRef.current = nowWall + BATTLE_PREPARE_DURATION;
+          localBattleBeginFlashUntilRef.current = localBattlePrepareUntilRef.current + 1800;
         }
       } else if (state?.status === "waiting" || state?.status === "countdown") {
         localBattlePrepareUntilRef.current = 0;
@@ -2018,7 +1990,6 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         const meta = netId > 0 ? (zoneProjectileMetaRef.current.get(netId) || {}) : {};
         const projectile = decodeZoneProjectileRow(row, meta);
         if (!projectile?.id) continue;
-
         packetProjectileIds.add(projectile.id);
         const existing = movementProjectiles.get(projectile.id);
         movementProjectiles.set(projectile.id, {
@@ -2248,7 +2219,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const mouseWorldX = you ? you.x + (mouse.x - window.innerWidth / 2) : 0;
       const mouseWorldY = you ? you.y + (mouse.y - window.innerHeight / 2) : 0;
       const mobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
-      const battleLocked = isZoneCombatLocked(worldRef.current);
+      const battleLocked = isBattlePrepareLocked(worldRef.current);
 
       const input = {
         seq: inputSeqRef.current + 1,
@@ -2369,8 +2340,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           moveX: mobileMove.active ? mobileMove.x : 0,
           moveY: mobileMove.active ? mobileMove.y : 0,
           mobileMove: Boolean(mobileMove.active),
-          attacking: !isZoneCombatLocked(worldRef.current) && Boolean(keysRef.current.mouseDown),
-          shield: !isZoneCombatLocked(worldRef.current) && Boolean(keysRef.current.rightMouseDown),
+          attacking: !isBattlePrepareLocked(worldRef.current) && Boolean(keysRef.current.mouseDown),
+          shield: !isBattlePrepareLocked(worldRef.current) && Boolean(keysRef.current.rightMouseDown),
           mouseX: current.x + (mouseRef.current.x - window.innerWidth / 2),
           mouseY: current.y + (mouseRef.current.y - window.innerHeight / 2),
         };
@@ -2395,11 +2366,26 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         // vanish visually even when the server has not yet validated the pickup.
         worldRef.current.you = predictedYouRef.current || worldRef.current.you;
 
-        // A Zone attack is rendered only after the authoritative server creates
-        // its projectile. Do not spawn a second client-predicted mini drone:
-        // the old local + authoritative pair was the source of the double shot.
-        // At 30 Hz this adds at most one transform packet of delay, while every
-        // player sees exactly the same single attack drone.
+        const wantsToAttack = Boolean(keysRef.current.mouseDown);
+        const localCooldown = getLocalFireCooldown(predicted, now);
+
+        if (
+          data.status === "playing" &&
+          !isBattlePrepareLocked(data) &&
+          wantsToAttack &&
+          predicted?.alive !== false &&
+          (predicted?.drones || 0) > 0 &&
+          now - lastLocalProjectileAtRef.current >= localCooldown
+        ) {
+          const mouseWorldX = predicted.x + (mouseRef.current.x - window.innerWidth / 2);
+          const mouseWorldY = predicted.y + (mouseRef.current.y - window.innerHeight / 2);
+          const localProjectile = createLocalProjectile(predicted, mouseWorldX, mouseWorldY, now);
+
+          if (localProjectile) {
+            projectilesRef.current.set(localProjectile.id, localProjectile);
+            lastLocalProjectileAtRef.current = now;
+          }
+        }
       }
 
       const me = predictedYouRef.current || data.you;
@@ -2471,6 +2457,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       for (const [id, target] of incomingProjectiles.entries()) {
         const current = projectileMap.get(id) || target;
+
+        if (target.ownerId && target.ownerId === me?.id) {
+          continue;
+        }
 
         const error = Math.hypot(
           Number(target.x || 0) - Number(current.x ?? target.x ?? 0),
@@ -2545,7 +2535,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const renderLimits = mobilePerformanceRef.current
         ? { detailed: 6, total: 50, orbs: 48, energy: 16, cores: 4, projectiles: 5, simpleProjectiles: 26 }
         : constrainedDesktopRef.current
-          ? { detailed: 7, total: 52, orbs: 74, energy: 26, cores: 5, projectiles: 8, simpleProjectiles: 30 }
+          ? { detailed: 8, total: 56, orbs: 64, energy: 22, cores: 6, projectiles: 7, simpleProjectiles: 32 }
           : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
       // Map insertion order is not distance order. Sort by the camera subject
@@ -2625,10 +2615,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldHeight,
         // Zone PvP is the 60-seat competitive mode: keep the world layer plain
         // so every GPU budget goes to drone/projectile transforms.
-        // Zone PvP shares the same premium space background as the good-desktop
-        // profile. Pixi hides it only temporarily if emergency frame pressure is measured.
-        worldTheme: "premium-space-battle",
-        staticItemBudget: mobilePerformanceRef.current ? 48 : constrainedDesktopRef.current ? 86 : 110,
+        worldTheme: "default",
+        // Static pickups are now part of the low-end readability budget too.
+        // Renderer adapts further only when its measured frame time requires it.
+        staticItemBudget: mobilePerformanceRef.current ? 52 : constrainedDesktopRef.current ? 76 : 100,
         safeZoneRadius: zoneRadius,
         showZone: true,
         coreColorMap: coreColorMapRef.current,
@@ -3035,13 +3025,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y * cameraScale : 0;
   const bounds = getViewportBounds(cameraX, cameraY, viewport, 720, cameraScale);
   const reactiveRenderLimits = isMobileControls
-    ? { detailed: 8, total: 46, orbs: 48, energy: 16, cores: 4, projectiles: 6, simpleProjectiles: 24 }
+    ? { detailed: 6, total: 50, orbs: 48, energy: 16, cores: 4, projectiles: 5, simpleProjectiles: 26 }
     : constrainedDesktopRef.current
-      // Older PCs now keep premium animated drones for the entire nearby fight.
-      // We reduce distant loot first; Pixi adapts resolution only when real frame
-      // time requires it instead of pre-emptively replacing neighbours with dots.
-      ? { detailed: 38, total: 56, orbs: 86, energy: 30, cores: 7, projectiles: 16, simpleProjectiles: 30 }
-      : { detailed: 60, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
+      ? { detailed: 8, total: 56, orbs: 64, energy: 22, cores: 6, projectiles: 7, simpleProjectiles: 32 }
+      : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
   const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), reactiveRenderLimits.orbs);
   const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), reactiveRenderLimits.energy);
@@ -3056,30 +3043,12 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       return ax * ax + ay * ay - (bx * bx + by * by);
     })
     .slice(0, reactiveRenderLimits.total);
-  // A Zone transform may first use zone-net:<id> and later receive its UUID.
-  // Keep one canonical projectile in the renderer even while the metadata packet
-  // and transform packet cross on a slow device.
-  const uniqueProjectileMap = new Map();
-  for (const projectile of renderData.projectiles || []) {
-    if (!projectile) continue;
-    const netId = Number(projectile.netId || 0);
-    const metadata = netId > 0 ? zoneProjectileMetaRef.current.get(netId) : null;
-    const key = String(metadata?.id || projectile.id || (netId > 0 ? zoneNetKey(netId) : ""));
-    if (!key) continue;
-    const previous = uniqueProjectileMap.get(key);
-    const previousSeenAt = Number(previous?.__seenAt || previous?.createdAt || 0);
-    const nextSeenAt = Number(projectile?.__seenAt || projectile?.createdAt || 0);
-    if (!previous || nextSeenAt >= previousSeenAt) {
-      uniqueProjectileMap.set(key, { ...previous, ...projectile, id: key, localOnly: false });
-    }
-  }
-  const uniqueProjectiles = [...uniqueProjectileMap.values()]
-    .filter((projectile) => isVisible(projectile, bounds, 180));
-  const visibleProjectiles = uniqueProjectiles.slice(0, reactiveRenderLimits.projectiles);
-  const visibleSimpleProjectiles = uniqueProjectiles.slice(
-    reactiveRenderLimits.projectiles,
-    reactiveRenderLimits.projectiles + reactiveRenderLimits.simpleProjectiles,
-  );
+  const visibleProjectiles = [...(renderData.projectiles || [])]
+    .filter((projectile) => isVisible(projectile, bounds, 180))
+    .slice(0, reactiveRenderLimits.projectiles);
+  const visibleSimpleProjectiles = [...(renderData.projectiles || [])]
+    .filter((projectile) => isVisible(projectile, bounds, 180))
+    .slice(reactiveRenderLimits.projectiles, reactiveRenderLimits.projectiles + reactiveRenderLimits.simpleProjectiles);
 
   const rendererPlayer = isDead && spectatorTarget
     ? {
@@ -3115,72 +3084,28 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     : hudStatus;
   const isWaiting = status === "waiting" || status === "connecting";
   const isCountdown = status === "countdown";
+  const isMatchmaking = isWaiting || isCountdown;
   const isFinished = status === "finished";
-  const nowForMatchFlow = Date.now();
-  const latestTimestamp = (key) => Math.max(
-    Number(renderData?.[key] || 0),
-    Number(hudData?.[key] || 0),
-  );
-
-  // The backend keeps the room live while these cards are shown, so a stale
-  // waiting packet can never rebuild matchmaking over an active round.
-  const matchFoundUntil = latestTimestamp("matchFoundUntil");
-  const finalCountdownStartsAt = latestTimestamp("finalCountdownStartsAt");
-  const finalCountdownUntil = latestTimestamp("finalCountdownUntil");
-  const isMatchFound = status === "playing" && matchFoundUntil > nowForMatchFlow;
-  const isFinalCountdown =
-    status === "playing" &&
-    !isMatchFound &&
-    finalCountdownUntil > nowForMatchFlow &&
-    (!finalCountdownStartsAt || finalCountdownStartsAt <= nowForMatchFlow);
-
-  const battlePrepareStartsAt = latestTimestamp("battlePrepareStartsAt");
-  const serverBattlePrepareUntil = latestTimestamp("battlePrepareUntil");
-  const localBattlePrepareUntil = Number(localBattlePrepareUntilRef.current || 0);
-  const battlePrepareUntil = Math.max(serverBattlePrepareUntil, localBattlePrepareUntil);
-  const isBattlePrepare =
-    status === "playing" &&
-    !isMatchFound &&
-    !isFinalCountdown &&
-    battlePrepareUntil > nowForMatchFlow &&
-    (!battlePrepareStartsAt || battlePrepareStartsAt <= nowForMatchFlow);
-
-  const isMatchmaking = isWaiting || isCountdown || isMatchFound || isFinalCountdown;
   const playersAlive = Math.max(
     Number(hudData.playerCount || 0),
     Number(renderData.playerCount || 0),
     status === "playing" ? 1 : 0,
   );
-  const minPlayers = hudData.minPlayers || renderData.minPlayers || 2;
+  const minPlayers = hudData.minPlayers || renderData.minPlayers || 3;
   const maxPlayers = hudData.maxPlayers || renderData.maxPlayers || 60;
   const countdown = hudData.countdown || renderData.countdown || 5;
-  const realPlayerCount = Math.max(
-    Number(renderData.matchFoundRealPlayerCount || renderData.realPlayerCount || 0),
-    Number(hudData.matchFoundRealPlayerCount || hudData.realPlayerCount || 0),
-    isWaiting || isCountdown ? Math.min(playersAlive, minPlayers) : 0,
-  );
-  const botCount = Math.max(
-    Number(renderData.matchFoundBotCount || renderData.botCount || 0),
-    Number(hudData.matchFoundBotCount || hudData.botCount || 0),
-  );
-  const finalCountdown = Math.max(1, Math.ceil(Math.max(0, finalCountdownUntil - nowForMatchFlow) / 1000));
   const winnerName = hudData.winnerName || renderData.winnerName;
   const coreDropCountdown = hudData.coreDropCountdown || renderData.coreDropCountdown;
-  const battlePrepareSource = Number(renderData.battlePrepareUntil || 0) >= Number(hudData.battlePrepareUntil || 0)
-    ? renderData
-    : hudData;
+  const battlePrepareSource = hudData.status ? hudData : renderData;
   const serverBattlePrepareRemainingMs = getBattlePrepareRemainingMs(battlePrepareSource);
-  const localBattlePrepareRemainingMs = isBattlePrepare
-    ? Math.max(0, localBattlePrepareUntil - nowForMatchFlow)
-    : 0;
-  const battlePrepareRemainingMs = isBattlePrepare
-    ? Math.max(serverBattlePrepareRemainingMs, localBattlePrepareRemainingMs)
-    : 0;
+  const localBattlePrepareRemainingMs = Math.max(0, (localBattlePrepareUntilRef.current || 0) - Date.now());
+  const battlePrepareRemainingMs = Math.max(serverBattlePrepareRemainingMs, localBattlePrepareRemainingMs);
+  const isBattlePrepare = status === "playing" && !isFinished && battlePrepareRemainingMs > 0;
   const battlePrepareSeconds = Math.max(0, Math.ceil(battlePrepareRemainingMs / 1000));
   const showBattleBeginFlash = !isMatchmaking && !isFinished && !isBattlePrepare && (
     getBattleBeginFlashActive(battlePrepareSource) ||
-    ((localBattleBeginFlashUntilRef.current || 0) > nowForMatchFlow) ||
-    battleBeginFlashUntil > nowForMatchFlow
+    ((localBattleBeginFlashUntilRef.current || 0) > Date.now()) ||
+    battleBeginFlashUntil > Date.now()
   );
 
   // Fix vizual: cand PREPARE PHASE trece la 0, afisam sigur BATTLE BEGIN
@@ -3251,38 +3176,14 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const nextDroneAt = hudYou?.nextDroneAt ?? 5;
 
   return (
-    <div className={`game-arena pvp-dom-arena normal-pvp-dom-arena zone-pvp-dom-arena ${isMobileControls ? "is-mobile-device is-mobile-portrait" : ""} ${constrainedDesktopRef.current ? "is-constrained-desktop" : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""} ${isBattlePrepare ? "is-battle-prepare" : ""}`}>
+    <div className={`game-arena pvp-dom-arena normal-pvp-dom-arena zone-pvp-dom-arena ${isMobileControls ? "is-mobile-device is-mobile-portrait" : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""} ${isBattlePrepare ? "is-battle-prepare" : ""}`}>
       {isMatchmaking && !connectionError && (
         <div className="zone-pvp-matchmaking-screen">
-          <div className={`zone-pvp-matchmaking-card ${isMatchFound ? "is-match-found" : ""} ${isFinalCountdown ? "is-final-countdown" : ""}`}>
-            {!isMatchFound && <div className="zone-pvp-loader" />}
-            <h1>
-              {isMatchFound
-                ? "MATCHMAKING GĂSIT"
-                : isFinalCountdown
-                  ? "MATCH STARTS IN"
-                  : isCountdown
-                    ? "SE MAI AȘTEAPTĂ JUCĂTORI"
-                    : "WAITING FOR PLAYERS"}
-            </h1>
-            <strong className="zone-pvp-matchmaking-value">
-              {isMatchFound
-                ? `${realPlayerCount} REAL PLAYERS + ${botCount} BOTS`
-                : isFinalCountdown
-                  ? finalCountdown
-                  : isCountdown
-                    ? countdown
-                    : `${Math.min(playersAlive, minPlayers)} / ${minPlayers}`}
-            </strong>
-            <p>
-              {isMatchFound
-                ? "Camera este completată. Pregătește-te pentru start."
-                : isFinalCountdown
-                  ? "Lupta începe când countdown-ul ajunge la zero."
-                  : isCountdown
-                    ? `${Math.max(realPlayerCount, minPlayers)} / ${minPlayers} jucători reali găsiți. Mai pot intra alți jucători.`
-                    : "Se caută jucători reali pentru Zone PvP..."}
-            </p>
+          <div className="zone-pvp-matchmaking-card">
+            <div className="zone-pvp-loader" />
+            <h1>{isCountdown ? "MATCH STARTS IN" : "WAITING FOR PLAYERS"}</h1>
+            <strong>{isCountdown ? countdown : `${Math.min(playersAlive, minPlayers)} / ${minPlayers}`}</strong>
+            <p>{isCountdown ? "Jucatorii au fost gasiti. Pregateste-te!" : "Se cauta inca un jucator pentru Zone PvP..."}</p>
           </div>
         </div>
       )}
@@ -3313,13 +3214,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         otherPlayerSize={112}
         otherPlayerQuality={0}
         liveDataRef={pixiLiveRef}
-        // Weak laptops start with the premium desktop visuals. Pixi measures
-        // real frame time and lowers only far details if sustained pressure occurs.
-        forceLowQuality={isMobileControls}
+        forceLowQuality={graphicsQuality === "low" || isMobileControls || constrainedDesktopRef.current}
         worldWidth={worldWidth}
         worldHeight={worldHeight}
-        worldTheme="premium-space-battle"
-        staticItemBudget={isRealMobileDevice() ? 48 : constrainedDesktopRef.current ? 86 : 110}
+        worldTheme="default"
+        staticItemBudget={isRealMobileDevice() ? 52 : constrainedDesktopRef.current ? 76 : 100}
         safeZoneRadius={safeZoneRadius}
         showZone={true}
       />
@@ -3338,14 +3237,15 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       {you && !isDead && (!isMobileControls || mobileAttackActive) && (
         <svg className={`aim-svg ${isMobileControls ? "mobile-aim-svg" : ""}`} aria-hidden="true">
-          <line
-            className="aim-svg-line"
-            ref={mobileAimLineRef}
-            x1={viewport.width / 2}
-            y1={viewport.height / 2}
-            x2={mouseRef.current.x}
-            y2={mouseRef.current.y}
-          />
+          <line className="aim-svg-line" ref={mobileAimLineRef} x1={viewport.width / 2} y1={viewport.height / 2} x2={mouseRef.current.x} y2={mouseRef.current.y} />
+          <circle className="aim-svg-circle" ref={mobileAimCircleRef} cx={mouseRef.current.x} cy={mouseRef.current.y} r="34" />
+          <g
+            className="aim-svg-arrow"
+            ref={mobileAimArrowRef}
+            transform={`translate(${mouseRef.current.x}, ${mouseRef.current.y}) rotate(${(Math.atan2(mouseRef.current.y - viewport.height / 2, mouseRef.current.x - viewport.width / 2) * 180) / Math.PI})`}
+          >
+            <path d="M -15 -11 L 18 0 L -15 11 L -7 0 Z" />
+          </g>
         </svg>
       )}
 
