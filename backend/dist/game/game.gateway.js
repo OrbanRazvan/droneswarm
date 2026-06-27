@@ -96,15 +96,16 @@ const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
 const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
 const ZONE_STATE_INTERVAL_MS = 100;
 const ZONE_STATE_INTERVAL_CROWDED_MS = 125;
-const ZONE_STATE_INTERVAL_HEAVY_MS = 150;
-const ZONE_ENTITY_RECOVERY_INTERVAL_MS = 500;
+const ZONE_STATE_INTERVAL_HEAVY_MS = 160;
 const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 16;
 const ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS = 25;
 const ZONE_MOVEMENT_STREAM_MAX_PLAYERS = ZONE_PVP_ROOM_MAX_PLAYERS;
 const ZONE_MOVEMENT_STREAM_PROJECTILE_LIMIT = 32;
 const ZONE_MOVEMENT_STREAM_RANGE_PADDING = 560;
-const STATIC_STATE_INTERVAL_MS = 500;
-const VIEWPORT_ITEM_STATE_INTERVAL_MS = 125;
+const ZONE_PVP_STATE_VISIBLE_PLAYERS_LIMIT = 28;
+const ZONE_PVP_STATE_PROJECTILE_LIMIT = 18;
+const STATIC_STATE_INTERVAL_MS = 1000;
+const VIEWPORT_ITEM_STATE_INTERVAL_MS = 300;
 const PVP_CROWDED_STATE_THRESHOLD = 12;
 const PVP_HEAVY_STATE_THRESHOLD = 28;
 const ITEM_SPATIAL_CELL_SIZE = 1000;
@@ -116,7 +117,8 @@ const NORMAL_CROWDED_ORB_ADD_LIMIT = 12;
 const NORMAL_CROWDED_ORB_EXTRA_CAP = 30;
 const SPECTATOR_KILL_CREDIT_WINDOW_MS = 6000;
 const EMPTY_ROOM_GRACE_MS = 30000;
-const ZONE_PVP_RECONNECT_GRACE_MS = 60000;
+const ZONE_PVP_RECONNECT_GRACE_MS = 180000;
+const ZONE_PVP_TERMINAL_ROOM_RETENTION_MS = 15 * 60 * 1000;
 const ZONE_PVP_RESUME_TOKEN_MIN_LENGTH = 20;
 const ZONE_PVP_RESUME_TOKEN_MAX_LENGTH = 160;
 const ROOM_START_COUNTDOWN_MS = 5000;
@@ -212,6 +214,7 @@ let GameGateway = class GameGateway {
         this.zonePvpSocketRoom = new Map();
         this.zonePvpResumeSeats = new Map();
         this.zonePvpSocketResumeToken = new Map();
+        this.zonePvpDepartedSeats = new Map();
         this.loop = null;
         this.lastLoopAt = Date.now();
     }
@@ -287,6 +290,24 @@ let GameGateway = class GameGateway {
             return null;
         }
         return { room, player };
+    }
+    getZonePvpDepartedSeat(token, now = Date.now()) {
+        if (!token)
+            return null;
+        const departed = this.zonePvpDepartedSeats.get(token);
+        if (!departed)
+            return null;
+        if (now >= Number(departed.expiresAt || 0) || !this.zonePvpRooms.has(departed.roomId)) {
+            this.zonePvpDepartedSeats.delete(token);
+            return null;
+        }
+        return departed;
+    }
+    clearZonePvpDepartedSeatsForRoom(roomId) {
+        for (const [token, departed] of this.zonePvpDepartedSeats.entries()) {
+            if (departed.roomId === roomId)
+                this.zonePvpDepartedSeats.delete(token);
+        }
     }
     detachZonePvpSocket(socketId, now = Date.now()) {
         const roomId = this.zonePvpSocketRoom.get(socketId);
@@ -1370,6 +1391,15 @@ let GameGateway = class GameGateway {
     }
     handleZonePvpJoin(client, data) {
         const resumeToken = this.normalizeZonePvpResumeToken(data?.resumeToken);
+        const departedSeat = this.getZonePvpDepartedSeat(resumeToken);
+        if (departedSeat) {
+            client.emit("zone-pvp:error", "Ai parasit aceasta camera. Nu poti reintra in acelasi meci.");
+            client.emit("zone-pvp:admission-locked", {
+                roomId: departedSeat.roomId,
+                reason: "left-room",
+            });
+            return;
+        }
         const existingZoneRoom = this.getZonePvpRoomBySocket(client.id);
         const existingZonePlayer = existingZoneRoom?.players.get(client.id);
         if (existingZoneRoom && existingZonePlayer) {
@@ -1532,9 +1562,10 @@ let GameGateway = class GameGateway {
         });
         this.broadcastZonePvpRoomState(room, Date.now(), true);
     }
-    handleZonePvpLeave(client) {
-        this.removeZonePvpPlayer(client.id);
-        return { ok: true };
+    handleZonePvpLeave(client, payload) {
+        this.removeZonePvpPlayer(client.id, {
+            permanent: payload?.permanent !== false,
+        });
     }
     handleZonePvpClockSync(client, payload) {
         const room = this.getZonePvpRoomBySocket(client.id);
@@ -3274,7 +3305,6 @@ let GameGateway = class GameGateway {
             nextCoreWaveAt: null,
             lastLocalItemAt: 0,
             lastBroadcastAt: 0,
-            lastZoneEntityRecoveryAt: 0,
             winnerId: null,
             winnerName: null,
             finishedAt: null,
@@ -3472,6 +3502,9 @@ let GameGateway = class GameGateway {
             winnerId: null,
             winnerName: null,
             finishedAt: null,
+            terminalReason: null,
+            abandonedAt: null,
+            departedResumeTokens: new Set(),
             collisionCooldowns: new Map(),
             botFilled: false,
             botFillAt: null,
@@ -3487,24 +3520,32 @@ let GameGateway = class GameGateway {
             return null;
         return this.zonePvpRooms.get(roomId) || null;
     }
-    removeZonePvpPlayer(socketId) {
+    removeZonePvpPlayer(socketId, options = {}) {
         const roomId = this.zonePvpSocketRoom.get(socketId);
         if (!roomId)
             return;
         const room = this.zonePvpRooms.get(roomId);
+        const now = Date.now();
         if (room) {
             const player = room.players.get(socketId);
+            const token = this.zonePvpSocketResumeToken.get(socketId) || player?.resumeToken || null;
+            if (options.permanent && token) {
+                room.departedResumeTokens?.add(token);
+                this.zonePvpDepartedSeats.set(token, {
+                    roomId: room.id,
+                    expiresAt: now + ZONE_PVP_TERMINAL_ROOM_RETENTION_MS,
+                });
+            }
             room.players.delete(socketId);
             this.server.sockets.sockets.get(socketId)?.leave(roomId);
-            const token = this.zonePvpSocketResumeToken.get(socketId) || player?.resumeToken;
             if (token) {
                 const seat = this.zonePvpResumeSeats.get(token);
-                if (!seat || seat.roomId === room.id && seat.playerId === socketId) {
+                if (!seat || (seat.roomId === room.id && seat.playerId === socketId)) {
                     this.zonePvpResumeSeats.delete(token);
                 }
             }
             this.zonePvpSocketResumeToken.delete(socketId);
-            this.markRoomEmptyIfNeeded(room);
+            this.markRoomEmptyIfNeeded(room, now);
             if (room.status === "countdown" &&
                 !room.locked &&
                 !room.matchStartedAt &&
@@ -3513,10 +3554,10 @@ let GameGateway = class GameGateway {
                 room.countdownStartedAt = null;
                 room.roundId = null;
                 room.phaseVersion = Number(room.phaseVersion || 0) + 1;
-                this.broadcastZonePvpRoomState(room, Date.now(), true);
+                this.broadcastZonePvpRoomState(room, now, true);
             }
             else if (room.status === "playing") {
-                this.updateZonePvpWinCondition(room, Date.now());
+                this.updateZonePvpWinCondition(room, now);
             }
         }
         this.zonePvpSocketRoom.delete(socketId);
@@ -3537,28 +3578,29 @@ let GameGateway = class GameGateway {
             }
             if (now - Number(player.disconnectedAt || now) >= ZONE_PVP_RECONNECT_GRACE_MS) {
                 this.zonePvpSocketRoom.set(player.id, room.id);
-                this.removeZonePvpPlayer(player.id);
+                this.removeZonePvpPlayer(player.id, { permanent: false });
             }
         }
-        if (this.getZoneHumanPlayerCount(room) === 0) {
-            for (const player of room.players.values()) {
-                if (player?.resumeToken)
-                    this.zonePvpResumeSeats.delete(player.resumeToken);
-            }
-            this.zonePvpRooms.delete(room.id);
-            return;
-        }
-        if (this.shouldDeleteEmptyRoom(room, now)) {
-            this.zonePvpRooms.delete(room.id);
-            return;
+        if (this.getZoneHumanPlayerCount(room) === 0 && room.status !== "finished") {
+            room.status = "finished";
+            room.locked = true;
+            room.finishedAt = now;
+            room.abandonedAt = now;
+            room.terminalReason = "all-humans-left";
+            room.winnerId = null;
+            room.winnerName = null;
+            room.projectiles = [];
+            room.phaseVersion = Number(room.phaseVersion || 0) + 1;
+            room.emptySince = now;
         }
         if (room.status === "finished" &&
             room.finishedAt &&
-            now - room.finishedAt > 90000) {
+            now - room.finishedAt > ZONE_PVP_TERMINAL_ROOM_RETENTION_MS) {
             for (const player of room.players.values()) {
                 if (player?.resumeToken)
                     this.zonePvpResumeSeats.delete(player.resumeToken);
             }
+            this.clearZonePvpDepartedSeatsForRoom(room.id);
             this.zonePvpRooms.delete(room.id);
         }
     }
@@ -3585,6 +3627,23 @@ let GameGateway = class GameGateway {
             attacking: Boolean(player.input?.attacking),
             shieldActive: Boolean(player.shieldActive),
             alive: player.alive !== false,
+        };
+    }
+    serializeZonePvpRemoteState(player) {
+        return {
+            id: player.id,
+            isBot: Boolean(player.isBot),
+            username: player.username,
+            skin: player.skin,
+            hp: Number(player.hp || 0),
+            maxHp: Number(player.maxHp || START_HP),
+            drones: Number(player.drones || 0),
+            alive: player.alive !== false,
+            rapidFireUntil: Number(player.rapidFireUntil || 0),
+            overclockUntil: Number(player.overclockUntil || 0),
+            berserkUntil: Number(player.berserkUntil || 0),
+            vampireUntil: Number(player.vampireUntil || 0),
+            shieldActive: Boolean(player.shieldActive),
         };
     }
     serializeZonePvpProjectileMovement(projectile) {
@@ -3621,7 +3680,7 @@ let GameGateway = class GameGateway {
                 ? this.getStableSpectatorTarget(room, viewer)
                 : null;
             const viewAnchor = spectatorTarget || viewer;
-            const range = viewer.alive === false ? VIEW_DISTANCE + 1900 : VIEW_DISTANCE + 1000;
+            const range = viewer.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + 260;
             const projectileRange = range + ZONE_MOVEMENT_STREAM_RANGE_PADDING;
             const movementPlayers = players
                 .filter((other) => other.id !== viewer.id &&
@@ -3664,13 +3723,6 @@ let GameGateway = class GameGateway {
             now - room.lastStaticStateAt >= STATIC_STATE_INTERVAL_MS;
         if (includeStaticState) {
             room.lastStaticStateAt = now;
-        }
-        const includeEntityRecovery = reliable ||
-            room.status !== "playing" ||
-            !room.lastZoneEntityRecoveryAt ||
-            now - room.lastZoneEntityRecoveryAt >= ZONE_ENTITY_RECOVERY_INTERVAL_MS;
-        if (includeEntityRecovery) {
-            room.lastZoneEntityRecoveryAt = now;
         }
         let leaderboard = [];
         let minimapOrbs = [];
@@ -3715,9 +3767,7 @@ let GameGateway = class GameGateway {
                 .sort((a, b) => a.id.localeCompare(b.id))
                 .slice(0, 12);
         }
-        const playerIndex = includeEntityRecovery
-            ? this.buildSpatialIndex(players)
-            : null;
+        const playerIndex = this.buildSpatialIndex(players);
         for (const player of players) {
             const socket = this.server.sockets.sockets.get(player.id);
             if (!socket)
@@ -3738,9 +3788,8 @@ let GameGateway = class GameGateway {
                 now - player.lastViewportItemStateAt >= VIEWPORT_ITEM_STATE_INTERVAL_MS;
             if (includeViewportItems)
                 player.lastViewportItemStateAt = now;
-            const visiblePlayers = includeEntityRecovery
-                ? this.filterNear(viewAnchor, this.querySpatialIndex(playerIndex, viewAnchor.x, viewAnchor.y, player.alive === false ? VIEW_DISTANCE + 1900 : VIEW_DISTANCE + 1000).filter((other) => other.id !== player.id && (player.alive !== false || other.alive !== false)), player.alive === false ? VIEW_DISTANCE + 1900 : VIEW_DISTANCE + 1000, ZONE_PVP_VISIBLE_PLAYERS_LIMIT).map((other) => this.serializePlayer(other))
-                : null;
+            const playerCandidates = this.querySpatialIndex(playerIndex, viewAnchor.x, viewAnchor.y, player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE);
+            const visiblePlayers = this.filterNear(viewAnchor, playerCandidates.filter((other) => other.id !== player.id && (player.alive !== false || other.alive !== false)), player.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE, ZONE_PVP_STATE_VISIBLE_PLAYERS_LIMIT).map((other) => this.serializeZonePvpRemoteState(other));
             const payload = {
                 serverNow: now,
                 roomId: room.id,
@@ -3765,10 +3814,14 @@ let GameGateway = class GameGateway {
                 battlePrepareRemainingMs,
                 battleBeginFlashUntil: room.battleBeginFlashUntil || null,
                 you: this.serializePlayer(player),
+                players: visiblePlayers,
                 spectatorTargetId: spectatorTarget?.id || null,
                 spectatingPlayer: spectatorTarget
                     ? this.serializePlayer(spectatorTarget)
                     : null,
+                projectiles: room.projectileSpatialIndex
+                    ? this.filterNearIndexed(viewAnchor, room.projectileSpatialIndex, VIEW_DISTANCE + 400, ZONE_PVP_STATE_PROJECTILE_LIMIT)
+                    : this.filterNear(viewAnchor, room.projectiles, VIEW_DISTANCE + 400, ZONE_PVP_STATE_PROJECTILE_LIMIT),
                 combatEvents: (room.combatEvents || [])
                     .filter((event) => {
                     const age = now - Number(event?.createdAt || 0);
@@ -3780,12 +3833,6 @@ let GameGateway = class GameGateway {
                 })
                     .slice(-32),
             };
-            if (includeEntityRecovery) {
-                payload.players = visiblePlayers || [];
-                payload.projectiles = room.projectileSpatialIndex
-                    ? this.filterNearIndexed(viewAnchor, room.projectileSpatialIndex, VIEW_DISTANCE + 1400, 45)
-                    : this.filterNear(viewAnchor, room.projectiles, VIEW_DISTANCE + 1400, 45);
-            }
             if (includeViewportItems) {
                 payload.orbs = room.orbSpatialIndex
                     ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, 140)
@@ -3807,7 +3854,7 @@ let GameGateway = class GameGateway {
                 socket.emit("zone-pvp:state", payload);
             }
             else {
-                socket.volatile.compress(false).emit("zone-pvp:state", payload);
+                socket.volatile.emit("zone-pvp:state", payload);
             }
         }
     }
@@ -4265,8 +4312,9 @@ __decorate([
 __decorate([
     (0, websockets_1.SubscribeMessage)("zone-pvp:leave"),
     __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [socket_io_1.Socket]),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
     __metadata("design:returntype", void 0)
 ], GameGateway.prototype, "handleZonePvpLeave", null);
 __decorate([
@@ -4296,7 +4344,7 @@ exports.GameGateway = GameGateway = __decorate([
         perMessageDeflate: false,
         httpCompression: false,
         pingInterval: 25000,
-        pingTimeout: 120000,
+        pingTimeout: 60000,
     }),
     __metadata("design:paramtypes", [])
 ], GameGateway);

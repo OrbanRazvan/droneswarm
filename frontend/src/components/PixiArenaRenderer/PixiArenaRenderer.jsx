@@ -195,29 +195,36 @@ function getRendererDeviceProfile(forceLowQuality = false) {
 function getRendererConfig(forceLowQuality) {
   const device = getRendererDeviceProfile(forceLowQuality);
   const lowSpec = device.weakMobile || device.lowSpecDesktop;
+  const mobileLite = device.mobile && !device.weakMobile;
   const lightMobile = device.forcedMobileQuality && !device.weakMobile;
 
-  // The DOM HUD remains sharp. On weak GPUs reduce the WebGL back buffer and
-  // scenery first; player transforms and camera updates remain every frame.
+  // The DOM HUD remains sharp. WebGL at DPR 2–3 is needlessly expensive on a
+  // phone for this top-down arena, so mobile always uses a compact backbuffer.
+  // This preserves the 60 Hz transform budget for players/projectiles.
   const resolution = device.lowSpecDesktop
-    ? 0.75
+    ? 0.7
     : device.weakMobile
-      ? 0.9
-      : lightMobile
-        ? 1
-        : Math.min(1.5, device.dpr);
+      ? 0.72
+      : mobileLite
+        ? 0.9
+        : lightMobile
+          ? 0.9
+          : Math.min(1.35, device.dpr);
 
   return {
     ...device,
     resolution,
-    antialias: !lowSpec,
-    maxStaticItems: device.lowSpecDesktop ? 36 : device.weakMobile ? 48 : lightMobile ? 96 : 180,
-    maxPlayers: device.lowSpecDesktop ? 10 : device.weakMobile ? 20 : lightMobile ? 42 : MAX_RENDERED_PLAYERS,
-    maxSimplePlayers: device.lowSpecDesktop ? 16 : device.weakMobile ? 28 : lightMobile ? 48 : 60,
-    maxProjectiles: device.lowSpecDesktop ? 10 : device.weakMobile ? 14 : lightMobile ? 36 : MAX_RENDERED_PROJECTILES,
-    staticSyncInterval: device.lowSpecDesktop ? 300 : device.weakMobile ? 180 : lightMobile ? 140 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: device.lowSpecDesktop ? 6 : device.weakMobile ? 2 : 1,
-    disableExpensiveTerrain: Boolean(device.lowSpecDesktop || device.weakMobile),
+    antialias: !lowSpec && !device.mobile,
+    maxStaticItems: device.lowSpecDesktop ? 22 : device.weakMobile ? 26 : mobileLite ? 42 : lightMobile ? 58 : 180,
+    // Close crafts retain a true drone visual; all further crafts use the
+    // pooled marker path so weak devices never spend a frame on 40+ complex
+    // quadcopters while the important motion is on screen.
+    maxPlayers: device.lowSpecDesktop ? 8 : device.weakMobile ? 8 : mobileLite ? 12 : lightMobile ? 16 : MAX_RENDERED_PLAYERS,
+    maxSimplePlayers: device.lowSpecDesktop ? 20 : device.weakMobile ? 22 : mobileLite ? 28 : lightMobile ? 32 : 60,
+    maxProjectiles: device.lowSpecDesktop ? 8 : device.weakMobile ? 10 : mobileLite ? 12 : lightMobile ? 18 : MAX_RENDERED_PROJECTILES,
+    staticSyncInterval: device.lowSpecDesktop ? 360 : device.weakMobile ? 260 : mobileLite ? 220 : lightMobile ? 180 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: device.lowSpecDesktop ? 8 : device.weakMobile ? 5 : mobileLite ? 4 : lightMobile ? 3 : 1,
+    disableExpensiveTerrain: Boolean(device.mobile || device.lowSpecDesktop),
   };
 }
 
@@ -2065,12 +2072,6 @@ function PixiArenaRenderer({
       app.stage.interactiveChildren = false;
       app.stage.sortableChildren = true;
 
-      // Do not cap Pixi to a lower internal ticker rate. World transforms are
-      // supplied through a live ref and should be painted on every browser rAF
-      // (60/90/120/144 Hz depending on the display).
-      app.ticker.maxFPS = 0;
-      app.ticker.minFPS = 0;
-
       const resources = createResources(coreTypes);
       const background = new PIXI.Graphics();
       background.eventMode = "none";
@@ -2197,9 +2198,9 @@ function PixiArenaRenderer({
           // Start saving GPU work as soon as a 60 Hz screen consistently falls
           // below ~55 FPS, instead of waiting until it is already visibly slow.
           const desiredTier =
-            frameTimeEma > 24.5 ? 2 :
-            frameTimeEma > 18.4 ? 1 :
-            frameTimeEma < 17.25 ? 0 :
+            frameTimeEma > 20.5 ? 2 :
+            frameTimeEma > 17.4 ? 1 :
+            frameTimeEma < 16.9 ? 0 :
             adaptiveTier;
           if (desiredTier !== adaptiveTier) {
             adaptiveTier = desiredTier;
@@ -2333,7 +2334,7 @@ function PixiArenaRenderer({
         // needs it; gameplay simulation remains untouched.
         const remoteEffectTier = Math.min(
           2,
-          adaptiveTier + (config.lowSpecDesktop || config.weakMobile ? 1 : 0),
+          adaptiveTier + (config.lowSpecDesktop || config.mobile ? 1 : 0),
         );
         syncUnitPool({
           pool: playerPool,
@@ -2353,7 +2354,7 @@ function PixiArenaRenderer({
           bounds,
           max: adaptiveTier === 2 ? Math.min(config.maxPlayers, 9) : adaptiveTier === 1 ? Math.min(config.maxPlayers, 18) : config.maxPlayers,
           now,
-          compact: config.weakMobile || adaptiveTier > 0,
+          compact: config.mobile || adaptiveTier > 0,
           effectTier: remoteEffectTier,
         });
         const fullBotIds = syncUnitPool({
@@ -2364,14 +2365,14 @@ function PixiArenaRenderer({
           bounds,
           max: adaptiveTier === 2 ? Math.min(config.maxPlayers, 9) : adaptiveTier === 1 ? Math.min(config.maxPlayers, 18) : config.maxPlayers,
           now,
-          compact: config.weakMobile || adaptiveTier > 0,
+          compact: config.mobile || adaptiveTier > 0,
           effectTier: remoteEffectTier,
         });
         const fullEntityIds = new Set([...fullRemoteIds, ...fullBotIds]);
         const adaptiveSimpleFallback = Boolean(data.useAdaptiveSimpleFallback);
         syncSimplePool({
           pool: simpleBotPool,
-          source: adaptiveSimpleFallback && adaptiveTier === 0 && !config.lowSpecDesktop && !config.weakMobile
+          source: adaptiveSimpleFallback && adaptiveTier === 0 && !config.lowSpecDesktop && !config.weakMobile && !config.mobile
             ? []
             : data.simpleBots,
           resources,
@@ -2392,7 +2393,7 @@ function PixiArenaRenderer({
         });
         syncProjectilePool({
           pool: simpleProjectilePool,
-          source: adaptiveSimpleFallback && adaptiveTier === 0 && !config.lowSpecDesktop && !config.weakMobile
+          source: adaptiveSimpleFallback && adaptiveTier === 0 && !config.lowSpecDesktop && !config.weakMobile && !config.mobile
             ? []
             : data.simpleProjectiles,
           resources,
@@ -2400,7 +2401,7 @@ function PixiArenaRenderer({
           bounds,
           max: adaptiveTier === 2 ? 16 : adaptiveTier === 1 ? Math.min(28, config.maxProjectiles) : Math.floor(config.maxProjectiles * 0.55),
           now,
-          compact: adaptiveTier > 0 || config.lowSpecDesktop || config.weakMobile,
+          compact: adaptiveTier > 0 || config.lowSpecDesktop || config.mobile,
           excludeIds: fullProjectileIds,
         });
         // Normal PvP and Zone PvP request strict private combat text. In this

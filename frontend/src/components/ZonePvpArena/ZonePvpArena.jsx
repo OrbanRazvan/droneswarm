@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import MiniMap from "../MiniMap/MiniMap";
 import PixiArenaRenderer from "../PixiArenaRenderer/PixiArenaRenderer";
@@ -39,19 +39,16 @@ const SELF_IDLE_FREEZE_DISTANCE = 360;
 const REMOTE_SMOOTHING = 28;
 const REMOTE_PREDICTION = 1;
 const REMOTE_HARD_SNAP_DISTANCE = 720;
-// Render remote movement slightly ahead of the last authoritative tick. The
-// lead is RTT-aware and capped, so it removes the "one packet behind" feel
-// without making turns overshoot wildly on a slow connection.
-const REMOTE_PRESENTATION_LEAD_MIN_MS = 24;
-const REMOTE_PRESENTATION_LEAD_MAX_MS = 96;
-const REMOTE_MAX_EXTRAPOLATE_MS = 600;
+// A tiny render buffer absorbs mobile packet jitter. The rest is projected
+// forward locally, so remote drones stay smooth without looking one packet late.
+const REMOTE_MAX_EXTRAPOLATE_MS = 180;
 
 // Projectiles are locally advanced every animation frame. Server updates only
 // correct drift; they never pull a projectile backwards to an older packet.
 const PROJECTILE_SMOOTHING = 42;
-const PROJECTILE_REMOTE_HARD_RESYNC_DISTANCE = 180;
-const PROJECTILE_REMOTE_MAX_AHEAD_MS = 620;
-const PROJECTILE_MOVEMENT_STALE_MS = 360;
+const PROJECTILE_REMOTE_HARD_RESYNC_DISTANCE = 150;
+const PROJECTILE_REMOTE_MAX_AHEAD_MS = 500;
+const PROJECTILE_MOVEMENT_STALE_MS = 300;
 const PROJECTILE_FRAME_SCALE = 60;
 const PROJECTILE_VISUAL_TTL = 10000;
 const LOCAL_PROJECTILE_MIN_VISUAL_MS = 85;
@@ -74,12 +71,12 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 
 // Multiplayer modern sync
 // Client-side prediction + server reconciliation + remote snapshot buffer.
-// Held input never needs a reliable 50 Hz queue. Edge changes are reliable;
- // continuous steering is volatile and immediately superseded by the next frame.
-const INPUT_SEND_INTERVAL_MS = 33;
-const INPUT_HEARTBEAT_MS = 280;
-const SNAPSHOT_INTERPOLATION_DELAY_MS = 0;
-const CLOCK_SYNC_INTERVAL_MS = 1200;
+const INPUT_SEND_INTERVAL_MS = 20;
+const INPUT_HEARTBEAT_MS = 240;
+// 20 ms is below perception but prevents the saw-tooth effect of rendering
+// exactly at the newest packet time when a phone receives packets in bursts.
+const SNAPSHOT_INTERPOLATION_DELAY_MS = 20;
+const CLOCK_SYNC_INTERVAL_MS = 5000;
 const SNAPSHOT_BUFFER_TTL_MS = 360;
 
 // Keep PvP desktop framing exactly locked to BattleRoyaleMode.
@@ -239,17 +236,6 @@ function applyOptimisticEnergyCollection(unit, count) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
-}
-
-function getRemotePresentationLeadMs(roundTripMs = 0) {
-  const rtt = Math.max(0, Number(roundTripMs || 0));
-  // About half an RTT plus one render frame feels immediate while the hard cap
-  // keeps a direction change from drifting too far on a poor connection.
-  return clamp(
-    Math.round(rtt * 0.52 + 16),
-    REMOTE_PRESENTATION_LEAD_MIN_MS,
-    REMOTE_PRESENTATION_LEAD_MAX_MS,
-  );
 }
 
 function lerp(a, b, t) {
@@ -626,17 +612,11 @@ function advanceProjectile(projectile, dt) {
 // A network projectile snapshot was produced on the server in the past.
 // Advance it from that exact server timestamp to the receiver's estimated
 // current server time before comparing it with the rAF-predicted visual.
-function projectProjectileToPresent(
-  projectile,
-  serverNow,
-  serverClockOffset,
-  presentationLeadMs = 0,
-) {
+function projectProjectileToPresent(projectile, serverNow, serverClockOffset) {
   if (!projectile) return projectile;
 
   const packetServerTime = Number(serverNow || projectile.__serverNow || 0);
-  const estimatedServerNow =
-    Date.now() + Number(serverClockOffset || 0) + Number(presentationLeadMs || 0);
+  const estimatedServerNow = Date.now() + Number(serverClockOffset || 0);
   const aheadMs = packetServerTime > 0
     ? clamp(estimatedServerNow - packetServerTime, 0, PROJECTILE_REMOTE_MAX_AHEAD_MS)
     : 0;
@@ -1180,6 +1160,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const userRef = useRef(user);
   userRef.current = user;
   const socketRef = useRef(null);
+  // Only an explicit EXIT TO MENU permanently leaves a Zone match. A React
+  // remount, refresh recovery or Socket.IO reconnect must preserve the seat.
+  const intentionalZoneExitRef = useRef(false);
+  const lastReliableInputAtRef = useRef(0);
   // Join state is deliberately separate from socket.connected. A mobile
   // transport may be connected while its first join packet was delayed.
   const zoneJoinAcceptedRef = useRef(false);
@@ -1209,10 +1193,6 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const lastInputSentAtRef = useRef(performance.now());
   const lastLocalMovementAtRef = useRef(performance.now());
   const lastInputSignatureRef = useRef("");
-  const lastControlSignatureRef = useRef("");
-  const intentionalExitRef = useRef(false);
-  const onExitToMenuRef = useRef(onExitToMenu);
-  onExitToMenuRef.current = onExitToMenu;
   const pendingInputsRef = useRef([]);
   const remoteSnapshotBufferRef = useRef(new Map());
   // High-rate projectile transforms are kept outside React state so receiving
@@ -1223,7 +1203,6 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   // time instead of one network trip in the past.
   const serverClockOffsetRef = useRef(0);
   const serverClockReadyRef = useRef(false);
-  const networkRttRef = useRef(80);
   const lastClockSyncAtRef = useRef(0);
   const clockSyncTimerRef = useRef(null);
   const lastMovementSequenceRef = useRef(0);
@@ -1316,10 +1295,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const [battleBeginFlashUntil, setBattleBeginFlashUntil] = useState(0);
 
   useEffect(() => {
-    // Zone PvP is a real-time mode. Start directly on WebSocket instead of
-    // opening a polling transport and later replacing it during an Engine.IO
-    // upgrade. That removes an avoidable reconnect path and prevents polling
-    // writes from batching old transforms behind newer ones.
+    // Zone is a real-time mode. Starting directly on WebSocket avoids the
+    // polling -> WebSocket transport handover, which was the source of visible
+    // reconnects and a packet backlog on lower-end phones.
+    // forceNew/multiplex:false prevents a socket from another arena mode being
+    // reused while the user switches modes quickly.
     const socket = io(API_URL, {
       autoConnect: false,
       transports: ["websocket"],
@@ -1327,12 +1307,12 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       forceNew: true,
       multiplex: false,
       withCredentials: false,
-      timeout: 20000,
+      timeout: 12000,
       reconnection: true,
       reconnectionAttempts: Infinity,
-      reconnectionDelay: 450,
-      reconnectionDelayMax: 2200,
-      randomizationFactor: 0.18,
+      reconnectionDelay: 500,
+      reconnectionDelayMax: 2500,
+      randomizationFactor: 0.25,
     });
 
     socketRef.current = socket;
@@ -1712,11 +1692,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       zoneRoomChangeAllowedRef.current = true;
       serverClockReadyRef.current = false;
       clearZoneJoinRetry();
-      if (
-        !disposed &&
-        !intentionalExitRef.current &&
-        reason !== "io client disconnect"
-      ) {
+      if (!disposed && reason !== "io client disconnect") {
         setConnectionError("Conexiunea Zone PvP s-a intrerupt. Se reconecteaza...");
       }
     };
@@ -1726,11 +1702,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
 
     const recoverVisibleZoneSession = () => {
-      if (disposed || intentionalExitRef.current || document.visibilityState === "hidden") return;
+      if (disposed || document.visibilityState === "hidden") return;
       if (!socket.connected) {
-        // Do not start a second connection manager while Socket.IO is already
-        // performing its own exponential reconnect.
-        if (!socket.active) socket.connect();
+        socket.connect();
         return;
       }
       if (!zoneJoinAcceptedRef.current) {
@@ -1861,9 +1835,6 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const current = Number(serverClockOffsetRef.current || 0);
       const maxStep = serverClockReadyRef.current ? 8 : 120;
       serverClockOffsetRef.current = current + clamp(sampleServerMinusClient - current, -maxStep, maxStep) * (serverClockReadyRef.current ? 0.35 : 1);
-      // Keep a calm RTT EMA. It feeds only the visual presentation lead; game
-      // authority remains entirely on the server.
-      networkRttRef.current = Number(networkRttRef.current || roundTripMs) * 0.72 + roundTripMs * 0.28;
       serverClockReadyRef.current = true;
     };
 
@@ -2052,32 +2023,32 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         mouseY: mouseWorldY,
       };
 
-      const controlSignature = [
+      const signature = [
         input.w, input.a, input.s, input.d, input.mobileMove,
         Math.round(input.moveX * 100), Math.round(input.moveY * 100),
         input.attacking, input.shield,
-      ].join("|");
-      const signature = [
-        controlSignature,
-        Math.round(input.mouseX / 18), Math.round(input.mouseY / 18),
+        Math.round(input.mouseX / 8), Math.round(input.mouseY / 8),
       ].join("|");
 
       const hasActiveControl = Boolean(
         input.w || input.a || input.s || input.d || input.mobileMove || input.attacking || input.shield
       );
-      const controlChanged = controlSignature !== lastControlSignatureRef.current;
-      const aimChanged = signature !== lastInputSignatureRef.current;
-      if (!force && !controlChanged && !aimChanged && elapsed < INPUT_HEARTBEAT_MS) return;
+      if (!force && !hasActiveControl && signature === lastInputSignatureRef.current && elapsed < INPUT_HEARTBEAT_MS) return;
 
       inputSeqRef.current = input.seq;
       lastInputSentAtRef.current = now;
       lastInputSignatureRef.current = signature;
-      lastControlSignatureRef.current = controlSignature;
 
-      // Edge changes (start/stop, shield, attack) must arrive. Continuous held
-      // steering/aim is disposable: the next 33 ms packet replaces it, so it
-      // cannot build a reliable queue and force a transport reconnect.
-      if (force || controlChanged || !hasActiveControl) {
+      // Continuous input is deliberately volatile. On a slow phone, reliable
+      // 50 Hz input packets can queue behind old packets and make *everyone*
+      // appear late. The server holds the last input, while a reliable keyframe
+      // is sent every 320 ms (and whenever the player is idle).
+      const shouldSendReliable =
+        !hasActiveControl ||
+        now - Number(lastReliableInputAtRef.current || 0) >= 320;
+
+      if (shouldSendReliable) {
+        lastReliableInputAtRef.current = now;
         socket.emit("zone-pvp:input", input);
       } else {
         socket.volatile.emit("zone-pvp:input", input);
@@ -2117,9 +2088,14 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       socket.off("zone-pvp:combat", applyPrivateCombatEvent);
       socket.off("zone-pvp:collect", applyCollectSync);
       socket.off("zone-pvp:world-delta", applyWorldItemDelta);
-      // A React remount, HMR refresh, or temporary parent transition is not a
-      // genuine exit. Disconnecting preserves the resume seat; only the
-      // explicit EXIT handler below emits zone-pvp:leave.
+      // Do not turn an unmount into a permanent leave. The backend keeps the
+      // seat and resumes this exact round when the transport returns.
+      if (intentionalZoneExitRef.current && socket.connected) {
+        socket.emit("zone-pvp:leave", {
+          permanent: true,
+          resumeToken: zoneResumeTokenRef.current,
+        });
+      }
       socket.disconnect();
       socketRef.current = null;
       sendInputRef.current = () => {};
@@ -2227,10 +2203,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
 
       const serverClockOffset = Number(serverClockOffsetRef.current);
-      const presentationLeadMs = getRemotePresentationLeadMs(networkRttRef.current);
       const renderTime = Number.isFinite(serverClockOffset)
-        ? Date.now() + serverClockOffset + presentationLeadMs - SNAPSHOT_INTERPOLATION_DELAY_MS
-        : Date.now() + presentationLeadMs - SNAPSHOT_INTERPOLATION_DELAY_MS;
+        ? Date.now() + serverClockOffset - SNAPSHOT_INTERPOLATION_DELAY_MS
+        : Date.now() - SNAPSHOT_INTERPOLATION_DELAY_MS;
       const snapshotBuffers = remoteSnapshotBufferRef.current;
       const activeRemoteIds = new Set();
 
@@ -2283,7 +2258,6 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           target,
           target.__serverNow || data.serverNow,
           serverClockOffset,
-          presentationLeadMs,
         );
         const current = projectileMap.get(id);
 
@@ -2377,16 +2351,17 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const liveCameraY = liveCameraSubject ? viewport.height / 2 - liveCameraSubject.y * liveCameraScale : 0;
 
       const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 980, liveCameraScale);
-      const lowVisualMode = constrainedDeviceRef.current || lowGraphicsRef.current;
-      // Never truncate remote transforms on weak hardware. Pixi keeps close
-      // drones detailed and converts only overflow into very cheap markers.
+      // On every phone we reserve GPU/CPU time for movement first. The HUD is
+      // DOM and remains sharp; only scenery and far combat visuals get reduced.
+      const lowVisualMode = mobilePerformanceRef.current || constrainedDeviceRef.current || lowGraphicsRef.current;
       const renderLimits = lowVisualMode
-        ? { orbs: 72, energy: 20, cores: 5, projectiles: 28 }
+        ? { orbs: 36, energy: 12, cores: 4, projectiles: 20 }
         : null;
+      const liveRemoteLimit = lowVisualMode ? 32 : MAX_VISIBLE_REMOTE_PLAYERS;
       const livePlayers = collectVisibleNearest(
         remoteMap.values(),
         (player) => player?.id !== liveYou?.id && isVisible(player, liveBounds, 380),
-        MAX_VISIBLE_REMOTE_PLAYERS,
+        liveRemoteLimit,
         liveCameraSubject,
         (player) => ({ ...player, skin: normalizeSkin(player.skin), isBot: Boolean(player.isBot) })
       );
@@ -2810,6 +2785,28 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     sendInputRef.current(true);
   };
 
+  const exitZonePvpToMenu = () => {
+    // This is the sole permanent leave path. The server remembers this token
+    // for this room, so a player who intentionally exits cannot rejoin it.
+    intentionalZoneExitRef.current = true;
+    const socket = socketRef.current;
+    if (socket?.connected) {
+      socket.emit("zone-pvp:leave", {
+        permanent: true,
+        resumeToken: zoneResumeTokenRef.current,
+      });
+    }
+    // A later entry is a brand-new match with a new tab token, never a way
+    // back into the room that was explicitly abandoned.
+    try {
+      window.sessionStorage.removeItem(ZONE_PVP_RESUME_STORAGE_KEY);
+    } catch {
+      // Storage may be unavailable in private browser modes; the server-side
+      // departed-token guard still protects the original room.
+    }
+    if (onExitToMenu) onExitToMenu();
+  };
+
   const you = renderData.you;
   const hudYou = hudData.you || you;
   const worldWidth = renderData.worldWidth || WORLD_WIDTH_FALLBACK;
@@ -2948,51 +2945,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
   }, [isBattlePrepare, battlePrepareSeconds, isMatchmaking, isFinished, battlePrepareRemainingMs]);
 
-  const handleExitToMenu = useCallback(() => {
-    if (intentionalExitRef.current) return;
-    intentionalExitRef.current = true;
-
-    const socket = socketRef.current;
-    const finishExit = () => {
-      try {
-        socket?.disconnect();
-      } catch {
-        // Socket may already be closed by a browser navigation.
-      }
-      socketRef.current = null;
-      onExitToMenuRef.current?.();
-    };
-
-    if (!socket?.connected) {
-      finishExit();
-      return;
-    }
-
-    // The acknowledgement gives the server a moment to remove this seat
-    // immediately. The timeout is only a fallback for a disappearing network.
-    let finished = false;
-    const once = () => {
-      if (finished) return;
-      finished = true;
-      finishExit();
-    };
-
-    socket.timeout(260).emit("zone-pvp:leave", once);
-    window.setTimeout(once, 300);
-  }, []);
-
-  // IMPORTANT: cand meciul se termina (status === "finished"), nu mai
-  // asteptam un click manual pe "EXIT TO MENU" - scoatem automat jucatorul
-  // din sesiune, dupa un mic delay ca sa poata citi cine a castigat.
-  useEffect(() => {
-    if (!isFinished) return;
-
-    const timeout = window.setTimeout(() => {
-      handleExitToMenu();
-    }, 6000);
-
-    return () => window.clearTimeout(timeout);
-  }, [isFinished, handleExitToMenu]);
+  // The result screen stays open until the player explicitly exits. This keeps
+  // the room/session stable and prevents a finished round from looking like a
+  // random transport disconnect on mobile. 
 
   const matchStartedAt = hudData.matchStartedAt || renderData.matchStartedAt;
   const zoneShrinkDuration = hudData.zoneShrinkDuration || renderData.zoneShrinkDuration || 600000;
@@ -3051,7 +3006,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         forceLowQuality={graphicsQuality === "low"}
         worldWidth={worldWidth}
         worldHeight={worldHeight}
-        worldTheme={isConstrainedArenaDevice() || graphicsQuality === "low" ? "default" : "premium-space-battle"}
+        worldTheme={isRealMobileDevice() || isConstrainedArenaDevice() || graphicsQuality === "low" ? "default" : "premium-space-battle"}
         safeZoneRadius={safeZoneRadius}
         showZone={true}
       />
@@ -3197,7 +3152,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
               <strong>{hudYou?.kills ?? 0}</strong>
             </div>
 
-            <button type="button" onClick={handleExitToMenu}>
+            <button type="button" onClick={exitZonePvpToMenu}>
               EXIT TO MENU
             </button>
           </div>
@@ -3208,8 +3163,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         <div className="game-over-screen pvp-finished-screen">
           <h1>{winnerName ? `${winnerName} WINS` : "MATCH FINISHED"}</h1>
           <p>{hudYou?.id === (hudData.winnerId || renderData.winnerId) ? "Ai castigat meciul." : "Meciul s-a terminat."}</p>
-          <p className="zone-pvp-finished-auto-exit">Revenire automata la meniu in cateva secunde...</p>
-          <button onClick={handleExitToMenu}>EXIT TO MENU</button>
+          <p className="zone-pvp-finished-auto-exit">Apasa EXIT TO MENU cand esti gata.</p>
+          <button onClick={exitZonePvpToMenu}>EXIT TO MENU</button>
         </div>
       )}
 
@@ -3257,7 +3212,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       </div>
       )}
 
-      <button className="pvp-exit-btn" onClick={handleExitToMenu}>EXIT TO MENU</button>
+      <button className="pvp-exit-btn" onClick={exitZonePvpToMenu}>EXIT TO MENU</button>
     </div>
   );
 }

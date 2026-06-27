@@ -11,6 +11,7 @@ export declare class GameGateway {
     private zonePvpSocketRoom;
     private zonePvpResumeSeats;
     private zonePvpSocketResumeToken;
+    private zonePvpDepartedSeats;
     private loop;
     private lastLoopAt;
     constructor();
@@ -24,6 +25,8 @@ export declare class GameGateway {
     private normalizeZonePvpResumeToken;
     private rememberZonePvpResumeSeat;
     private findZonePvpResumeSeat;
+    private getZonePvpDepartedSeat;
+    private clearZonePvpDepartedSeatsForRoom;
     private detachZonePvpSocket;
     private rebindZonePvpResumeSeat;
     private getZoneBotCount;
@@ -69,9 +72,7 @@ export declare class GameGateway {
     handleBattleRoyaleOnlineLeave(client: Socket): void;
     handleBattleRoyaleOnlineInput(client: Socket, input: any): void;
     handleZonePvpJoin(client: Socket, data: any): void;
-    handleZonePvpLeave(client: Socket): {
-        ok: boolean;
-    };
+    handleZonePvpLeave(client: Socket, payload: any): void;
     handleZonePvpClockSync(client: Socket, payload: any): void;
     handleZonePvpInput(client: Socket, input: any): void;
     startLoop(): void;
@@ -202,10 +203,13 @@ export declare class GameGateway {
     broadcastBattleRoyaleOnlineRoomState(room: any, now: any): void;
     findOrCreateZonePvpRoom(): any;
     getZonePvpRoomBySocket(socketId: any): any;
-    removeZonePvpPlayer(socketId: string): void;
+    removeZonePvpPlayer(socketId: string, options?: {
+        permanent?: boolean;
+    }): void;
     cleanupZonePvpRoom(room: any, now: any): void;
     getZonePvpZoneRadius(room: any): number;
     private serializeZonePvpMovement;
+    private serializeZonePvpRemoteState;
     private serializeZonePvpProjectileMovement;
     private broadcastZonePvpMovement;
     broadcastZonePvpRoomState(room: any, now: any, reliable?: boolean): void;
