@@ -76,6 +76,12 @@ const MAX_PENDING_INPUTS = 90;
 
 const MAX_VISIBLE_REMOTE_PLAYERS = 60;
 
+// Mobile browsers can finish their initial Engine.IO connection before the
+// first gameplay event is processed. Zone admission is idempotent on the
+// backend, so retry the join request in a short bounded cadence until the
+// server confirms this exact socket is inside a room.
+const ZONE_JOIN_RETRY_DELAYS_MS = [350, 700, 1200, 1800, 2600, 3600];
+
 const CORE_TYPES = [
   { type: "nano", name: "Nano Core", shortName: "Nano", color: "#00eaff", effect: "+10 MAX HP" },
   { type: "rotor", name: "Rotor Core", shortName: "Rotor", color: "#ffae3d", effect: "+Attack drone speed" },
@@ -1029,6 +1035,11 @@ function FlyingAttackDrone({ projectile }) {
 
 function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const socketRef = useRef(null);
+  // Join state is deliberately separate from socket.connected. A mobile
+  // transport may be connected while its first join packet was delayed.
+  const zoneJoinAcceptedRef = useRef(false);
+  const zoneJoinAttemptRef = useRef(0);
+  const zoneJoinRetryTimerRef = useRef(null);
   const keysRef = useRef({});
   const mouseRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const lastFrameRef = useRef(performance.now());
@@ -1141,16 +1152,66 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const [battleBeginFlashUntil, setBattleBeginFlashUntil] = useState(0);
 
   useEffect(() => {
+    // Default Socket.IO transport order is intentional here: polling gives
+    // mobile Safari/Chrome and restrictive carrier networks a reliable first
+    // handshake, then Engine.IO upgrades the active session to WebSocket.
+    // forceNew/multiplex:false prevents a previous Normal/BR socket manager
+    // from being reused while the user switches modes quickly on mobile.
     const socket = io(API_URL, {
       autoConnect: false,
-      transports: ["websocket"],
+      transports: ["polling", "websocket"],
+      upgrade: true,
+      forceNew: true,
+      multiplex: false,
       withCredentials: false,
+      timeout: 12000,
       reconnection: true,
       reconnectionAttempts: Infinity,
-      reconnectionDelay: 700,
+      reconnectionDelay: 500,
+      reconnectionDelayMax: 2500,
+      randomizationFactor: 0.25,
     });
 
     socketRef.current = socket;
+    let disposed = false;
+
+    const clearZoneJoinRetry = () => {
+      if (zoneJoinRetryTimerRef.current) {
+        window.clearTimeout(zoneJoinRetryTimerRef.current);
+        zoneJoinRetryTimerRef.current = null;
+      }
+    };
+
+    const markZoneJoinAccepted = (confirmation = {}) => {
+      const confirmedPlayerId = confirmation?.playerId || confirmation?.you?.id;
+      if (confirmedPlayerId && socket.id && String(confirmedPlayerId) !== String(socket.id)) return;
+      zoneJoinAcceptedRef.current = true;
+      zoneJoinAttemptRef.current = 0;
+      clearZoneJoinRetry();
+    };
+
+    const getZoneJoinPayload = () => ({
+      userId: user?.isGuest ? null : user?.id,
+      isGuest: Boolean(user?.isGuest),
+      username: getDisplayName(user),
+      skin: getSelectedSkin(user),
+    });
+
+    const requestZoneJoin = () => {
+      if (disposed || zoneJoinAcceptedRef.current || !socket.connected) return;
+
+      socket.emit("zone-pvp:join", getZoneJoinPayload());
+      const attempt = zoneJoinAttemptRef.current;
+      zoneJoinAttemptRef.current = attempt + 1;
+      clearZoneJoinRetry();
+
+      const retryDelay = ZONE_JOIN_RETRY_DELAYS_MS[
+        Math.min(attempt, ZONE_JOIN_RETRY_DELAYS_MS.length - 1)
+      ];
+      zoneJoinRetryTimerRef.current = window.setTimeout(() => {
+        requestZoneJoin();
+      }, retryDelay);
+    };
 
     const updateServerClockOffset = (serverNow) => {
       const serverTime = Number(serverNow || 0);
@@ -1174,6 +1235,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       if (!state || !shouldAcceptZonePhase(zonePhaseRef.current, state)) {
         return;
       }
+
+      // zone-pvp:joined and the following authoritative state both prove that
+      // this socket is in a room. Stop the idempotent mobile join retry loop.
+      markZoneJoinAccepted(state);
 
       const incomingRoomId = state?.roomId ? String(state.roomId) : "";
       const currentRoomId = zonePhaseRef.current?.roomId ? String(zonePhaseRef.current.roomId) : "";
@@ -1443,17 +1508,44 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       setConnectionError("");
       combatEventMapRef.current.clear();
       selfCombatSnapshotRef.current = null;
-      socket.emit("zone-pvp:join", {
-        userId: user?.isGuest ? null : user?.id,
-        isGuest: Boolean(user?.isGuest),
-        username: getDisplayName(user),
-        skin: getSelectedSkin(user),
-      });
+      // A new Engine.IO session has a new socket id and must be admitted again.
+      zoneJoinAcceptedRef.current = false;
+      zoneJoinAttemptRef.current = 0;
+      clearZoneJoinRetry();
+      requestZoneJoin();
     };
 
-    socket.on("connect_error", () => {
-      setConnectionError("Nu ma pot conecta la serverul PvP. Verifica Render/WebSocket.");
-    });
+    const handleConnectError = () => {
+      setConnectionError("Nu ma pot conecta la serverul PvP. Se reincerca automat...");
+    };
+
+    const handleDisconnect = (reason) => {
+      zoneJoinAcceptedRef.current = false;
+      zoneJoinAttemptRef.current = 0;
+      clearZoneJoinRetry();
+      if (!disposed && reason !== "io client disconnect") {
+        setConnectionError("Conexiunea Zone PvP s-a intrerupt. Se reconecteaza...");
+      }
+    };
+
+    const handleJoinConfirmed = (confirmation = {}) => {
+      markZoneJoinAccepted(confirmation);
+    };
+
+    const recoverVisibleZoneSession = () => {
+      if (disposed || document.visibilityState === "hidden") return;
+      if (!socket.connected) {
+        socket.connect();
+        return;
+      }
+      if (!zoneJoinAcceptedRef.current) {
+        zoneJoinAttemptRef.current = 0;
+        requestZoneJoin();
+      }
+    };
+
+    socket.on("connect_error", handleConnectError);
+    socket.on("disconnect", handleDisconnect);
 
     // Reliable item-removal deltas keep both players' loot view in lockstep.
     // A stale volatile snapshot is rejected by the hidden-id tombstone.
@@ -1671,6 +1763,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
 
     socket.on("zone-pvp:joined", applyState);
+    socket.on("zone-pvp:join-confirmed", handleJoinConfirmed);
     socket.on("zone-pvp:state", applyState);
     socket.on("zone-pvp:movement", applyMovementFrame);
     socket.on("zone-pvp:collision", applyZoneCollisionImpulse);
@@ -1683,6 +1776,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     // All listeners are attached before transport starts, avoiding a fast
     // join/state race on mobile browsers.
     socket.on("connect", handleConnect);
+    document.addEventListener("visibilitychange", recoverVisibleZoneSession);
+    window.addEventListener("pageshow", recoverVisibleZoneSession);
     socket.connect();
 
     const sendInputNow = (force = false) => {
@@ -1751,9 +1846,18 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     }, mobilePerformanceRef.current ? 250 : 125);
 
     return () => {
+      disposed = true;
+      clearZoneJoinRetry();
       window.clearInterval(inputTimer);
       window.clearInterval(hudTimer);
+      document.removeEventListener("visibilitychange", recoverVisibleZoneSession);
+      window.removeEventListener("pageshow", recoverVisibleZoneSession);
       socket.off("connect", handleConnect);
+      socket.off("connect_error", handleConnectError);
+      socket.off("disconnect", handleDisconnect);
+      socket.off("zone-pvp:joined", applyState);
+      socket.off("zone-pvp:join-confirmed", handleJoinConfirmed);
+      socket.off("zone-pvp:state", applyState);
       socket.off("zone-pvp:movement", applyMovementFrame);
       socket.off("zone-pvp:collision", applyZoneCollisionImpulse);
       socket.off("zone-pvp:combat", applyPrivateCombatEvent);

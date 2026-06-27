@@ -225,13 +225,20 @@ function normalizeSkin(skin) {
     origin: true,
     credentials: false,
   },
-  // The game always uses WebSocket. Disable compression for tiny high-frequency
-  // snapshots: compression costs more CPU/latency than it saves for this payload.
-  transports: ["websocket"],
+  // Start with Engine.IO polling as a compatibility handshake, then upgrade
+  // to WebSocket automatically. This is important on mobile browsers and some
+  // mobile networks where an immediate WSS upgrade can be delayed or blocked
+  // during the first page transition. Gameplay still runs on WebSocket after
+  // the upgrade; polling is only the robust fallback.
+  transports: ["polling", "websocket"],
+  allowUpgrades: true,
   perMessageDeflate: false,
   httpCompression: false,
-  pingInterval: 10000,
-  pingTimeout: 20000,
+  // Mobile browsers can briefly pause timers while a page changes orientation
+  // or returns from the background. Keep the transport alive long enough for
+  // the client-side idempotent join handshake to recover cleanly.
+  pingInterval: 25000,
+  pingTimeout: 60000,
 })
 export class GameGateway {
   @WebSocketServer()
@@ -1054,6 +1061,15 @@ export class GameGateway {
       existingZonePlayer.lastInputReceivedAt = Date.now();
       this.markRoomOccupied(existingZoneRoom);
       client.join(existingZoneRoom.id);
+      // A client may retry its join after a mobile network transition. Confirm
+      // the idempotent admission explicitly so it can stop retrying even before
+      // the next full room snapshot is painted.
+      client.emit("zone-pvp:join-confirmed", {
+        roomId: existingZoneRoom.id,
+        playerId: client.id,
+        serverNow: Date.now(),
+        reusedRoom: true,
+      });
       this.broadcastZonePvpRoomState(existingZoneRoom, Date.now(), true);
       return;
     }
@@ -1174,6 +1190,16 @@ export class GameGateway {
       projectiles: [],
       leaderboard: [],
       coreDropCountdown: Math.ceil(CORE_WARNING_DELAY / 1000),
+    });
+
+    // Separate lightweight admission confirmation. The normal joined payload
+    // remains the source of truth for world data; this event only makes the
+    // client retry loop deterministic on slower mobile handshakes.
+    client.emit("zone-pvp:join-confirmed", {
+      roomId: room.id,
+      playerId: client.id,
+      serverNow: Date.now(),
+      reusedRoom: false,
     });
 
     // A new player must update the already-waiting player immediately. The

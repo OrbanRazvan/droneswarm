@@ -790,6 +790,12 @@ let GameGateway = class GameGateway {
             existingZonePlayer.lastInputReceivedAt = Date.now();
             this.markRoomOccupied(existingZoneRoom);
             client.join(existingZoneRoom.id);
+            client.emit("zone-pvp:join-confirmed", {
+                roomId: existingZoneRoom.id,
+                playerId: client.id,
+                serverNow: Date.now(),
+                reusedRoom: true,
+            });
             this.broadcastZonePvpRoomState(existingZoneRoom, Date.now(), true);
             return;
         }
@@ -892,6 +898,12 @@ let GameGateway = class GameGateway {
             projectiles: [],
             leaderboard: [],
             coreDropCountdown: Math.ceil(CORE_WARNING_DELAY / 1000),
+        });
+        client.emit("zone-pvp:join-confirmed", {
+            roomId: room.id,
+            playerId: client.id,
+            serverNow: Date.now(),
+            reusedRoom: false,
         });
         this.broadcastZonePvpRoomState(room, Date.now(), true);
     }
@@ -3528,11 +3540,12 @@ exports.GameGateway = GameGateway = __decorate([
             origin: true,
             credentials: false,
         },
-        transports: ["websocket"],
+        transports: ["polling", "websocket"],
+        allowUpgrades: true,
         perMessageDeflate: false,
         httpCompression: false,
-        pingInterval: 10000,
-        pingTimeout: 20000,
+        pingInterval: 25000,
+        pingTimeout: 60000,
     }),
     __metadata("design:paramtypes", [])
 ], GameGateway);
