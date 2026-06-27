@@ -199,30 +199,30 @@ function getRendererConfig(forceLowQuality) {
   const lowSpec = device.weakMobile || device.lowSpecDesktop;
   const lightMobile = device.forcedMobileQuality && !device.weakMobile;
 
-  // On integrated GPUs, pixel shading and full drone effects are the actual
-  // bottleneck. A smaller WebGL buffer preserves transform cadence while the
-  // DOM HUD stays sharp.
+  // Low-end no longer means "dots only". We keep the nearby combat scene
+  // readable (real drone silhouettes + nearby loot), then let the adaptive
+  // tier reduce resolution/effects only when the measured frame time demands it.
   const resolution = device.lowSpecDesktop
-    ? 0.50
+    ? 0.72
     : device.weakMobile
-      ? 0.66
+      ? 0.74
       : lightMobile
-        ? 0.82
+        ? 0.90
         : Math.min(1.35, device.dpr);
 
   return {
     ...device,
     resolution,
     antialias: !lowSpec && !lightMobile,
-    // The local drone stays premium. Only a few nearby remote drones are full;
-    // all other visible drones remain in the cheap marker pool every frame.
-    maxStaticItems: device.lowSpecDesktop ? 0 : device.weakMobile ? 0 : lightMobile ? 12 : 120,
-    maxPlayers: device.lowSpecDesktop ? 1 : device.weakMobile ? 1 : lightMobile ? 6 : MAX_RENDERED_PLAYERS,
-    maxSimplePlayers: device.lowSpecDesktop ? 60 : device.weakMobile ? 58 : lightMobile ? 54 : 60,
-    maxProjectiles: device.lowSpecDesktop ? 1 : device.weakMobile ? 1 : lightMobile ? 6 : MAX_RENDERED_PROJECTILES,
-    maxSimpleProjectiles: device.lowSpecDesktop ? 36 : device.weakMobile ? 32 : lightMobile ? 32 : 48,
-    staticSyncInterval: device.lowSpecDesktop ? 1200 : device.weakMobile ? 900 : lightMobile ? 500 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: device.lowSpecDesktop ? 240 : device.weakMobile ? 120 : lightMobile ? 32 : 1,
+    // Nearby drones stay premium. All remaining units use the lightweight
+    // quadcopter silhouette below, not circles/points.
+    maxStaticItems: device.lowSpecDesktop ? 76 : device.weakMobile ? 62 : lightMobile ? 76 : 120,
+    maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : lightMobile ? 7 : MAX_RENDERED_PLAYERS,
+    maxSimplePlayers: device.lowSpecDesktop ? 56 : device.weakMobile ? 52 : lightMobile ? 54 : 60,
+    maxProjectiles: device.lowSpecDesktop ? 5 : device.weakMobile ? 4 : lightMobile ? 7 : MAX_RENDERED_PROJECTILES,
+    maxSimpleProjectiles: device.lowSpecDesktop ? 34 : device.weakMobile ? 28 : lightMobile ? 32 : 48,
+    staticSyncInterval: device.lowSpecDesktop ? 340 : device.weakMobile ? 420 : lightMobile ? 280 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: device.lowSpecDesktop ? 5 : device.weakMobile ? 6 : lightMobile ? 3 : 1,
     disableExpensiveTerrain: Boolean(device.lowSpecDesktop || device.weakMobile || lightMobile),
   };
 }
@@ -691,10 +691,57 @@ function createZoneContext() {
   return ctx;
 }
 
-function createSimpleContext() {
+function createLiteDroneContext(colors) {
+  const [primary, secondary, dark, highlight] = colors;
   const ctx = new PIXI.GraphicsContext();
-  ctx.circle(0, 0, 9).fill({ color: 0xffffff, alpha: 0.92 });
-  ctx.circle(-2.5, -3, 2.5).fill({ color: 0xffffff, alpha: 0.42 });
+
+  // A lightweight but recognizable quadcopter. This is one cached context per
+  // skin, so 40-50 distant drones cost transforms only, not per-frame drawing.
+  const rotors = [
+    [-23, -18],
+    [23, -18],
+    [-23, 18],
+    [23, 18],
+  ];
+
+  rotors.forEach(([x, y]) => {
+    const fromX = x < 0 ? -7 : 7;
+    const fromY = y < 0 ? -5 : 5;
+    ctx.moveTo(fromX, fromY).lineTo(x, y).stroke({ color: dark, width: 5.4, alpha: 0.96 });
+    ctx.moveTo(fromX, fromY).lineTo(x, y).stroke({ color: primary, width: 2.25, alpha: 0.82 });
+    ctx.circle(x, y, 6.2).fill({ color: dark, alpha: 0.98 });
+    ctx.circle(x, y, 4.5).stroke({ color: secondary, width: 1.05, alpha: 0.84 });
+    ctx.circle(x, y, 2.25).fill({ color: primary, alpha: 0.9 });
+  });
+
+  ctx.poly([
+    0, -20,
+    10, -13,
+    13, -2,
+    10, 12,
+    0, 19,
+    -10, 12,
+    -13, -2,
+    -10, -13,
+  ]).fill({ color: dark, alpha: 1 });
+
+  ctx.poly([
+    0, -17,
+    7.5, -10,
+    9.2, -1.5,
+    7, 9,
+    0, 15.2,
+    -7, 9,
+    -9.2, -1.5,
+    -7.5, -10,
+  ]).fill({ color: primary, alpha: 1 });
+
+  ctx.poly([0, -15, 4.4, -9, 4.1, -1.5, 0, 1.5, -4.1, -1.5, -4.4, -9])
+    .fill({ color: secondary, alpha: 0.72 });
+  ctx.circle(0, -7.5, 2.2).fill({ color: highlight, alpha: 0.9 });
+  ctx.roundRect(-4.5, 8.5, 9, 4.8, 1.8).fill({ color: dark, alpha: 0.92 });
+  ctx.roundRect(-2.6, 9.7, 5.2, 2.2, 1).fill({ color: highlight, alpha: 0.74 });
+
   return ctx;
 }
 
@@ -810,7 +857,15 @@ function createUnitVisual(resources) {
 
 function createSimpleVisual(resources) {
   const root = new PIXI.Graphics(resources.simpleContexts.cyan);
-  return { root, skin: "", lastSeenAt: 0 };
+  root.eventMode = "none";
+  return {
+    root,
+    skin: "",
+    facing: 0,
+    facingReady: false,
+    lastFrameAt: 0,
+    lastSeenAt: 0,
+  };
 }
 
 function createSimpleProjectileVisual(resources) {
@@ -1341,9 +1396,26 @@ function updateSimpleVisual(visual, unit, resources, now) {
     visual.skin = skin;
     visual.root.context = resources.simpleContexts[skin] || resources.simpleContexts.cyan;
   }
+
+  const deltaSeconds = clamp((now - (visual.lastFrameAt || now)) / 1000, 1 / 240, 0.05);
+  visual.lastFrameAt = now;
+  const moveX = Number(unit.moveX || 0);
+  const moveY = Number(unit.moveY || 0);
+  const moving = Boolean(unit.isMoving) || Math.hypot(moveX, moveY) > 0.012;
+  const targetFacing = getUnitFacingTarget(unit, visual.facing || 0);
+
+  if (!visual.facingReady) {
+    visual.facing = targetFacing;
+    visual.facingReady = true;
+  } else if (moving) {
+    visual.facing = dampAngle(visual.facing, targetFacing, 16, deltaSeconds);
+  }
+
   visual.root.visible = true;
   visual.root.position.set(Number(unit.x || 0), Number(unit.y || 0));
-  visual.root.alpha = 0.84;
+  visual.root.rotation = visual.facing;
+  visual.root.scale.set(0.96);
+  visual.root.alpha = unit.alive === false ? 0.32 : 0.98;
   visual.lastSeenAt = now;
 }
 
@@ -1521,9 +1593,7 @@ function createResources(coreTypes = []) {
     shieldGlyphContexts[skin] = createShieldGlyphContext(colors);
     shieldPulseContexts[skin] = createShieldPulseContext(colors);
 
-    const simple = new PIXI.GraphicsContext();
-    simple.circle(0, 0, 10).fill({ color: colors[0], alpha: 0.9 });
-    simpleContexts[skin] = simple;
+    simpleContexts[skin] = createLiteDroneContext(colors);
 
     const simpleProjectile = new PIXI.GraphicsContext();
     simpleProjectile.poly([9, 0, -6, -5, -6, 5]).fill({ color: colors[0], alpha: 0.96 });
@@ -2355,10 +2425,9 @@ function PixiArenaRenderer({
         // Player keeps the complete visual treatment. Remote/bot effects scale
         // down only when the actual device profile or adaptive frame budget
         // needs it; gameplay simulation remains untouched.
-        const remoteEffectTier = Math.min(
-          2,
-          adaptiveTier + (config.lowSpecDesktop || config.weakMobile ? 1 : 0),
-        );
+        // Keep nearby remote drones visually close to desktop quality at tier 0.
+        // Effects are removed only after actual frame-time pressure is detected.
+        const remoteEffectTier = adaptiveTier;
         syncUnitPool({
           pool: playerPool,
           source: playerSource,
@@ -2370,9 +2439,9 @@ function PixiArenaRenderer({
           isPlayer: true,
         });
         const fullUnitCap = adaptiveTier === 2
-          ? Math.min(config.maxPlayers, 1)
+          ? Math.min(config.maxPlayers, config.lowSpecDesktop || config.weakMobile ? 2 : 3)
           : adaptiveTier === 1
-            ? Math.min(config.maxPlayers, config.lowSpecDesktop || config.weakMobile ? 1 : 3)
+            ? Math.min(config.maxPlayers, config.lowSpecDesktop || config.weakMobile ? 3 : 5)
             : config.maxPlayers;
         const fullRemoteIds = syncUnitPool({
           pool: remotePool,
@@ -2382,7 +2451,7 @@ function PixiArenaRenderer({
           bounds,
           max: fullUnitCap,
           now,
-          compact: config.lowSpecDesktop || config.weakMobile || adaptiveTier > 0,
+          compact: adaptiveTier > 0,
           effectTier: remoteEffectTier,
         });
         const fullBotIds = syncUnitPool({
@@ -2393,7 +2462,7 @@ function PixiArenaRenderer({
           bounds,
           max: fullUnitCap,
           now,
-          compact: config.lowSpecDesktop || config.weakMobile || adaptiveTier > 0,
+          compact: adaptiveTier > 0,
           effectTier: remoteEffectTier,
         });
         const fullEntityIds = new Set([...fullRemoteIds, ...fullBotIds]);
@@ -2410,9 +2479,9 @@ function PixiArenaRenderer({
           excludeIds: fullEntityIds,
         });
         const fullProjectileCap = adaptiveTier === 2
-          ? Math.min(config.maxProjectiles, 1)
+          ? Math.min(config.maxProjectiles, config.lowSpecDesktop || config.weakMobile ? 2 : 3)
           : adaptiveTier === 1
-            ? Math.min(config.maxProjectiles, config.lowSpecDesktop || config.weakMobile ? 1 : 4)
+            ? Math.min(config.maxProjectiles, config.lowSpecDesktop || config.weakMobile ? 3 : 5)
             : config.maxProjectiles;
         const fullProjectileIds = syncProjectilePool({
           pool: projectilePool,
@@ -2422,7 +2491,7 @@ function PixiArenaRenderer({
           bounds,
           max: fullProjectileCap,
           now,
-          compact: config.lowSpecDesktop || config.weakMobile || adaptiveTier > 0,
+          compact: adaptiveTier > 0,
         });
         syncProjectilePool({
           pool: simpleProjectilePool,

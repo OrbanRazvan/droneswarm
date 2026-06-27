@@ -2533,9 +2533,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 980, liveCameraScale);
       const renderLimits = mobilePerformanceRef.current
-        ? { detailed: 1, total: 56, orbs: 0, energy: 0, cores: 0, projectiles: 1, simpleProjectiles: 30 }
+        ? { detailed: 6, total: 50, orbs: 48, energy: 16, cores: 4, projectiles: 5, simpleProjectiles: 26 }
         : constrainedDesktopRef.current
-          ? { detailed: 1, total: 58, orbs: 0, energy: 0, cores: 0, projectiles: 1, simpleProjectiles: 34 }
+          ? { detailed: 8, total: 56, orbs: 64, energy: 22, cores: 6, projectiles: 7, simpleProjectiles: 32 }
           : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
       // Map insertion order is not distance order. Sort by the camera subject
@@ -2616,7 +2616,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         // Zone PvP is the 60-seat competitive mode: keep the world layer plain
         // so every GPU budget goes to drone/projectile transforms.
         worldTheme: "default",
-        staticItemBudget: mobilePerformanceRef.current || constrainedDesktopRef.current ? 0 : 80,
+        // Static pickups are now part of the low-end readability budget too.
+        // Renderer adapts further only when its measured frame time requires it.
+        staticItemBudget: mobilePerformanceRef.current ? 52 : constrainedDesktopRef.current ? 76 : 100,
         safeZoneRadius: zoneRadius,
         showZone: true,
         coreColorMap: coreColorMapRef.current,
@@ -3023,8 +3025,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y * cameraScale : 0;
   const bounds = getViewportBounds(cameraX, cameraY, viewport, 720, cameraScale);
   const reactiveRenderLimits = isMobileControls
-    ? { detailed: 10, total: 46, orbs: 48, energy: 18, cores: 5, projectiles: 14, simpleProjectiles: 22 }
-    : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
+    ? { detailed: 6, total: 50, orbs: 48, energy: 16, cores: 4, projectiles: 5, simpleProjectiles: 26 }
+    : constrainedDesktopRef.current
+      ? { detailed: 8, total: 56, orbs: 64, energy: 22, cores: 6, projectiles: 7, simpleProjectiles: 32 }
+      : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
   const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), reactiveRenderLimits.orbs);
   const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), reactiveRenderLimits.energy);
@@ -3214,7 +3218,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldWidth={worldWidth}
         worldHeight={worldHeight}
         worldTheme="default"
-        staticItemBudget={isRealMobileDevice() || constrainedDesktopRef.current ? 0 : 80}
+        staticItemBudget={isRealMobileDevice() ? 52 : constrainedDesktopRef.current ? 76 : 100}
         safeZoneRadius={safeZoneRadius}
         showZone={true}
       />
