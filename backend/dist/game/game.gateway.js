@@ -75,8 +75,8 @@ const ZONE_PVP_BOT_ATTACK_RANGE = 1710;
 const ZONE_PVP_BOT_SAFE_DISTANCE = 760;
 const ZONE_PVP_BOT_ZONE_EDGE_BUFFER = 720;
 const ZONE_PVP_BOT_THREAT_RADIUS = 2200;
-const ZONE_PVP_BOT_AI_REPLAN_MIN_MS = 130;
-const ZONE_PVP_BOT_AI_REPLAN_MAX_MS = 240;
+const ZONE_PVP_BOT_AI_REPLAN_MIN_MS = 180;
+const ZONE_PVP_BOT_AI_REPLAN_MAX_MS = 320;
 const ZONE_PVP_BOT_SPAWN_MIN_DISTANCE = 1000;
 const ZONE_PVP_BOT_NAMES = ["DarkNova", "SkyHunter", "CyberCore", "NanoByte", "RedPulse"];
 const ZONE_PVP_BOT_SKINS = [
@@ -97,7 +97,7 @@ const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
 const ZONE_STATE_INTERVAL_MS = 25;
 const ZONE_STATE_INTERVAL_CROWDED_MS = 33;
 const ZONE_STATE_INTERVAL_HEAVY_MS = 50;
-const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 15;
+const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 20;
 const ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS = 33;
 const ZONE_MOVEMENT_STREAM_MAX_PLAYERS = ZONE_PVP_ROOM_MAX_PLAYERS;
 const STATIC_STATE_INTERVAL_MS = 500;
@@ -1314,6 +1314,9 @@ let GameGateway = class GameGateway {
         const room = this.findOrCreateZonePvpRoom();
         const zoneRadius = this.getZonePvpZoneRadius(room);
         const spawn = this.getSafeSpawn(room, zoneRadius);
+        if (!room.initialHumanPlayerId) {
+            room.initialHumanPlayerId = client.id;
+        }
         const player = {
             id: client.id,
             userId: data?.isGuest ? null : data?.userId,
@@ -1562,7 +1565,7 @@ let GameGateway = class GameGateway {
                 }
                 if (room.status === "playing" &&
                     room.players.size <= ZONE_MOVEMENT_STREAM_MAX_PLAYERS) {
-                    const movementInterval = room.players.size >= PVP_CROWDED_STATE_THRESHOLD
+                    const movementInterval = this.getZoneHumanPlayerCount(room) >= PVP_CROWDED_STATE_THRESHOLD
                         ? ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS
                         : ZONE_MOVEMENT_STREAM_INTERVAL_MS;
                     if (!room.lastMovementBroadcastAt ||
@@ -3317,6 +3320,7 @@ let GameGateway = class GameGateway {
             id: `zone-pvp-${crypto.randomUUID()}`,
             status: "waiting",
             locked: false,
+            initialHumanPlayerId: null,
             phaseVersion: 0,
             roundId: null,
             players: new Map(),
@@ -3384,10 +3388,7 @@ let GameGateway = class GameGateway {
             if (player?.isBot)
                 continue;
             const socketOnline = this.server.sockets.sockets.has(player.id);
-            const shouldExpireActivePlayer = room.status === "playing" &&
-                player.alive !== false &&
-                now - Number(player.lastSeenAt || now) > 30000;
-            if (!socketOnline || shouldExpireActivePlayer) {
+            if (!socketOnline) {
                 this.removeZonePvpPlayer(player.id);
             }
         }
@@ -3433,7 +3434,12 @@ let GameGateway = class GameGateway {
         if (!room?.zonePvpMode || room.status !== "playing")
             return;
         const players = [...room.players.values()];
-        for (const viewer of players) {
+        const humanViewers = players.filter((player) => !player?.isBot);
+        if (!humanViewers.length)
+            return;
+        const movementSequence = Number(room.zoneMovementSequence || 0) + 1;
+        room.zoneMovementSequence = movementSequence;
+        for (const viewer of humanViewers) {
             const socket = this.server.sockets.sockets.get(viewer.id);
             if (!socket)
                 continue;
@@ -3441,16 +3447,21 @@ let GameGateway = class GameGateway {
                 ? this.getStableSpectatorTarget(room, viewer)
                 : null;
             const viewAnchor = spectatorTarget || viewer;
-            const range = viewer.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE;
+            const range = viewer.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + 260;
             const movementPlayers = players
                 .filter((other) => other.id !== viewer.id &&
                 (viewer.alive !== false || other.alive !== false) &&
                 this.isNear(viewAnchor, other, range))
+                .sort((a, b) => {
+                const ax = Number(a.x || 0) - Number(viewAnchor.x || 0);
+                const ay = Number(a.y || 0) - Number(viewAnchor.y || 0);
+                const bx = Number(b.x || 0) - Number(viewAnchor.x || 0);
+                const by = Number(b.y || 0) - Number(viewAnchor.y || 0);
+                return ax * ax + ay * ay - (bx * bx + by * by);
+            })
                 .slice(0, ZONE_PVP_VISIBLE_PLAYERS_LIMIT)
                 .map((other) => this.serializeZonePvpMovement(other));
-            const movementSequence = Number(room.zoneMovementSequence || 0) + 1;
-            room.zoneMovementSequence = movementSequence;
-            socket.compress(false).emit("zone-pvp:movement", {
+            socket.volatile.compress(false).emit("zone-pvp:movement", {
                 serverNow: now,
                 sequence: movementSequence,
                 roomId: room.id,

@@ -31,10 +31,13 @@ const SELF_HARD_SNAP_DISTANCE = 420;
 const SELF_MAX_CORRECTION_SPEED = 1400; // px/sec - viteza maxima cu care predictia se "trage" spre server
 const SELF_IDLE_FREEZE_DISTANCE = 360;
 
-const REMOTE_SMOOTHING = 24;
-const REMOTE_PREDICTION = 1.0;
-const REMOTE_HARD_SNAP_DISTANCE = 360;
-const REMOTE_MAX_EXTRAPOLATE_MS = 100;
+// Remote entities come from a server-timestamped interpolation buffer.
+ // Slightly more buffer eliminates packet-burst jitter while the local drone
+ // stays fully client-predicted and instant.
+const REMOTE_SMOOTHING = 18;
+const REMOTE_PREDICTION = 0.82;
+const REMOTE_HARD_SNAP_DISTANCE = 620;
+const REMOTE_MAX_EXTRAPOLATE_MS = 160;
 
 const PROJECTILE_SMOOTHING = 18;
 const PROJECTILE_FRAME_SCALE = 60;
@@ -61,8 +64,8 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 // Client-side prediction + server reconciliation + remote snapshot buffer.
 const INPUT_SEND_INTERVAL_MS = 20;
 const INPUT_HEARTBEAT_MS = 240;
-const SNAPSHOT_INTERPOLATION_DELAY_MS = 48;
-const SNAPSHOT_BUFFER_TTL_MS = 520;
+const SNAPSHOT_INTERPOLATION_DELAY_MS = 62;
+const SNAPSHOT_BUFFER_TTL_MS = 760;
 
 // Keep PvP desktop framing exactly locked to BattleRoyaleMode.
 // BattleRoyaleMode uses 0.72 on desktop; do not change only one mode or the
@@ -159,6 +162,23 @@ function isRealMobileDevice() {
     isPortrait &&
     shortSide <= 980 &&
     longSide <= 2600
+  );
+}
+
+function isConstrainedArenaDevice() {
+  if (typeof navigator === "undefined") return false;
+
+  const memory = typeof navigator.deviceMemory === "number"
+    ? Number(navigator.deviceMemory)
+    : null;
+  const cores = Number(navigator.hardwareConcurrency || 4);
+  const mobile = isRealMobileDevice();
+
+  // Good phones remain on the richer profile. Only entry-level/old hardware
+  // and explicit Low graphics use the tight render budget.
+  return Boolean(
+    (mobile && (cores <= 4 || (memory !== null && memory <= 4))) ||
+    (!mobile && (cores <= 4 || (memory !== null && memory <= 8)))
   );
 }
 
@@ -1046,6 +1066,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const fpsRef = useRef({ frames: 0, lastAt: performance.now(), value: 60 });
   const lastRenderSyncRef = useRef(0);
   const mobilePerformanceRef = useRef(isRealMobileDevice());
+  const constrainedDeviceRef = useRef(isConstrainedArenaDevice());
+  const lowGraphicsRef = useRef(Boolean(graphicsQuality === "low"));
+  lowGraphicsRef.current = Boolean(graphicsQuality === "low");
   const pixiLiveRef = useRef(null);
   const coreColorMapRef = useRef(
     CORE_TYPES.reduce((acc, core) => {
@@ -2074,14 +2097,17 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const liveCameraY = liveCameraSubject ? viewport.height / 2 - liveCameraSubject.y * liveCameraScale : 0;
 
       const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 980, liveCameraScale);
-      const renderLimits = mobilePerformanceRef.current
-        ? { players: 14, orbs: 90, energy: 26, cores: 6, projectiles: 22 }
+      const lowVisualMode = constrainedDeviceRef.current || lowGraphicsRef.current;
+      // Weak devices drop far/static visuals first. Movement transforms are
+      // retained and interpolated at the same cadence for every device.
+      const renderLimits = lowVisualMode
+        ? { players: 16, orbs: 72, energy: 20, cores: 5, projectiles: 18 }
         : null;
       const livePlayers = collectVisible(
         remoteMap.values(),
         (player) => player?.id !== liveYou?.id && isVisible(player, liveBounds, 380),
         renderLimits?.players || MAX_VISIBLE_REMOTE_PLAYERS,
-        (player) => ({ ...player, skin: normalizeSkin(player.skin), isBot: false })
+        (player) => ({ ...player, skin: normalizeSkin(player.skin), isBot: Boolean(player.isBot) })
       );
       const liveOrbs = collectVisible(
         stableOrbMapRef.current.values(),
@@ -2129,8 +2155,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         viewportHeight: viewport.height,
         worldWidth,
         worldHeight,
-        // Exact same cached premium space theme already used in BattleRoyaleMode.
-        worldTheme: "premium-space-battle",
+        // Weak hardware removes the animated terrain before it compromises
+        // entity transforms or spectator smoothness.
+        worldTheme: lowVisualMode ? "default" : "premium-space-battle",
         safeZoneRadius: zoneRadius,
         showZone: true,
         coreColorMap: coreColorMapRef.current,
@@ -2564,7 +2591,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     .map((player) => ({
       ...player,
       skin: normalizeSkin(player.skin),
-      isBot: false,
+      isBot: Boolean(player.isBot),
     }));
 
   const activeBadges = useMemo(() => getActiveEffectBadges(hudYou), [hudYou]);
@@ -2702,10 +2729,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         otherPlayerSize={112}
         otherPlayerQuality={0}
         liveDataRef={pixiLiveRef}
-        forceLowQuality={graphicsQuality === "low" || isMobileControls}
+        forceLowQuality={graphicsQuality === "low"}
         worldWidth={worldWidth}
         worldHeight={worldHeight}
-        worldTheme="premium-space-battle"
+        worldTheme={isConstrainedArenaDevice() || graphicsQuality === "low" ? "default" : "premium-space-battle"}
         safeZoneRadius={safeZoneRadius}
         showZone={true}
       />

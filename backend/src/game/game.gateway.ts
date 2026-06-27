@@ -103,8 +103,11 @@ const ZONE_PVP_BOT_ATTACK_RANGE = 1710;
 const ZONE_PVP_BOT_SAFE_DISTANCE = 760;
 const ZONE_PVP_BOT_ZONE_EDGE_BUFFER = 720;
 const ZONE_PVP_BOT_THREAT_RADIUS = 2200;
-const ZONE_PVP_BOT_AI_REPLAN_MIN_MS = 130;
-const ZONE_PVP_BOT_AI_REPLAN_MAX_MS = 240;
+// Bots keep their current held input on every 60 Hz simulation tick, but
+// expensive target/loot scans are spread farther apart. This saves CPU in a
+// 60-seat bot round without making trajectories feel stepped.
+const ZONE_PVP_BOT_AI_REPLAN_MIN_MS = 180;
+const ZONE_PVP_BOT_AI_REPLAN_MAX_MS = 320;
 const ZONE_PVP_BOT_SPAWN_MIN_DISTANCE = 1000;
 const ZONE_PVP_BOT_NAMES = ["DarkNova", "SkyHunter", "CyberCore", "NanoByte", "RedPulse"];
 const ZONE_PVP_BOT_SKINS = [
@@ -133,8 +136,10 @@ const ZONE_STATE_INTERVAL_HEAVY_MS = 50; // 20 Hz at 28+ players
 // Zone PvP keeps full snapshots compact, then sends a tiny transform-only
 // stream for nearby opponents. This decouples smooth remote motion from the
 // slower sender's render/input cadence and from heavier loot/HUD payloads.
-const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 15; // every simulation tick (~60 Hz) in small matches
-const ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS = 33; // 30 Hz for bot-filled Zone matches
+// Transform packets are disposable: newer coordinates replace older ones
+// instead of forming a backlog on slow devices.
+const ZONE_MOVEMENT_STREAM_INTERVAL_MS = 20; // 50 Hz for small human groups
+const ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS = 33; // 30 Hz for many humans
 const ZONE_MOVEMENT_STREAM_MAX_PLAYERS = ZONE_PVP_ROOM_MAX_PLAYERS;
 const STATIC_STATE_INTERVAL_MS = 500; // minimap + leaderboard
 const VIEWPORT_ITEM_STATE_INTERVAL_MS = 125; // static nearby loot, per player
@@ -1642,6 +1647,12 @@ export class GameGateway {
     const zoneRadius = this.getZonePvpZoneRadius(room);
     const spawn = this.getSafeSpawn(room, zoneRadius);
 
+    // The first human is remembered for diagnostics only. It never determines
+    // who can keep the round alive: a dead creator is a normal spectator.
+    if (!room.initialHumanPlayerId) {
+      room.initialHumanPlayerId = client.id;
+    }
+
     const player = {
       id: client.id,
       userId: data?.isGuest ? null : data?.userId,
@@ -1965,8 +1976,11 @@ export class GameGateway {
           room.status === "playing" &&
           room.players.size <= ZONE_MOVEMENT_STREAM_MAX_PLAYERS
         ) {
+          // 60 seats can mean only three real browser clients plus bots.
+          // Keep those viewers at 50 Hz; reduce only genuinely human-crowded
+          // rooms to 30 Hz.
           const movementInterval =
-            room.players.size >= PVP_CROWDED_STATE_THRESHOLD
+            this.getZoneHumanPlayerCount(room) >= PVP_CROWDED_STATE_THRESHOLD
               ? ZONE_MOVEMENT_STREAM_CROWDED_INTERVAL_MS
               : ZONE_MOVEMENT_STREAM_INTERVAL_MS;
 
@@ -4261,6 +4275,9 @@ export class GameGateway {
       id: `zone-pvp-${crypto.randomUUID()}`,
       status: "waiting",
       locked: false,
+      // Informational only. The first player never owns the room lifecycle:
+      // after death he becomes a spectator and the round continues.
+      initialHumanPlayerId: null,
       // Monotonic version lets the client discard stale volatile countdown packets.
       phaseVersion: 0,
       roundId: null,
@@ -4340,13 +4357,10 @@ export class GameGateway {
     for (const player of [...room.players.values()]) {
       if (player?.isBot) continue;
       const socketOnline = this.server.sockets.sockets.has(player.id);
-      // Dead human players are spectators, not inactive clients. Lobby players
-      // may also wait without gameplay input, so eviction begins only in play.
-      const shouldExpireActivePlayer =
-        room.status === "playing" &&
-        player.alive !== false &&
-        now - Number(player.lastSeenAt || now) > 30000;
-      if (!socketOnline || shouldExpireActivePlayer) {
+      // A connected human is retained regardless of death, spectator state,
+      // backgrounded mobile tab, or lack of recent input. The room is removed
+      // only after the last real socket actually leaves/disconnects.
+      if (!socketOnline) {
         this.removeZonePvpPlayer(player.id);
       }
     }
@@ -4401,7 +4415,15 @@ export class GameGateway {
     if (!room?.zonePvpMode || room.status !== "playing") return;
 
     const players = [...room.players.values()];
-    for (const viewer of players) {
+    const humanViewers = players.filter((player) => !player?.isBot);
+    if (!humanViewers.length) return;
+
+    // All viewers receive the same tick sequence. This makes the client-side
+    // timestamp buffer deterministic even when one device receives packets late.
+    const movementSequence = Number(room.zoneMovementSequence || 0) + 1;
+    room.zoneMovementSequence = movementSequence;
+
+    for (const viewer of humanViewers) {
       const socket = this.server.sockets.sockets.get(viewer.id);
       if (!socket) continue;
 
@@ -4410,7 +4432,7 @@ export class GameGateway {
           ? this.getStableSpectatorTarget(room, viewer)
           : null;
       const viewAnchor = spectatorTarget || viewer;
-      const range = viewer.alive === false ? VIEW_DISTANCE + 1200 : VIEW_DISTANCE;
+      const range = viewer.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + 260;
 
       const movementPlayers = players
         .filter(
@@ -4419,16 +4441,20 @@ export class GameGateway {
             (viewer.alive !== false || other.alive !== false) &&
             this.isNear(viewAnchor, other, range),
         )
+        .sort((a, b) => {
+          const ax = Number(a.x || 0) - Number(viewAnchor.x || 0);
+          const ay = Number(a.y || 0) - Number(viewAnchor.y || 0);
+          const bx = Number(b.x || 0) - Number(viewAnchor.x || 0);
+          const by = Number(b.y || 0) - Number(viewAnchor.y || 0);
+          return ax * ax + ay * ay - (bx * bx + by * by);
+        })
         .slice(0, ZONE_PVP_VISIBLE_PLAYERS_LIMIT)
         .map((other) => this.serializeZonePvpMovement(other));
 
-      // In small Zone matches this is a tiny transform-only packet. Emit it
-      // reliably and without compression: volatile transport could skip a
-      // direction-change frame from a phone/old laptop, causing a good viewer
-      // to see the remote drone surge forward and snap back.
-      const movementSequence = Number(room.zoneMovementSequence || 0) + 1;
-      room.zoneMovementSequence = movementSequence;
-      socket.compress(false).emit("zone-pvp:movement", {
+      // Real-time transforms must never queue behind old transforms. A dropped
+      // frame is harmless because the next packet/full snapshot replaces it;
+      // a queued old frame is what causes visible surges on weak hardware.
+      socket.volatile.compress(false).emit("zone-pvp:movement", {
         serverNow: now,
         sequence: movementSequence,
         roomId: room.id,

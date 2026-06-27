@@ -175,30 +175,49 @@ function getRendererDeviceProfile(forceLowQuality = false) {
   const weakDesktop = !mobile && (
     cores <= 4 || (deviceMemory !== null && deviceMemory <= 8)
   );
-  const lowSpecDesktop = Boolean(weakDesktop || forceLowQuality);
+  // A mobile caller may request a lighter renderer without being classified
+  // as a low-spec desktop. Modern phones keep their correct visual profile.
+  const lowSpecDesktop = Boolean(!mobile && (weakDesktop || forceLowQuality));
+  const forcedMobileQuality = Boolean(mobile && forceLowQuality);
 
-  return { mobile, dpr, deviceMemory, cores, weakMobile, weakDesktop, lowSpecDesktop };
+  return {
+    mobile,
+    dpr,
+    deviceMemory,
+    cores,
+    weakMobile,
+    weakDesktop,
+    lowSpecDesktop,
+    forcedMobileQuality,
+  };
 }
 
 function getRendererConfig(forceLowQuality) {
   const device = getRendererDeviceProfile(forceLowQuality);
   const lowSpec = device.weakMobile || device.lowSpecDesktop;
+  const lightMobile = device.forcedMobileQuality && !device.weakMobile;
 
-  // Old laptop GPUs gain most from a smaller WebGL back buffer. 0.80 is a
-  // deliberate ultra-low desktop tier: it saves ~36% pixel shading while
-  // keeping the HUD sharp because the HUD remains DOM.
-  const resolution = device.lowSpecDesktop ? 0.8 : lowSpec ? 1 : Math.min(1.5, device.dpr);
+  // The DOM HUD remains sharp. On weak GPUs reduce the WebGL back buffer and
+  // scenery first; player transforms and camera updates remain every frame.
+  const resolution = device.lowSpecDesktop
+    ? 0.75
+    : device.weakMobile
+      ? 0.9
+      : lightMobile
+        ? 1
+        : Math.min(1.5, device.dpr);
 
   return {
     ...device,
     resolution,
     antialias: !lowSpec,
-    maxStaticItems: lowSpec ? 48 : 180,
-    maxPlayers: device.lowSpecDesktop ? 12 : forceLowQuality || device.weakMobile ? 32 : MAX_RENDERED_PLAYERS,
-    maxSimplePlayers: device.lowSpecDesktop ? 14 : device.weakMobile ? 24 : 60,
-    maxProjectiles: lowSpec ? 12 : MAX_RENDERED_PROJECTILES,
-    staticSyncInterval: device.lowSpecDesktop ? 250 : device.mobile ? 150 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: device.lowSpecDesktop ? 4 : 1,
+    maxStaticItems: device.lowSpecDesktop ? 36 : device.weakMobile ? 48 : lightMobile ? 96 : 180,
+    maxPlayers: device.lowSpecDesktop ? 10 : device.weakMobile ? 20 : lightMobile ? 42 : MAX_RENDERED_PLAYERS,
+    maxSimplePlayers: device.lowSpecDesktop ? 16 : device.weakMobile ? 28 : lightMobile ? 48 : 60,
+    maxProjectiles: device.lowSpecDesktop ? 10 : device.weakMobile ? 14 : lightMobile ? 36 : MAX_RENDERED_PROJECTILES,
+    staticSyncInterval: device.lowSpecDesktop ? 300 : device.weakMobile ? 180 : lightMobile ? 140 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: device.lowSpecDesktop ? 6 : device.weakMobile ? 2 : 1,
+    disableExpensiveTerrain: Boolean(device.lowSpecDesktop || device.weakMobile),
   };
 }
 
@@ -1178,17 +1197,20 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
   // puffs: all effects are attached directly to each drone so spectator view
   // remains as sharp as live play.
   const safeEffectTier = clamp(Number(effectTier || 0), 0, 2);
+  // Reduced tiers keep body/facing/shield/escorts but skip translucent remote
+  // glow layers, which are much more expensive than transform updates.
+  const compactRemoteEffects = !isPlayer && safeEffectTier >= 1;
   const glowStrength =
     (isPlayer ? 0.72 : 0.50) *
     (safeEffectTier === 2 && !isPlayer ? 0.62 : 1);
   const glowPulse = 1 + Math.sin(now * 0.0055 + visual.hoverSeed) * 0.06;
 
-  visual.aura.visible = true;
+  visual.aura.visible = !compactRemoteEffects;
   visual.aura.rotation = now * 0.00018 + visual.hoverSeed * 0.09;
   visual.aura.scale.set(glowPulse * (1 + throttle * 0.075));
   visual.aura.alpha = glowStrength * (0.66 + Math.sin(now * 0.006 + visual.hoverSeed) * 0.16);
 
-  visual.engineGlow.visible = true;
+  visual.engineGlow.visible = !compactRemoteEffects;
   visual.engineGlow.position.set(0, 47);
   visual.engineGlow.scale.set(
     0.94 + throttle * 0.22 + Math.sin(now * 0.010 + visual.hoverSeed) * 0.04,
@@ -1210,8 +1232,8 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
   // Rotor animation stays deliberately identical while stationary or moving.
   // Movement already has banking/hover feedback; accelerating propeller spin
   // made remote drones look visually different and added needless motion.
-  const rotorSpeed = 0.016;
-  const rotorAlpha = 0.48;
+  const rotorSpeed = compactRemoteEffects ? 0.010 : 0.016;
+  const rotorAlpha = compactRemoteEffects ? 0.28 : 0.48;
   visual.rotorSpins.forEach((rotor, index) => {
     const direction = index % 2 === 0 ? 1 : -1;
     rotor.rotation = direction * now * rotorSpeed + index * Math.PI * 0.5;
@@ -1283,7 +1305,7 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
     // Color-specific energy beacon: clearer and more playful than smoke,
     // while still using one cached geometry per escort drone.
     const beaconPulse = 1 + Math.sin(now * 0.012 + index * 1.7 + visual.hoverSeed) * 0.16;
-    miniBeacon.visible = true;
+    miniBeacon.visible = !compactRemoteEffects;
     miniBeacon.position.set(miniX, miniY);
     miniBeacon.rotation = -now * 0.0026 + index * 1.37;
     miniBeacon.scale.set((0.86 + throttle * 0.12) * beaconPulse);
@@ -2166,7 +2188,7 @@ function PixiArenaRenderer({
           syncWorldTerrain(
             terrainLayer,
             terrainState,
-            data.worldTheme,
+            config.disableExpensiveTerrain ? "default" : data.worldTheme,
             data.worldWidth,
             data.worldHeight,
           );
