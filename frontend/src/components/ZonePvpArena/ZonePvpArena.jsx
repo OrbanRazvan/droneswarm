@@ -39,13 +39,13 @@ const SELF_IDLE_FREEZE_DISTANCE = 360;
 const REMOTE_SMOOTHING = 28;
 const REMOTE_PREDICTION = 1;
 const REMOTE_HARD_SNAP_DISTANCE = 720;
-const REMOTE_MAX_EXTRAPOLATE_MS = 240;
+const REMOTE_MAX_EXTRAPOLATE_MS = 450;
 
 // Projectiles are locally advanced every animation frame. Server updates only
 // correct drift; they never pull a projectile backwards to an older packet.
 const PROJECTILE_SMOOTHING = 42;
 const PROJECTILE_REMOTE_HARD_RESYNC_DISTANCE = 150;
-const PROJECTILE_REMOTE_MAX_AHEAD_MS = 220;
+const PROJECTILE_REMOTE_MAX_AHEAD_MS = 500;
 const PROJECTILE_MOVEMENT_STALE_MS = 300;
 const PROJECTILE_FRAME_SCALE = 60;
 const PROJECTILE_VISUAL_TTL = 10000;
@@ -71,7 +71,8 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 // Client-side prediction + server reconciliation + remote snapshot buffer.
 const INPUT_SEND_INTERVAL_MS = 20;
 const INPUT_HEARTBEAT_MS = 240;
-const SNAPSHOT_INTERPOLATION_DELAY_MS = 18;
+const SNAPSHOT_INTERPOLATION_DELAY_MS = 0;
+const CLOCK_SYNC_INTERVAL_MS = 1800;
 const SNAPSHOT_BUFFER_TTL_MS = 520;
 
 // Keep PvP desktop framing exactly locked to BattleRoyaleMode.
@@ -611,7 +612,7 @@ function projectProjectileToPresent(projectile, serverNow, serverClockOffset) {
   if (!projectile) return projectile;
 
   const packetServerTime = Number(serverNow || projectile.__serverNow || 0);
-  const estimatedServerNow = Date.now() - Number(serverClockOffset || 0);
+  const estimatedServerNow = Date.now() + Number(serverClockOffset || 0);
   const aheadMs = packetServerTime > 0
     ? clamp(estimatedServerNow - packetServerTime, 0, PROJECTILE_REMOTE_MAX_AHEAD_MS)
     : 0;
@@ -1055,29 +1056,70 @@ function getZoneStatusRank(status) {
   return ZONE_STATUS_RANK[String(status || "connecting")] ?? -1;
 }
 
-function shouldAcceptZonePhase(current, incoming = {}) {
+function shouldAcceptZonePhase(current, incoming = {}, allowRoomChange = true) {
   const incomingRoomId = incoming?.roomId ? String(incoming.roomId) : "";
   const currentRoomId = current?.roomId ? String(current.roomId) : "";
+  const incomingRoundId = incoming?.roundId ? String(incoming.roundId) : "";
+  const currentRoundId = current?.roundId ? String(current.roundId) : "";
   const incomingVersion = Number(incoming?.phaseVersion || 0);
   const currentVersion = Number(current?.phaseVersion ?? -1);
   const incomingRank = getZoneStatusRank(incoming?.status);
   const currentRank = getZoneStatusRank(current?.status);
 
-  // A real new room is a new match and must be accepted.
+  // Never replace a visible live match with an accidental fresh-lobby packet.
+  // A room change is accepted only immediately after a real socket reconnect
+  // or during initial admission.
   if (incomingRoomId && currentRoomId && incomingRoomId !== currentRoomId) {
-    return true;
+    return allowRoomChange || currentRank < ZONE_STATUS_RANK.playing;
+  }
+
+  // Zone PvP is intentionally one-way after PLAYING. Check this *before*
+  // phaseVersion so a delayed/lower-level packet can never reset the UI even
+  // if it somehow carries a larger version number.
+  if (currentRank >= ZONE_STATUS_RANK.playing && incomingRank < ZONE_STATUS_RANK.playing) {
+    return false;
+  }
+
+  if (
+    currentRoomId &&
+    incomingRoomId === currentRoomId &&
+    currentRank >= ZONE_STATUS_RANK.playing &&
+    currentRoundId &&
+    incomingRoundId &&
+    incomingRoundId !== currentRoundId
+  ) {
+    return false;
   }
 
   if (incomingVersion < currentVersion) return false;
   if (incomingVersion === currentVersion && incomingRank < currentRank) return false;
 
-  // Extra protection for packets produced by an older server without a
-  // phaseVersion. Once PLAYING/FINISHED is seen, never accept lobby states.
-  if (currentRank >= ZONE_STATUS_RANK.playing && incomingRank < ZONE_STATUS_RANK.playing) {
-    return false;
+  return true;
+}
+
+const ZONE_PVP_RESUME_STORAGE_KEY = "drone-swarm:zone-pvp-resume-v2";
+
+function createZonePvpResumeToken() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID().replace(/-/g, "");
   }
 
-  return true;
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+}
+
+function getZonePvpResumeToken() {
+  if (typeof window === "undefined") return createZonePvpResumeToken();
+
+  try {
+    const current = String(window.sessionStorage.getItem(ZONE_PVP_RESUME_STORAGE_KEY) || "").trim();
+    if (/^[A-Za-z0-9_-]{20,160}$/.test(current)) return current;
+
+    const next = createZonePvpResumeToken();
+    window.sessionStorage.setItem(ZONE_PVP_RESUME_STORAGE_KEY, next);
+    return next;
+  } catch {
+    return createZonePvpResumeToken();
+  }
 }
 
 function FlyingAttackDrone({ projectile }) {
@@ -1108,6 +1150,11 @@ function FlyingAttackDrone({ projectile }) {
 }
 
 function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
+  // The parent can recreate the user object during normal HUD/dashboard renders.
+  // Keep the networking effect independent from that object identity so it never
+  // emits zone-pvp:leave and starts a fresh session by accident.
+  const userRef = useRef(user);
+  userRef.current = user;
   const socketRef = useRef(null);
   // Join state is deliberately separate from socket.connected. A mobile
   // transport may be connected while its first join packet was delayed.
@@ -1143,9 +1190,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   // High-rate projectile transforms are kept outside React state so receiving
   // a 60 Hz stream never triggers HUD re-renders.
   const projectileMovementRef = useRef(new Map());
-  // Interpolate with the authoritative server clock rather than browser packet
-  // arrival time, which varies far more with mobile/old-laptop senders.
-  const serverClockOffsetRef = useRef(null);
+  // Estimated server-clock minus browser-clock. It is measured with a
+  // tiny RTT echo, so remote transforms can be rendered at present server
+  // time instead of one network trip in the past.
+  const serverClockOffsetRef = useRef(0);
+  const serverClockReadyRef = useRef(false);
+  const lastClockSyncAtRef = useRef(0);
+  const clockSyncTimerRef = useRef(null);
   const lastMovementSequenceRef = useRef(0);
   const lastCollisionVersionRef = useRef(0);
   const lastConfirmedHpRef = useRef(null);
@@ -1155,6 +1206,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const battlePrepareWasVisibleRef = useRef(false);
   const battleBeginTimerRef = useRef(null);
   const lastArenaStatusRef = useRef("connecting");
+  const zoneRoomChangeAllowedRef = useRef(true);
+  const zoneResumeTokenRef = useRef(getZonePvpResumeToken());
   const zonePhaseRef = useRef({
     roomId: null,
     roundId: null,
@@ -1270,14 +1323,30 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       zoneJoinAcceptedRef.current = true;
       zoneJoinAttemptRef.current = 0;
       clearZoneJoinRetry();
+      requestClockSync(true);
     };
 
-    const getZoneJoinPayload = () => ({
-      userId: user?.isGuest ? null : user?.id,
-      isGuest: Boolean(user?.isGuest),
-      username: getDisplayName(user),
-      skin: getSelectedSkin(user),
-    });
+    const getZoneJoinPayload = () => {
+      const currentUser = userRef.current || {};
+      return {
+        userId: currentUser?.isGuest ? null : currentUser?.id,
+        isGuest: Boolean(currentUser?.isGuest),
+        username: getDisplayName(currentUser),
+        skin: getSelectedSkin(currentUser),
+        resumeToken: zoneResumeTokenRef.current,
+      };
+    };
+
+    const requestClockSync = (force = false) => {
+      if (disposed || !socket.connected || !zoneJoinAcceptedRef.current) return;
+      const now = Date.now();
+      if (!force && now - Number(lastClockSyncAtRef.current || 0) < CLOCK_SYNC_INTERVAL_MS) return;
+      lastClockSyncAtRef.current = now;
+      socket.emit("zone-pvp:clock-sync", {
+        clientSentAt: now,
+        resumeToken: zoneResumeTokenRef.current,
+      });
+    };
 
     const requestZoneJoin = () => {
       if (disposed || zoneJoinAcceptedRef.current || !socket.connected) return;
@@ -1297,24 +1366,17 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const updateServerClockOffset = (serverNow) => {
       const serverTime = Number(serverNow || 0);
-      if (!serverTime) return;
+      if (!serverTime || serverClockReadyRef.current) return;
 
-      const observedOffset = Date.now() - serverTime;
-      const current = Number(serverClockOffsetRef.current);
-      if (!Number.isFinite(current)) {
-        serverClockOffsetRef.current = observedOffset;
-        return;
-      }
-
-      // Follow the actual clock offset in both directions. One-way correction
-      // left a strong viewer permanently behind after a late packet from a
-      // mobile or low-end laptop.
-      const boundedDelta = clamp(observedOffset - current, -5, 5);
-      serverClockOffsetRef.current = current + boundedDelta * 0.16;
+      // Before the first RTT echo arrives, keep a conservative fallback. The
+      // first clock-sync normally replaces this within one join round-trip.
+      const fallbackServerMinusClient = serverTime - Date.now();
+      const current = Number(serverClockOffsetRef.current || 0);
+      serverClockOffsetRef.current = current + clamp(fallbackServerMinusClient - current, -6, 6) * 0.12;
     };
 
     const applyState = (state) => {
-      if (!state || !shouldAcceptZonePhase(zonePhaseRef.current, state)) {
+      if (!state || !shouldAcceptZonePhase(zonePhaseRef.current, state, zoneRoomChangeAllowedRef.current)) {
         return;
       }
 
@@ -1336,7 +1398,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         stableCoreMapRef.current.clear();
         remoteSnapshotBufferRef.current.clear();
         projectileMovementRef.current.clear();
-        serverClockOffsetRef.current = null;
+        serverClockOffsetRef.current = 0;
+        serverClockReadyRef.current = false;
         lastMovementSequenceRef.current = 0;
         lastCollisionVersionRef.current = 0;
         predictedYouRef.current = null;
@@ -1351,6 +1414,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         ),
         status: state?.status || zonePhaseRef.current.status || "connecting",
       };
+      // Admission is now stable. A future unrelated room packet cannot wipe a
+      // live round; only an actual Socket.IO reconnect re-enables room change.
+      zoneRoomChangeAllowedRef.current = false;
 
       const now = performance.now();
       const nowWall = Date.now();
@@ -1601,6 +1667,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       // A new Engine.IO session has a new socket id and must be admitted again.
       zoneJoinAcceptedRef.current = false;
       zoneJoinAttemptRef.current = 0;
+      zoneRoomChangeAllowedRef.current = true;
+      serverClockReadyRef.current = false;
+      lastClockSyncAtRef.current = 0;
       clearZoneJoinRetry();
       requestZoneJoin();
     };
@@ -1612,6 +1681,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     const handleDisconnect = (reason) => {
       zoneJoinAcceptedRef.current = false;
       zoneJoinAttemptRef.current = 0;
+      zoneRoomChangeAllowedRef.current = true;
+      serverClockReadyRef.current = false;
       clearZoneJoinRetry();
       if (!disposed && reason !== "io client disconnect") {
         setConnectionError("Conexiunea Zone PvP s-a intrerupt. Se reconecteaza...");
@@ -1740,6 +1811,25 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       });
     };
 
+    const applyClockSync = (packet = {}) => {
+      const currentRoomId = String(zonePhaseRef.current?.roomId || "");
+      const packetRoomId = String(packet?.roomId || "");
+      if (currentRoomId && packetRoomId && currentRoomId !== packetRoomId) return;
+
+      const clientSentAt = Number(packet?.clientSentAt || 0);
+      const serverNow = Number(packet?.serverNow || 0);
+      const clientReceivedAt = Date.now();
+      const roundTripMs = clientReceivedAt - clientSentAt;
+      if (!clientSentAt || !serverNow || roundTripMs < 0 || roundTripMs > 5000) return;
+
+      // NTP-style estimate: server time at the midpoint of this tiny roundtrip.
+      const sampleServerMinusClient = serverNow - (clientSentAt + roundTripMs / 2);
+      const current = Number(serverClockOffsetRef.current || 0);
+      const maxStep = serverClockReadyRef.current ? 8 : 120;
+      serverClockOffsetRef.current = current + clamp(sampleServerMinusClient - current, -maxStep, maxStep) * (serverClockReadyRef.current ? 0.35 : 1);
+      serverClockReadyRef.current = true;
+    };
+
     // Lightweight movement stream: the backend sends only transform data at a
     // higher cadence than the full PvP snapshot. This keeps a player using a
     // slower laptop visually fluid on a stronger receiver without increasing
@@ -1749,6 +1839,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const packetRoomId = String(packet?.roomId || "");
       if (currentRoomId && packetRoomId && currentRoomId !== packetRoomId) return;
       if (packet?.status && packet.status !== "playing") return;
+      const currentRoundId = String(zonePhaseRef.current?.roundId || "");
+      const packetRoundId = String(packet?.roundId || "");
+      if (currentRoundId && packetRoundId && currentRoundId !== packetRoundId) return;
+      if (Number(packet?.phaseVersion || 0) < Number(zonePhaseRef.current?.phaseVersion || 0)) return;
 
       const now = performance.now();
       const serverNow = Number(packet?.serverNow || 0);
@@ -1871,6 +1965,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     socket.on("zone-pvp:joined", applyState);
     socket.on("zone-pvp:join-confirmed", handleJoinConfirmed);
     socket.on("zone-pvp:state", applyState);
+    socket.on("zone-pvp:clock-sync", applyClockSync);
     socket.on("zone-pvp:movement", applyMovementFrame);
     socket.on("zone-pvp:collision", applyZoneCollisionImpulse);
     socket.on("zone-pvp:combat", applyPrivateCombatEvent);
@@ -1945,6 +2040,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     sendInputRef.current = sendInputNow;
 
     const inputTimer = window.setInterval(sendInputNow, INPUT_SEND_INTERVAL_MS);
+    clockSyncTimerRef.current = window.setInterval(() => requestClockSync(), CLOCK_SYNC_INTERVAL_MS);
 
     const hudTimer = window.setInterval(() => {
       const data = worldRef.current;
@@ -1956,6 +2052,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       clearZoneJoinRetry();
       window.clearInterval(inputTimer);
       window.clearInterval(hudTimer);
+      if (clockSyncTimerRef.current) {
+        window.clearInterval(clockSyncTimerRef.current);
+        clockSyncTimerRef.current = null;
+      }
       document.removeEventListener("visibilitychange", recoverVisibleZoneSession);
       window.removeEventListener("pageshow", recoverVisibleZoneSession);
       socket.off("connect", handleConnect);
@@ -1964,6 +2064,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       socket.off("zone-pvp:joined", applyState);
       socket.off("zone-pvp:join-confirmed", handleJoinConfirmed);
       socket.off("zone-pvp:state", applyState);
+      socket.off("zone-pvp:clock-sync", applyClockSync);
       socket.off("zone-pvp:movement", applyMovementFrame);
       socket.off("zone-pvp:collision", applyZoneCollisionImpulse);
       socket.off("zone-pvp:combat", applyPrivateCombatEvent);
@@ -1974,7 +2075,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       socketRef.current = null;
       sendInputRef.current = () => {};
     };
-  }, [user]);
+  }, []);
 
   useEffect(() => {
     let rafId = 0;
@@ -2078,8 +2179,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       const serverClockOffset = Number(serverClockOffsetRef.current);
       const renderTime = Number.isFinite(serverClockOffset)
-        ? Date.now() - serverClockOffset - SNAPSHOT_INTERPOLATION_DELAY_MS
-        : now - SNAPSHOT_INTERPOLATION_DELAY_MS;
+        ? Date.now() + serverClockOffset - SNAPSHOT_INTERPOLATION_DELAY_MS
+        : Date.now() - SNAPSHOT_INTERPOLATION_DELAY_MS;
       const snapshotBuffers = remoteSnapshotBufferRef.current;
       const activeRemoteIds = new Set();
 
@@ -2212,11 +2313,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const liveYou = isSpectating
         ? (
             liveCameraSubject && liveCameraSubject.id !== me?.id
-              ? { ...liveCameraSubject, skin: normalizeSkin(liveCameraSubject.skin || getSelectedSkin(user)) }
+              ? { ...liveCameraSubject, skin: normalizeSkin(liveCameraSubject.skin || getSelectedSkin(userRef.current)) }
               : null
           )
         : me?.alive !== false
-          ? { ...me, skin: normalizeSkin(me?.skin || getSelectedSkin(user)) }
+          ? { ...me, skin: normalizeSkin(me?.skin || getSelectedSkin(userRef.current)) }
           : null;
 
       const liveIsMobileLike = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(hover: none)").matches;
