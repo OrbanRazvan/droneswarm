@@ -176,10 +176,12 @@ function getRendererDeviceProfile(forceLowQuality = false) {
     cores <= 4 || (deviceMemory !== null && deviceMemory <= 8)
   );
 
-  // `forceLowQuality` is a player preference and must not misclassify a phone
-  // as a desktop. Keeping the profiles distinct makes the cheap mobile path
-  // predictable and avoids a huge resize/rebuild when orientation changes.
-  const lowSpecDesktop = Boolean(!mobile && (weakDesktop || forceLowQuality));
+  // Weak desktop hardware starts in the same visual profile as a good desktop.
+  // It is not permanently downgraded based only on CPU/RAM heuristics; the
+  // adaptive loop below lowers detail only if real frame time proves it is needed.
+  // `forceLowQuality` remains an explicit player choice.
+  const lowSpecDesktop = Boolean(!mobile && forceLowQuality);
+  const visualFirstWeakDesktop = Boolean(!mobile && weakDesktop && !forceLowQuality);
   const forcedMobileQuality = Boolean(mobile && forceLowQuality);
 
   return {
@@ -190,6 +192,7 @@ function getRendererDeviceProfile(forceLowQuality = false) {
     weakMobile,
     weakDesktop,
     lowSpecDesktop,
+    visualFirstWeakDesktop,
     forcedMobileQuality,
   };
 }
@@ -198,32 +201,36 @@ function getRendererConfig(forceLowQuality) {
   const device = getRendererDeviceProfile(forceLowQuality);
   const lowSpec = device.weakMobile || device.lowSpecDesktop;
   const lightMobile = device.forcedMobileQuality && !device.weakMobile;
+  const visualFirstDesktop = device.visualFirstWeakDesktop;
 
-  // Low-end no longer means "dots only". We keep the nearby combat scene
-  // readable (real drone silhouettes + nearby loot), then let the adaptive
-  // tier reduce resolution/effects only when the measured frame time demands it.
+  // Older PCs now start visually close to a good desktop: same terrain,
+  // nearby premium drones and readable loot. The adaptive tier reacts to
+  // actual sustained frame pressure instead of pre-emptively showing dots.
   const resolution = device.lowSpecDesktop
-    ? 0.72
+    ? 0.78
     : device.weakMobile
       ? 0.74
-      : lightMobile
-        ? 0.90
-        : Math.min(1.35, device.dpr);
+      : visualFirstDesktop
+        ? Math.min(1.0, device.dpr)
+        : lightMobile
+          ? 0.90
+          : Math.min(1.35, device.dpr);
 
   return {
     ...device,
     resolution,
     antialias: !lowSpec && !lightMobile,
-    // Nearby drones stay premium. All remaining units use the lightweight
-    // quadcopter silhouette below, not circles/points.
-    maxStaticItems: device.lowSpecDesktop ? 76 : device.weakMobile ? 62 : lightMobile ? 76 : 120,
-    maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : lightMobile ? 7 : MAX_RENDERED_PLAYERS,
-    maxSimplePlayers: device.lowSpecDesktop ? 56 : device.weakMobile ? 52 : lightMobile ? 54 : 60,
-    maxProjectiles: device.lowSpecDesktop ? 5 : device.weakMobile ? 4 : lightMobile ? 7 : MAX_RENDERED_PROJECTILES,
-    maxSimpleProjectiles: device.lowSpecDesktop ? 34 : device.weakMobile ? 28 : lightMobile ? 32 : 48,
-    staticSyncInterval: device.lowSpecDesktop ? 340 : device.weakMobile ? 420 : lightMobile ? 280 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: device.lowSpecDesktop ? 5 : device.weakMobile ? 6 : lightMobile ? 3 : 1,
-    disableExpensiveTerrain: Boolean(device.lowSpecDesktop || device.weakMobile || lightMobile),
+    maxStaticItems: device.lowSpecDesktop ? 76 : device.weakMobile ? 62 : visualFirstDesktop ? 110 : lightMobile ? 76 : 120,
+    maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : visualFirstDesktop ? 10 : lightMobile ? 7 : MAX_RENDERED_PLAYERS,
+    maxSimplePlayers: device.lowSpecDesktop ? 56 : device.weakMobile ? 52 : visualFirstDesktop ? 60 : lightMobile ? 54 : 60,
+    maxProjectiles: device.lowSpecDesktop ? 5 : device.weakMobile ? 4 : visualFirstDesktop ? 14 : lightMobile ? 7 : MAX_RENDERED_PROJECTILES,
+    maxSimpleProjectiles: device.lowSpecDesktop ? 34 : device.weakMobile ? 28 : visualFirstDesktop ? 42 : lightMobile ? 32 : 48,
+    staticSyncInterval: device.lowSpecDesktop ? 340 : device.weakMobile ? 420 : visualFirstDesktop ? 170 : lightMobile ? 280 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: device.lowSpecDesktop ? 5 : device.weakMobile ? 6 : visualFirstDesktop ? 2 : lightMobile ? 3 : 1,
+    // Weak desktops keep the same premium space terrain. Only mobile/manual
+    // low quality begins without it. Under real sustained load the adaptive
+    // tier hides the terrain last-resort and restores it automatically.
+    disableExpensiveTerrain: Boolean(device.weakMobile || device.lowSpecDesktop || lightMobile),
   };
 }
 
@@ -2269,8 +2276,10 @@ function PixiArenaRenderer({
       let dynamicResolution = config.resolution;
 
       const applyAdaptiveResolution = () => {
-        if (!app?.renderer || !config.lowSpecDesktop && !config.weakMobile && !config.forcedMobileQuality) return;
-        const ratio = adaptiveTier === 2 ? 0.68 : adaptiveTier === 1 ? 0.84 : 1;
+        if (!app?.renderer || !(config.lowSpecDesktop || config.weakMobile || config.forcedMobileQuality || config.visualFirstWeakDesktop)) return;
+        const ratio = config.visualFirstWeakDesktop
+          ? (adaptiveTier === 2 ? 0.82 : adaptiveTier === 1 ? 0.92 : 1)
+          : (adaptiveTier === 2 ? 0.68 : adaptiveTier === 1 ? 0.84 : 1);
         const nextResolution = Math.max(0.34, Number((config.resolution * ratio).toFixed(2)));
         if (Math.abs(nextResolution - dynamicResolution) < 0.01) return;
         dynamicResolution = nextResolution;
@@ -2323,11 +2332,12 @@ function PixiArenaRenderer({
           scale: Math.max(0.1, Number(data.scale || 1)),
         };
 
-        // Terrain is purely decorative. Low-end profiles disable it before
-        // reducing entity transforms, so remote drones/projectiles still get
-        // a full display-rate update even on older phones.
-        terrainLayer.visible = !config.disableExpensiveTerrain;
-        if (!config.disableExpensiveTerrain) {
+        // Weak desktops keep the same premium terrain by default. If a real
+        // sustained GPU drop reaches emergency tier 2, terrain is temporarily
+        // hidden so combat stays responsive; it returns automatically at tier 0/1.
+        const shouldRenderTerrain = !config.disableExpensiveTerrain && adaptiveTier < 2;
+        terrainLayer.visible = shouldRenderTerrain;
+        if (shouldRenderTerrain) {
           try {
             syncWorldTerrain(
               terrainLayer,
@@ -2378,9 +2388,11 @@ function PixiArenaRenderer({
             ? clamp(Math.round(requestedStaticBudget), 0, staticBudgetCeiling)
             : config.maxStaticItems;
           const adaptiveItemCap =
-            adaptiveTier === 2 ? Math.min(baseItemBudget, config.lowSpecDesktop ? 34 : 54) :
-            adaptiveTier === 1 ? Math.min(baseItemBudget, config.lowSpecDesktop ? 42 : 92) :
-            baseItemBudget;
+            adaptiveTier === 2
+              ? Math.min(baseItemBudget, config.visualFirstWeakDesktop ? 64 : config.lowSpecDesktop ? 34 : 54)
+              : adaptiveTier === 1
+                ? Math.min(baseItemBudget, config.visualFirstWeakDesktop ? 88 : config.lowSpecDesktop ? 42 : 92)
+                : baseItemBudget;
           const itemBudget = adaptiveItemCap;
           const orbBudget = Math.floor(itemBudget * 0.70);
           const energyBudget = Math.floor(itemBudget * 0.24);
@@ -2439,9 +2451,9 @@ function PixiArenaRenderer({
           isPlayer: true,
         });
         const fullUnitCap = adaptiveTier === 2
-          ? Math.min(config.maxPlayers, config.lowSpecDesktop || config.weakMobile ? 2 : 3)
+          ? Math.min(config.maxPlayers, config.visualFirstWeakDesktop ? 5 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
           : adaptiveTier === 1
-            ? Math.min(config.maxPlayers, config.lowSpecDesktop || config.weakMobile ? 3 : 5)
+            ? Math.min(config.maxPlayers, config.visualFirstWeakDesktop ? 7 : config.lowSpecDesktop || config.weakMobile ? 3 : 5)
             : config.maxPlayers;
         const fullRemoteIds = syncUnitPool({
           pool: remotePool,
@@ -2479,9 +2491,9 @@ function PixiArenaRenderer({
           excludeIds: fullEntityIds,
         });
         const fullProjectileCap = adaptiveTier === 2
-          ? Math.min(config.maxProjectiles, config.lowSpecDesktop || config.weakMobile ? 2 : 3)
+          ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 5 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
           : adaptiveTier === 1
-            ? Math.min(config.maxProjectiles, config.lowSpecDesktop || config.weakMobile ? 3 : 5)
+            ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 8 : config.lowSpecDesktop || config.weakMobile ? 3 : 5)
             : config.maxProjectiles;
         const fullProjectileIds = syncProjectilePool({
           pool: projectilePool,

@@ -183,8 +183,9 @@ function isConstrainedDesktopDevice() {
     ? Number(navigator.deviceMemory)
     : null;
 
-  // This is intentionally conservative. It catches older office laptops and
-  // integrated-GPU machines before their renderer starts producing a backlog.
+  // This only selects nearby-object budgets. The Pixi renderer now starts
+  // older office laptops in the premium visual profile and adapts from real
+  // frame time instead of permanently removing the background.
   return cores <= 4 || (memory !== null && memory <= 6);
 }
 
@@ -2535,7 +2536,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const renderLimits = mobilePerformanceRef.current
         ? { detailed: 6, total: 50, orbs: 48, energy: 16, cores: 4, projectiles: 5, simpleProjectiles: 26 }
         : constrainedDesktopRef.current
-          ? { detailed: 8, total: 56, orbs: 64, energy: 22, cores: 6, projectiles: 7, simpleProjectiles: 32 }
+          ? { detailed: 10, total: 60, orbs: 96, energy: 34, cores: 7, projectiles: 14, simpleProjectiles: 42 }
           : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
       // Map insertion order is not distance order. Sort by the camera subject
@@ -2615,10 +2616,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldHeight,
         // Zone PvP is the 60-seat competitive mode: keep the world layer plain
         // so every GPU budget goes to drone/projectile transforms.
-        worldTheme: "default",
-        // Static pickups are now part of the low-end readability budget too.
-        // Renderer adapts further only when its measured frame time requires it.
-        staticItemBudget: mobilePerformanceRef.current ? 52 : constrainedDesktopRef.current ? 76 : 100,
+        // Zone PvP shares the same premium space background as the good-desktop
+        // profile. Pixi hides it only temporarily if emergency frame pressure is measured.
+        worldTheme: "premium-space-battle",
+        staticItemBudget: mobilePerformanceRef.current ? 52 : 110,
         safeZoneRadius: zoneRadius,
         showZone: true,
         coreColorMap: coreColorMapRef.current,
@@ -3027,7 +3028,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const reactiveRenderLimits = isMobileControls
     ? { detailed: 6, total: 50, orbs: 48, energy: 16, cores: 4, projectiles: 5, simpleProjectiles: 26 }
     : constrainedDesktopRef.current
-      ? { detailed: 8, total: 56, orbs: 64, energy: 22, cores: 6, projectiles: 7, simpleProjectiles: 32 }
+      ? { detailed: 10, total: 60, orbs: 96, energy: 34, cores: 7, projectiles: 14, simpleProjectiles: 42 }
       : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
   const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), reactiveRenderLimits.orbs);
@@ -3214,11 +3215,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         otherPlayerSize={112}
         otherPlayerQuality={0}
         liveDataRef={pixiLiveRef}
-        forceLowQuality={graphicsQuality === "low" || isMobileControls || constrainedDesktopRef.current}
+        // Weak laptops start with the premium desktop visuals. Pixi measures
+        // real frame time and lowers only far details if sustained pressure occurs.
+        forceLowQuality={graphicsQuality === "low" || isMobileControls}
         worldWidth={worldWidth}
         worldHeight={worldHeight}
-        worldTheme="default"
-        staticItemBudget={isRealMobileDevice() ? 52 : constrainedDesktopRef.current ? 76 : 100}
+        worldTheme="premium-space-battle"
+        staticItemBudget={isRealMobileDevice() ? 52 : 110}
         safeZoneRadius={safeZoneRadius}
         showZone={true}
       />
