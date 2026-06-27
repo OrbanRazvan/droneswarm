@@ -679,6 +679,19 @@ function predictUnitFromInput(unit, input, dt, worldWidth, worldHeight, zoneRadi
     nextY += move.ny * moveSpeed * safeDt;
   }
 
+  // Replays the server-approved physical hit immediately at 60Hz, so the
+  // local drone visibly jumps away just like Battle Royale instead of waiting
+  // for a state snapshot from Render.
+  const frameScale = safeDt * 60;
+  const pushX = Number(unit.knockbackX || 0);
+  const pushY = Number(unit.knockbackY || 0);
+  const pushPower = Math.hypot(pushX, pushY);
+  const hasCollisionPush = pushPower >= NETWORK_COLLISION_PUSH_MIN;
+  if (hasCollisionPush) {
+    nextX += pushX * frameScale;
+    nextY += pushY * frameScale;
+  }
+
   const safe = keepInsideSafeZone(
     nextX,
     nextY,
@@ -699,6 +712,12 @@ function predictUnitFromInput(unit, input, dt, worldWidth, worldHeight, zoneRadi
     moveAngle: move.moving ? Math.atan2(move.dy, move.dx) : unit.moveAngle ?? 0,
     attacking: Boolean(input.attacking),
     shieldActive: Boolean(unit.shieldActive || input.shield),
+    knockbackX: hasCollisionPush
+      ? pushX * Math.pow(NETWORK_COLLISION_PUSH_DECAY, frameScale)
+      : 0,
+    knockbackY: hasCollisionPush
+      ? pushY * Math.pow(NETWORK_COLLISION_PUSH_DECAY, frameScale)
+      : 0,
     mouseX: input.mouseX ?? unit.mouseX ?? safe.x,
     mouseY: input.mouseY ?? unit.mouseY ?? safe.y,
   };
@@ -721,6 +740,11 @@ const LOCAL_RELEASE_GRACE_MS = 250;
 const LOCAL_IDLE_SETTLE_ALPHA = 0.16;
 const LOCAL_IDLE_SETTLE_DEADZONE = 1.25;
 const LOCAL_HARD_RESYNC_DISTANCE = 1600;
+
+// Mirrors the server's decaying contact impulse. This is not client-side collision
+// detection; Zone receives it only after the backend validates a real drone hit.
+const NETWORK_COLLISION_PUSH_DECAY = 0.95;
+const NETWORK_COLLISION_PUSH_MIN = 0.035;
 
 function reconcileHeldInputUnit(local, server, now = performance.now(), lastLocalMoveAt = 0) {
   if (!server) return local;
@@ -758,6 +782,13 @@ function reconcileHeldInputUnit(local, server, now = performance.now(), lastLoca
     moveY: locallyPredicted ? local.moveY : server.moveY,
     moveAngle: locallyPredicted ? local.moveAngle : server.moveAngle,
     isMoving: locallyPredicted ? Boolean(local.isMoving) : Boolean(server.isMoving),
+    knockbackX: Math.abs(Number(server.knockbackX || 0)) > Math.abs(Number(local.knockbackX || 0))
+      ? Number(server.knockbackX || 0)
+      : Number(local.knockbackX || 0),
+    knockbackY: Math.abs(Number(server.knockbackY || 0)) > Math.abs(Number(local.knockbackY || 0))
+      ? Number(server.knockbackY || 0)
+      : Number(local.knockbackY || 0),
+    collisionVersion: Math.max(Number(local.collisionVersion || 0), Number(server.collisionVersion || 0)),
     serverX: server.x,
     serverY: server.y,
   };
@@ -1025,6 +1056,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   // arrival time, which varies far more with mobile/old-laptop senders.
   const serverClockOffsetRef = useRef(null);
   const lastMovementSequenceRef = useRef(0);
+  const lastCollisionVersionRef = useRef(0);
   const lastConfirmedHpRef = useRef(null);
   const lastCollectionSeqRef = useRef(0);
   const localBattlePrepareUntilRef = useRef(0);
@@ -1158,6 +1190,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         remoteSnapshotBufferRef.current.clear();
         serverClockOffsetRef.current = null;
         lastMovementSequenceRef.current = 0;
+        lastCollisionVersionRef.current = 0;
         predictedYouRef.current = null;
       }
 
@@ -1555,6 +1588,41 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
     };
 
+    const applyZoneCollisionImpulse = (event = {}) => {
+      const collisionVersion = Number(event.collisionVersion || 0);
+      if (!collisionVersion || collisionVersion <= Number(lastCollisionVersionRef.current || 0)) return;
+
+      const current = predictedYouRef.current || worldRef.current.you;
+      if (!current || current.alive === false) return;
+
+      lastCollisionVersionRef.current = collisionVersion;
+      const impulseX = Number(event.impulseX || 0);
+      const impulseY = Number(event.impulseY || 0);
+      const serverX = Number(event.x);
+      const serverY = Number(event.y);
+      const correctionDistance = Number.isFinite(serverX) && Number.isFinite(serverY)
+        ? Math.hypot(serverX - Number(current.x || 0), serverY - Number(current.y || 0))
+        : Infinity;
+
+      const next = {
+        ...current,
+        // A small authoritative separation fixes visual overlap. Ignore a late
+        // packet that is far behind the locally predicted drone.
+        x: correctionDistance <= 96 ? serverX : current.x,
+        y: correctionDistance <= 96 ? serverY : current.y,
+        knockbackX: impulseX,
+        knockbackY: impulseY,
+        collisionVersion,
+        lastCollisionAt: Number(event.serverTime || Date.now()),
+      };
+
+      predictedYouRef.current = next;
+      worldRef.current = { ...worldRef.current, you: next };
+      if (pixiLiveRef.current) {
+        pixiLiveRef.current = { ...pixiLiveRef.current, you: next };
+      }
+    };
+
     const applyPrivateCombatEvent = (event) => {
       const viewerId = String(worldRef.current.you?.id || socket.id || "");
       if (!event?.id || !viewerId) return;
@@ -1605,6 +1673,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     socket.on("zone-pvp:joined", applyState);
     socket.on("zone-pvp:state", applyState);
     socket.on("zone-pvp:movement", applyMovementFrame);
+    socket.on("zone-pvp:collision", applyZoneCollisionImpulse);
     socket.on("zone-pvp:combat", applyPrivateCombatEvent);
     socket.on("zone-pvp:collect", applyCollectSync);
     socket.on("zone-pvp:world-delta", applyWorldItemDelta);
@@ -1686,6 +1755,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       window.clearInterval(hudTimer);
       socket.off("connect", handleConnect);
       socket.off("zone-pvp:movement", applyMovementFrame);
+      socket.off("zone-pvp:collision", applyZoneCollisionImpulse);
       socket.off("zone-pvp:combat", applyPrivateCombatEvent);
       socket.off("zone-pvp:collect", applyCollectSync);
       socket.off("zone-pvp:world-delta", applyWorldItemDelta);

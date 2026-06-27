@@ -73,6 +73,9 @@ export declare class GameGateway {
     };
     applyBodyCollisionDamage(player: any, hpDamage: any, droneLoss?: number): void;
     addSmoothKnockback(player: any, dirX: any, dirY: any, strength: any): void;
+    private emitNormalPvpCollisionImpulse;
+    private emitZonePvpCollisionImpulse;
+    private applyCollisionSeparation;
     applyKnockbackStep(player: any, zoneRadius: any, room?: any): void;
     buildCollisionGrid(alivePlayers: any): Map<string, any[]>;
     getNearbyCellPlayers(grid: any, player: any): any[];
@@ -141,6 +144,8 @@ export declare class GameGateway {
         isMoving: boolean;
         knockbackX: any;
         knockbackY: any;
+        collisionVersion: number;
+        lastCollisionAt: number;
         nanoCoreActive: any;
         rotorCoreActive: any;
         swarmCoreActive: any;

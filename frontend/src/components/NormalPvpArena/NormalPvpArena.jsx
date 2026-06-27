@@ -1081,7 +1081,7 @@ const LOCAL_HARD_RESYNC_DISTANCE = 1600;
 // Mirrors the backend's authoritative decaying collision impulse. This is not
 // client-side collision detection: the server emits one reliable event only
 // after it validates a real drone-to-drone hit.
-const NETWORK_COLLISION_PUSH_DECAY = 0.82;
+const NETWORK_COLLISION_PUSH_DECAY = 0.95;
 const NETWORK_COLLISION_PUSH_MIN = 0.035;
 
 function reconcileHeldInputUnit(local, server, now = performance.now(), lastLocalMoveAt = 0) {
@@ -1810,8 +1810,17 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       lastCollisionVersionRef.current = collisionVersion;
       const impulseX = Number(event.impulseX || 0);
       const impulseY = Number(event.impulseY || 0);
+      const serverX = Number(event.x);
+      const serverY = Number(event.y);
+      const correctionDistance = Number.isFinite(serverX) && Number.isFinite(serverY)
+        ? Math.hypot(serverX - Number(current.x || 0), serverY - Number(current.y || 0))
+        : Infinity;
       const next = {
         ...current,
+        // Seed the local replay at the authoritative separation point only when
+        // it is close. A late packet must never yank a moving player backwards.
+        x: correctionDistance <= 96 ? serverX : current.x,
+        y: correctionDistance <= 96 ? serverY : current.y,
         // Replace, never accumulate: server collision cooldown creates exactly
         // one impulse per pair hit and the event can be retried on reconnect.
         knockbackX: impulseX,

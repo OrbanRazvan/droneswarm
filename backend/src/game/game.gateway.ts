@@ -183,16 +183,22 @@ const VAMPIRE_HEAL_RATIO = 0.25;
 const SWARM_CORE_DRONES = 2;
 const SHIELD_BREAKER_SHOTS = 1;
 const BODY_COLLISION_DISTANCE = 145;
-const BODY_COLLISION_COOLDOWN = 220;
+const BODY_COLLISION_COOLDOWN = 650;
 const BODY_COLLISION_BOTH_HAVE_DRONES_DAMAGE = 5;
 const BODY_COLLISION_BOTH_NO_DRONES_DAMAGE = 15;
 const BODY_COLLISION_WITH_DRONES_DAMAGE = 5;
 const BODY_COLLISION_WITHOUT_DRONES_DAMAGE = 15;
+// Collision physics is server-authoritative. The impulse is integrated as a
+// tiny decaying velocity, so it feels like a real drone bump instead of a
+// teleport. Pair detection still uses the existing grid in crowded rooms.
 const BODY_COLLISION_LIGHT_PUSH = 6;
 const BODY_COLLISION_MEDIUM_PUSH = 9;
 const BODY_COLLISION_STRONG_PUSH = 12;
-const BODY_COLLISION_PUSH_DECAY = 0.82;
+const BODY_COLLISION_PUSH_DECAY = 0.95;
 const BODY_COLLISION_PUSH_MIN = 0.04;
+// Small authoritative separation prevents two networked drones from staying overlapped
+// until the next tick. The decaying impulse then creates the Battle Royale-style bounce.
+const BODY_COLLISION_SEPARATION = 18;
 const CORE_TYPES = [
   "nano",
   "rotor",
@@ -1813,6 +1819,45 @@ export class GameGateway {
     player.moveAngle = Math.atan2(dirY, dirX);
     player.isMoving = true;
   }
+
+  // Normal PvP uses a small reliable one-player event in addition to normal
+  // state snapshots. The recipient starts the same decaying impulse locally on
+  // the next animation frame, instead of waiting for a 30 Hz snapshot. This is
+  // why contact remains responsive even when one player is on a slow laptop.
+  private emitNormalPvpCollisionImpulse(player: any, payload: any) {
+    if (!player?.id || !payload) return;
+    this.server?.to(String(player.id)).emit("normal-pvp:collision", payload);
+  }
+
+  // Zone uses the exact same reliable impulse model as Normal PvP. This packet
+  // is tiny and sent only on an actual validated collision, so it is safe even
+  // for slow laptops and mobile clients.
+  private emitZonePvpCollisionImpulse(player: any, payload: any) {
+    if (!player?.id || !payload) return;
+    this.server?.to(String(player.id)).emit("zone-pvp:collision", payload);
+  }
+
+  private applyCollisionSeparation(
+    player: any,
+    dirX: number,
+    dirY: number,
+    distance: number,
+    zoneRadius: number,
+    room: any,
+  ) {
+    const safe = this.keepInsideSafeZone(
+      Number(player.x || 0) + dirX * distance,
+      Number(player.y || 0) + dirY * distance,
+      zoneRadius,
+      PLAYER_RADIUS + 18,
+      Boolean(room?.zonePvpMode),
+    );
+    const width = room?.normalMode ? NORMAL_WORLD_WIDTH : WORLD_WIDTH;
+    const height = room?.normalMode ? NORMAL_WORLD_HEIGHT : WORLD_HEIGHT;
+    player.x = this.clamp(safe.x, PLAYER_RADIUS, width - PLAYER_RADIUS);
+    player.y = this.clamp(safe.y, PLAYER_RADIUS, height - PLAYER_RADIUS);
+  }
+
   applyKnockbackStep(player, zoneRadius, room = null) {
     const kx = player.knockbackX || 0;
     const ky = player.knockbackY || 0;
@@ -1920,19 +1965,28 @@ export class GameGateway {
   resolvePlayerPairCollision(a, b, room, now, zoneRadius) {
     const key = this.getCollisionKey(a.id, b.id);
     const lastAt = room.collisionCooldowns.get(key) || 0;
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const dist = Math.hypot(dx, dy) || 1;
-    if (dist > BODY_COLLISION_DISTANCE) return;
-
-    // In remote PvP, a permanent server-only push makes each local prediction
-    // diverge whenever two drones touch. That is the source of the large visual
-    // rollback seen after approaching another human player. Keep contact damage
-    // authoritative, but do not apply an invisible continuous positional force.
-    const networkPvp = Boolean(room?.normalMode || room?.zonePvpMode || room?.battleRoyaleOnlineMode);
+    const rawDx = Number(b.x || 0) - Number(a.x || 0);
+    const rawDy = Number(b.y || 0) - Number(a.y || 0);
+    const rawDistance = Math.hypot(rawDx, rawDy);
+    if (rawDistance > BODY_COLLISION_DISTANCE) return;
 
     if (this.isBattlePrepareLocked(room, now)) return;
     if (now - lastAt < BODY_COLLISION_COOLDOWN) return;
+
+    // Two network players can occasionally reach the exact same coordinate
+    // between snapshots. Give that degenerate pair a deterministic direction
+    // instead of creating a zero-length impulse that looks like no collision.
+    let dirX = 0;
+    let dirY = 0;
+    if (rawDistance > 0.001) {
+      dirX = rawDx / rawDistance;
+      dirY = rawDy / rawDistance;
+    } else {
+      const seed = String(key).split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
+      const angle = (seed % 360) * (Math.PI / 180);
+      dirX = Math.cos(angle);
+      dirY = Math.sin(angle);
+    }
 
     room.collisionCooldowns.set(key, now);
     const outcome = this.getBodyCollisionOutcome(a, b);
@@ -1941,13 +1995,57 @@ export class GameGateway {
     this.applyBodyCollisionDamage(a, outcome.aHpDamage, outcome.aDroneLoss);
     this.applyBodyCollisionDamage(b, outcome.bHpDamage, outcome.bDroneLoss);
 
-    // Preserve the original physical shove for local/PvE simulation only.
-    // Network PvP stays contact-based, so client/server positions remain aligned.
-    if (!networkPvp) {
-      const dirX = dx / dist;
-      const dirY = dy / dist;
+    // Battle Royale-style contact physics is deliberately enabled for both PvP
+    // modes. The server remains the sole authority; clients only replay the
+    // one reliable impulse immediately for visual responsiveness.
+    const appliesPhysicalPush = Boolean(room?.normalMode || room?.zonePvpMode || !room?.battleRoyaleOnlineMode);
+    if (appliesPhysicalPush) {
+      const overlap = Math.max(0, BODY_COLLISION_DISTANCE - rawDistance);
+      const separation = Math.max(
+        BODY_COLLISION_SEPARATION,
+        Math.min(BODY_COLLISION_SEPARATION * 2, overlap * 0.5 + 6),
+      );
+
+      this.applyCollisionSeparation(a, -dirX, -dirY, separation, zoneRadius, room);
+      this.applyCollisionSeparation(b, dirX, dirY, separation, zoneRadius, room);
       this.addSmoothKnockback(a, -dirX, -dirY, outcome.push);
       this.addSmoothKnockback(b, dirX, dirY, outcome.push);
+
+      if (room?.normalMode || room?.zonePvpMode) {
+        const collisionVersion = Number(room.collisionSequence || 0) + 1;
+        room.collisionSequence = collisionVersion;
+        a.collisionVersion = collisionVersion;
+        b.collisionVersion = collisionVersion;
+        a.lastCollisionAt = now;
+        b.lastCollisionAt = now;
+
+        const eventName = room.normalMode ? "normal-pvp:collision" : "zone-pvp:collision";
+        const emit = room.normalMode
+          ? this.emitNormalPvpCollisionImpulse.bind(this)
+          : this.emitZonePvpCollisionImpulse.bind(this);
+        const baseEvent = {
+          id: `${eventName}-${collisionVersion}-${key}`,
+          serverTime: now,
+          collisionVersion,
+        };
+
+        emit(a, {
+          ...baseEvent,
+          playerId: a.id,
+          x: a.x,
+          y: a.y,
+          impulseX: -dirX * outcome.push,
+          impulseY: -dirY * outcome.push,
+        });
+        emit(b, {
+          ...baseEvent,
+          playerId: b.id,
+          x: b.x,
+          y: b.y,
+          impulseX: dirX * outcome.push,
+          impulseY: dirY * outcome.push,
+        });
+      }
     }
 
     if (aWasAlive && !a.alive) {
@@ -2917,6 +3015,8 @@ export class GameGateway {
       isMoving: Boolean(player.isMoving),
       knockbackX: player.knockbackX || 0,
       knockbackY: player.knockbackY || 0,
+      collisionVersion: Number(player.collisionVersion || 0),
+      lastCollisionAt: Number(player.lastCollisionAt || 0),
       nanoCoreActive: player.nanoCoreActive,
       rotorCoreActive: player.rotorCoreActive,
       swarmCoreActive: player.swarmCoreActive,
@@ -2961,6 +3061,7 @@ export class GameGateway {
       projectiles: [],
       combatEvents: [],
       combatEventSequence: 0,
+      collisionSequence: 0,
       countdownStartedAt: null,
       createdAt: Date.now(),
       emptySince: Date.now(),
