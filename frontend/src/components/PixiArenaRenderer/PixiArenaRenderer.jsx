@@ -92,6 +92,12 @@ const MAIN_ROTOR_POINTS = [
   [-59, 45],
   [59, 45],
 ];
+const MINI_ROTOR_POINTS = [
+  [-17, -13],
+  [17, -13],
+  [-17, 13],
+  [17, 13],
+];
 const TURN_RESPONSE = 10.5;
 const BANK_RESPONSE = 13;
 const SHIELD_RESPONSE = 14;
@@ -421,6 +427,103 @@ function createRotorSpinContext(colors) {
   return ctx;
 }
 
+// Glow / exhaust effects are built from shared vector contexts, not blur filters
+// or per-frame geometry. This preserves WebGL performance even when several
+// drones are visible at once on mobile and older laptops.
+function createDroneAuraContext(colors) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+
+  ctx.circle(0, 0, 88).fill({ color: primary, alpha: 0.022 });
+  ctx.circle(0, 0, 72).fill({ color: secondary, alpha: 0.032 });
+  ctx.circle(0, 0, 61).stroke({ color: highlight, width: 1.8, alpha: 0.13 });
+  ctx.circle(0, 0, 48).stroke({ color: primary, width: 2.1, alpha: 0.18 });
+  ctx.circle(0, 0, 38).stroke({ color: dark, width: 1, alpha: 0.24 });
+
+  return ctx;
+}
+
+function createEngineGlowContext(colors) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+
+  // Rear plasma light for the large craft. It sits under the chassis and
+  // breathes through transform/alpha only during the render tick.
+  ctx.ellipse(0, 6, 22, 34).fill({ color: primary, alpha: 0.12 });
+  ctx.ellipse(0, 8, 13, 23).fill({ color: secondary, alpha: 0.20 });
+  ctx.ellipse(0, 10, 6.5, 13).fill({ color: highlight, alpha: 0.46 });
+  ctx.circle(0, 0, 7.2).fill({ color: dark, alpha: 0.62 });
+  ctx.circle(0, 1.5, 4.6).fill({ color: primary, alpha: 0.92 });
+
+  return ctx;
+}
+
+function createEngineVectorContext(colors) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+
+  // Sharp plasma vector, deliberately not smoke: a small sci-fi exhaust made
+  // from crisp geometry that stays readable while moving and while spectating.
+  ctx.poly([-12, 0, 12, 0, 8, 19, 3.8, 35, 0, 42, -3.8, 35, -8, 19])
+    .fill({ color: primary, alpha: 0.18 });
+  ctx.poly([-7.2, 1, 7.2, 1, 4.5, 20, 0, 31, -4.5, 20])
+    .fill({ color: secondary, alpha: 0.44 });
+  ctx.poly([-2.8, 4, 2.8, 4, 1.7, 21, 0, 29, -1.7, 21])
+    .fill({ color: highlight, alpha: 0.90 });
+  ctx.moveTo(-8, 5).lineTo(0, 40).lineTo(8, 5)
+    .stroke({ color: dark, width: 1.6, alpha: 0.44 });
+  return ctx;
+}
+
+function createMiniBeaconContext(colors) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+
+  // Escort drones now use a colorful rotating beacon rather than smoke.
+  ctx.circle(0, 0, 18).fill({ color: primary, alpha: 0.035 });
+  ctx.circle(0, 0, 13.5).stroke({ color: secondary, width: 1.4, alpha: 0.48 });
+  ctx.circle(0, 0, 9.8).stroke({ color: primary, width: 1.1, alpha: 0.36 });
+  ctx.circle(0, 0, 4.1).fill({ color: highlight, alpha: 0.38 });
+  for (let index = 0; index < 4; index += 1) {
+    const angle = -Math.PI * 0.5 + index * (Math.PI * 0.5);
+    const x = Math.cos(angle) * 15.6;
+    const y = Math.sin(angle) * 15.6;
+    ctx.roundRect(x - 1.8, y - 1.8, 3.6, 3.6, 1.2).fill({ color: dark, alpha: 0.72 });
+    ctx.circle(x, y, 1.55).fill({ color: primary, alpha: 0.96 });
+  }
+  return ctx;
+}
+
+function createProjectileAuraContext(colors) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+
+  // Bright lock-on halo for launched attack drones. It makes a projectile
+  // instantly recognizable without a blur filter or a long opaque trail.
+  ctx.circle(0, 0, 27).fill({ color: primary, alpha: 0.034 });
+  ctx.circle(0, 0, 21).stroke({ color: secondary, width: 1.7, alpha: 0.52 });
+  ctx.circle(0, 0, 15.5).stroke({ color: primary, width: 1.25, alpha: 0.42 });
+  ctx.circle(0, 0, 6.2).fill({ color: highlight, alpha: 0.18 });
+  ctx.moveTo(-25, 0).lineTo(-15, 0).stroke({ color: primary, width: 1.5, alpha: 0.70 });
+  ctx.moveTo(15, 0).lineTo(25, 0).stroke({ color: secondary, width: 1.5, alpha: 0.70 });
+  return ctx;
+}
+
+function createProjectileJetContext(colors) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+
+  ctx.poly([-7, 10, 7, 10, 5, 31, 0, 42, -5, 31])
+    .fill({ color: primary, alpha: 0.30 });
+  ctx.poly([-4.1, 11, 4.1, 11, 2.6, 28, 0, 35, -2.6, 28])
+    .fill({ color: secondary, alpha: 0.58 });
+  ctx.poly([-1.5, 12, 1.5, 12, 0.9, 27, 0, 31, -0.9, 27])
+    .fill({ color: highlight, alpha: 0.94 });
+  ctx.moveTo(-5.5, 13).lineTo(0, 38).lineTo(5.5, 13)
+    .stroke({ color: dark, width: 1.15, alpha: 0.42 });
+  return ctx;
+}
+
 function createOrbContext(color) {
   const ctx = new PIXI.GraphicsContext();
   // Premium pickup marker: high contrast, color identity and a clean sci-fi
@@ -585,6 +688,13 @@ function createUnitVisual(resources) {
   root.eventMode = "none";
   root.sortableChildren = false;
 
+  // Color aura is a cached vector context behind the drone. It gives every
+  // skin a readable neon presence without expensive blur filters.
+  const aura = new PIXI.Graphics(resources.droneAuraContexts.cyan);
+  aura.eventMode = "none";
+  aura.visible = true;
+  root.addChild(aura);
+
   const orbit = new PIXI.Graphics(resources.orbitContext);
   orbit.visible = false;
   root.addChild(orbit);
@@ -602,6 +712,16 @@ function createUnitVisual(resources) {
 
   const vehicle = new PIXI.Container();
   vehicle.eventMode = "none";
+
+  // A crisp color-matched plasma vector replaces the old smoke trail.
+  const engineVector = new PIXI.Graphics(resources.engineVectorContexts.cyan);
+  engineVector.eventMode = "none";
+  vehicle.addChild(engineVector);
+
+  const engineGlow = new PIXI.Graphics(resources.engineGlowContexts.cyan);
+  engineGlow.eventMode = "none";
+  vehicle.addChild(engineGlow);
+
   const body = new PIXI.Graphics(resources.droneContexts.cyan);
   vehicle.addChild(body);
 
@@ -620,6 +740,13 @@ function createUnitVisual(resources) {
 
   const miniLayer = new PIXI.Container();
   miniLayer.eventMode = "none";
+  const miniBeacons = Array.from({ length: MAX_MINI_DRONES }, () => {
+    const beacon = new PIXI.Graphics(resources.miniBeaconContexts.cyan);
+    beacon.visible = false;
+    beacon.eventMode = "none";
+    miniLayer.addChild(beacon);
+    return beacon;
+  });
   const minis = Array.from({ length: MAX_MINI_DRONES }, () => {
     const mini = new PIXI.Graphics(resources.miniContexts.cyan);
     mini.visible = false;
@@ -631,8 +758,12 @@ function createUnitVisual(resources) {
 
   return {
     root,
+    aura,
     body,
     vehicle,
+    engineVector,
+    engineGlow,
+    miniBeacons,
     rotorSpins,
     shieldShell,
     shieldRing,
@@ -641,6 +772,7 @@ function createUnitVisual(resources) {
     orbit,
     minis,
     skin: "cyan",
+    unitId: "",
     facing: 0,
     facingReady: false,
     bank: 0,
@@ -657,19 +789,39 @@ function createSimpleVisual(resources) {
 }
 
 function createProjectileVisual(resources) {
-  // Attack drones deliberately reuse the *same* shared mini-drone geometry
-  // as the drones orbiting a carrier. This keeps the visual language identical
-  // in every mode while still being a single pooled WebGL object per projectile.
+  // Launched attack drone: a miniature drone with a bright skin-specific
+  // lock-on halo, plasma vector and spinning rotors. All parts use shared
+  // graphics contexts and only transform per frame.
   const root = new PIXI.Container();
   root.eventMode = "none";
+
+  const aura = new PIXI.Graphics(resources.projectileAuraContexts.cyan);
+  aura.eventMode = "none";
+  root.addChild(aura);
+
+  const jet = new PIXI.Graphics(resources.projectileJetContexts.cyan);
+  jet.eventMode = "none";
+  root.addChild(jet);
 
   const body = new PIXI.Graphics(resources.miniContexts.cyan);
   body.eventMode = "none";
   root.addChild(body);
 
+  const rotorSpins = MINI_ROTOR_POINTS.map(([x, y]) => {
+    const rotor = new PIXI.Graphics(resources.rotorSpinContexts.cyan);
+    rotor.position.set(x, y);
+    rotor.scale.set(0.44);
+    rotor.eventMode = "none";
+    root.addChild(rotor);
+    return rotor;
+  });
+
   return {
     root,
+    aura,
+    jet,
     body,
+    rotorSpins,
     skin: "cyan",
     flightSeed: Math.random() * Math.PI * 2,
     lastSeenAt: 0,
@@ -913,11 +1065,43 @@ function upsertStaticLayer({ map, items, prefix, contexts, parent, now, maxItems
   }
 }
 
-function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = false) {
+function updateLaggedTrail(trail, targetX, targetY, response, scale, alpha, deltaSeconds, visible, reset = false) {
+  const root = trail?.root;
+  if (!root) return;
+
+  if (!visible || alpha <= 0.001) {
+    root.visible = false;
+    trail.ready = false;
+    return;
+  }
+
+  if (reset || !trail.ready) {
+    root.position.set(targetX, targetY);
+    trail.ready = true;
+  } else {
+    root.position.set(
+      damp(root.position.x, targetX, response, deltaSeconds),
+      damp(root.position.y, targetY, response, deltaSeconds),
+    );
+  }
+
+  root.visible = true;
+  root.alpha = alpha;
+  root.scale.set(scale);
+}
+
+
+function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = false, effectTier = 0) {
   const skin = normalizeSkin(unit.skin);
   if (visual.skin !== skin) {
     visual.skin = skin;
     visual.body.context = resources.droneContexts[skin] || resources.droneContexts.cyan;
+    visual.aura.context = resources.droneAuraContexts[skin] || resources.droneAuraContexts.cyan;
+    visual.engineVector.context = resources.engineVectorContexts[skin] || resources.engineVectorContexts.cyan;
+    visual.engineGlow.context = resources.engineGlowContexts[skin] || resources.engineGlowContexts.cyan;
+    visual.miniBeacons.forEach((beacon) => {
+      beacon.context = resources.miniBeaconContexts[skin] || resources.miniBeaconContexts.cyan;
+    });
     visual.rotorSpins.forEach((rotor) => {
       rotor.context = resources.rotorSpinContexts[skin] || resources.rotorSpinContexts.cyan;
     });
@@ -945,6 +1129,15 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
   // the physical-looking size of a full drone.
   const unifiedDroneScale = 1.04;
   visual.root.scale.set(unifiedDroneScale);
+
+  // Pool entries can be reassigned to a different nearby player/bot.
+  // Effects are transform-only and anchored to the craft, so no visual trail
+  // is carried from the previous owner.
+  const unitId = String(unit.id || "");
+  const unitChanged = visual.unitId !== unitId;
+  if (unitChanged) {
+    visual.unitId = unitId;
+  }
 
   const movementX = Number(unit.moveX || 0);
   const movementY = Number(unit.moveY || 0);
@@ -980,6 +1173,39 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
     subtleStretch * (1 + bankAmount * 0.035),
     subtleStretch * (1 - bankAmount * 0.022),
   );
+
+  // Premium color glow and crisp engine plasma. There are no lagged smoke
+  // puffs: all effects are attached directly to each drone so spectator view
+  // remains as sharp as live play.
+  const safeEffectTier = clamp(Number(effectTier || 0), 0, 2);
+  const glowStrength =
+    (isPlayer ? 0.72 : 0.50) *
+    (safeEffectTier === 2 && !isPlayer ? 0.62 : 1);
+  const glowPulse = 1 + Math.sin(now * 0.0055 + visual.hoverSeed) * 0.06;
+
+  visual.aura.visible = true;
+  visual.aura.rotation = now * 0.00018 + visual.hoverSeed * 0.09;
+  visual.aura.scale.set(glowPulse * (1 + throttle * 0.075));
+  visual.aura.alpha = glowStrength * (0.66 + Math.sin(now * 0.006 + visual.hoverSeed) * 0.16);
+
+  visual.engineGlow.visible = true;
+  visual.engineGlow.position.set(0, 47);
+  visual.engineGlow.scale.set(
+    0.94 + throttle * 0.22 + Math.sin(now * 0.010 + visual.hoverSeed) * 0.04,
+  );
+  visual.engineGlow.alpha =
+    (hasMovement ? 0.84 : 0.52) *
+    (safeEffectTier === 2 && !isPlayer ? 0.72 : 1);
+
+  visual.engineVector.visible = true;
+  visual.engineVector.position.set(0, 49);
+  visual.engineVector.scale.set(
+    0.78 + throttle * 0.38,
+    0.72 + throttle * 0.54 + Math.sin(now * 0.014 + visual.hoverSeed) * 0.08,
+  );
+  visual.engineVector.alpha =
+    (hasMovement ? 0.82 : 0.38) *
+    (safeEffectTier === 2 && !isPlayer ? 0.68 : 1);
 
   // Rotor animation stays deliberately identical while stationary or moving.
   // Movement already has banking/hover feedback; accelerating propeller spin
@@ -1038,17 +1264,32 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
   visual.minis.forEach((mini, index) => {
     const visible = index < count;
     mini.visible = visible;
-    if (!visible) return;
+    const miniBeacon = visual.miniBeacons[index];
+
+    if (!visible) {
+      miniBeacon.visible = false;
+      return;
+    }
 
     const angle = (index / Math.max(1, count)) * Math.PI * 2 + spin;
     const miniHover = Math.sin(now * 0.004 + index * 1.9) * 2.5;
-    mini.position.set(
-      Math.cos(angle) * orbitRadius + aimX,
-      Math.sin(angle) * orbitRadius + aimY + miniHover,
-    );
+    const miniX = Math.cos(angle) * orbitRadius + aimX;
+    const miniY = Math.sin(angle) * orbitRadius + aimY + miniHover;
+    mini.position.set(miniX, miniY);
     mini.rotation = visual.facing + Math.sin(now * 0.003 + index) * 0.045;
     const miniScale = 1 + Math.sin(now * 0.0045 + index * 1.3) * 0.035;
     mini.scale.set(miniScale);
+
+    // Color-specific energy beacon: clearer and more playful than smoke,
+    // while still using one cached geometry per escort drone.
+    const beaconPulse = 1 + Math.sin(now * 0.012 + index * 1.7 + visual.hoverSeed) * 0.16;
+    miniBeacon.visible = true;
+    miniBeacon.position.set(miniX, miniY);
+    miniBeacon.rotation = -now * 0.0026 + index * 1.37;
+    miniBeacon.scale.set((0.86 + throttle * 0.12) * beaconPulse);
+    miniBeacon.alpha =
+      (isPlayer ? 0.78 : 0.56) *
+      (safeEffectTier === 2 && !isPlayer ? 0.70 : 1);
   });
 
   visual.lastSeenAt = now;
@@ -1070,7 +1311,12 @@ function updateProjectileVisual(visual, projectile, resources, now) {
   const skin = normalizeSkin(projectile.skin);
   if (visual.skin !== skin) {
     visual.skin = skin;
+    visual.aura.context = resources.projectileAuraContexts[skin] || resources.projectileAuraContexts.cyan;
+    visual.jet.context = resources.projectileJetContexts[skin] || resources.projectileJetContexts.cyan;
     visual.body.context = resources.miniContexts[skin] || resources.miniContexts.cyan;
+    visual.rotorSpins.forEach((rotor) => {
+      rotor.context = resources.rotorSpinContexts[skin] || resources.rotorSpinContexts.cyan;
+    });
   }
 
   const heading = Number(
@@ -1081,18 +1327,34 @@ function updateProjectileVisual(visual, projectile, resources, now) {
   // Mini drone artwork faces up in local space; add 90° so its nose points
   // precisely along its real flight vector (angle 0 = moving right).
   const flightScale = projectile.pierceLeft > 1 ? 1.24 : 1.12;
-  const hover = Math.sin(now * 0.018 + visual.flightSeed) * 0.7;
+  const phase = now * 0.016 + visual.flightSeed;
+  const hover = Math.sin(phase * 1.12) * 0.72;
+  const pulse = 1 + Math.sin(phase * 1.45) * 0.08;
 
   visual.root.visible = true;
   visual.root.position.set(Number(projectile.x || 0), Number(projectile.y || 0));
   visual.root.rotation = heading + Math.PI * 0.5;
   visual.root.scale.set(flightScale);
-  visual.root.alpha = projectile.localOnly ? 0.9 : 1;
+  visual.root.alpha = projectile.localOnly ? 0.92 : 1;
+
+  visual.aura.rotation = -phase * 0.65;
+  visual.aura.scale.set(pulse * (projectile.pierceLeft > 1 ? 1.12 : 1));
+  visual.aura.alpha = projectile.localOnly ? 0.68 : 0.84;
+
+  visual.jet.position.set(0, 19);
+  visual.jet.scale.set(0.78 + Math.sin(phase * 1.7) * 0.07, 0.92 + Math.sin(phase * 2.1) * 0.16);
+  visual.jet.alpha = projectile.shieldBreaker || projectile.piercesShield ? 1 : 0.82;
+
   visual.body.position.set(0, hover);
+  visual.rotorSpins.forEach((rotor, index) => {
+    const direction = index % 2 === 0 ? 1 : -1;
+    rotor.rotation = direction * now * 0.032 + index * Math.PI * 0.5;
+    rotor.alpha = 0.78;
+  });
   visual.lastSeenAt = now;
 }
 
-function syncUnitPool({ pool, source, resources, parent, bounds, max, now, isPlayer = false, compact = false }) {
+function syncUnitPool({ pool, source, resources, parent, bounds, max, now, isPlayer = false, compact = false, effectTier = 0 }) {
   const visible = [];
   for (const unit of source || []) {
     if (!unit || unit.alive === false || !isVisibleInBounds(unit, bounds, 320)) continue;
@@ -1108,7 +1370,7 @@ function syncUnitPool({ pool, source, resources, parent, bounds, max, now, isPla
       visual.root.visible = false;
       continue;
     }
-    updateUnitVisual(visual, unit, resources, now, isPlayer, compact);
+    updateUnitVisual(visual, unit, resources, now, isPlayer, compact, effectTier);
   }
 }
 
@@ -1157,6 +1419,12 @@ function createResources(coreTypes = []) {
   const miniContexts = {};
   const simpleContexts = {};
   const rotorSpinContexts = {};
+  const droneAuraContexts = {};
+  const engineGlowContexts = {};
+  const engineVectorContexts = {};
+  const miniBeaconContexts = {};
+  const projectileAuraContexts = {};
+  const projectileJetContexts = {};
   const shieldShellContexts = {};
   const shieldRingContexts = {};
   const shieldGlyphContexts = {};
@@ -1166,6 +1434,12 @@ function createResources(coreTypes = []) {
     droneContexts[skin] = createDroneContext(colors);
     miniContexts[skin] = createMiniDroneContext(colors);
     rotorSpinContexts[skin] = createRotorSpinContext(colors);
+    droneAuraContexts[skin] = createDroneAuraContext(colors);
+    engineGlowContexts[skin] = createEngineGlowContext(colors);
+    engineVectorContexts[skin] = createEngineVectorContext(colors);
+    miniBeaconContexts[skin] = createMiniBeaconContext(colors);
+    projectileAuraContexts[skin] = createProjectileAuraContext(colors);
+    projectileJetContexts[skin] = createProjectileJetContext(colors);
     shieldShellContexts[skin] = createShieldShellContext(colors);
     shieldRingContexts[skin] = createShieldRingContext(colors);
     shieldGlyphContexts[skin] = createShieldGlyphContext(colors);
@@ -1186,6 +1460,12 @@ function createResources(coreTypes = []) {
     miniContexts,
     simpleContexts,
     rotorSpinContexts,
+    droneAuraContexts,
+    engineGlowContexts,
+    engineVectorContexts,
+    miniBeaconContexts,
+    projectileAuraContexts,
+    projectileJetContexts,
     shieldShellContexts,
     shieldRingContexts,
     shieldGlyphContexts,
@@ -1973,6 +2253,13 @@ function PixiArenaRenderer({
         }
 
         const playerSource = data.player && data.player.alive !== false ? [data.player] : [];
+        // Player keeps the complete visual treatment. Remote/bot effects scale
+        // down only when the actual device profile or adaptive frame budget
+        // needs it; gameplay simulation remains untouched.
+        const remoteEffectTier = Math.min(
+          2,
+          adaptiveTier + (config.lowSpecDesktop || config.weakMobile ? 1 : 0),
+        );
         syncUnitPool({
           pool: playerPool,
           source: playerSource,
@@ -1992,6 +2279,7 @@ function PixiArenaRenderer({
           max: adaptiveTier === 2 ? Math.min(config.maxPlayers, 12) : adaptiveTier === 1 ? Math.min(config.maxPlayers, 24) : config.maxPlayers,
           now,
           compact: config.weakMobile || adaptiveTier > 0,
+          effectTier: remoteEffectTier,
         });
         syncUnitPool({
           pool: botPool,
@@ -2002,6 +2290,7 @@ function PixiArenaRenderer({
           max: adaptiveTier === 2 ? Math.min(config.maxPlayers, 12) : adaptiveTier === 1 ? Math.min(config.maxPlayers, 24) : config.maxPlayers,
           now,
           compact: config.weakMobile || adaptiveTier > 0,
+          effectTier: remoteEffectTier,
         });
         syncSimplePool({
           pool: simpleBotPool,

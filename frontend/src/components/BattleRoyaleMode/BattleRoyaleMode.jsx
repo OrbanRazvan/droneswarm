@@ -1745,6 +1745,9 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const combatEventSequenceRef = useRef(0);
   const coresRef = useRef([]);
   const pixiLiveRef = useRef(null);
+  // The render loop runs from refs. Keep the selected spectator target in a
+  // ref too, so Pixi follows the exact bot chosen by the spectator panel.
+  const spectatorTargetIdRef = useRef(null);
 
   const lastFireRef = useRef(0);
   const lastCooldownTextRef = useRef(0);
@@ -1833,6 +1836,10 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const [winner, setWinner] = useState(null);
   const [matchSummary, setMatchSummary] = useState(null);
   const [spectatorTargetId, setSpectatorTargetId] = useState(null);
+
+  useEffect(() => {
+    spectatorTargetIdRef.current = spectatorTargetId;
+  }, [spectatorTargetId]);
 
   const displayName =
     user?.username || user?.firstName || user?.email?.split("@")?.[0] || "You";
@@ -5046,16 +5053,31 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const liveViewportWidth = window.innerWidth || 1280;
       const liveViewportHeight = window.innerHeight || 720;
       const liveScale = isMobileLandscape ? 1 : 0.72;
+      const requestedSpectatorId = spectatorTargetIdRef.current;
       const liveSpectator = !nextPlayer.alive
-        ? botsRef.current.find((bot) => bot.alive)
+        ? botsRef.current.find(
+            (bot) => bot.alive && bot.id === requestedSpectatorId,
+          ) || botsRef.current.find((bot) => bot.alive)
         : null;
       const liveTarget = nextPlayer.alive ? nextPlayer : (liveSpectator || nextPlayer);
 
-      const pixiBotPayload = getPixiBotRenderPayload(liveTarget, now);
+      // Render the followed bot through the same high-priority player pool as
+      // the live player. That preserves crisp full-detail visuals in spectator
+      // mode instead of treating the focused drone as a distant background bot.
+      const rawPixiBotPayload = getPixiBotRenderPayload(liveTarget, now);
+      const focusId = String(liveTarget?.id || "");
+      const pixiBotPayload = {
+        bots: (rawPixiBotPayload.bots || []).filter(
+          (bot) => String(bot?.id || "") !== focusId,
+        ),
+        simpleBots: (rawPixiBotPayload.simpleBots || []).filter(
+          (bot) => String(bot?.id || "") !== focusId,
+        ),
+      };
       const lowSpecRenderer = perfProfileRef.current.isWeakDesktop || graphicsQuality === "low";
 
       pixiLiveRef.current = {
-        player: nextPlayer.alive ? nextPlayer : null,
+        player: liveTarget?.alive !== false ? liveTarget : null,
         players: [],
         bots: pixiBotPayload.bots,
         simpleBots: pixiBotPayload.simpleBots,
