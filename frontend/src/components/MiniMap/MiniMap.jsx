@@ -10,7 +10,7 @@ const ORB_COLORS = {
   pink: "#ff4fc3",
 };
 
-const MINIMAP_DRAW_INTERVAL_MS = 83; // 12 FPS: suficient pentru HUD, mult mai ieftin pe mobil.
+const MINIMAP_DRAW_INTERVAL_MS = 100; // 10 FPS: HUD only; never competes with arena rendering.
 
 const CORE_COLORS = {
   nano: "#00eaff",
@@ -107,8 +107,10 @@ function MiniMap({
 
         return {
           ...orb,
-          x: prev.x + (orb.x - prev.x) * 0.35,
-          y: prev.y + (orb.y - prev.y) * 0.35,
+          // Loot is static. Using its latest authoritative position prevents
+          // stale minimap dots after a zone/world delta.
+          x: orb.x,
+          y: orb.y,
         };
       });
 

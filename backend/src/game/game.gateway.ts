@@ -125,28 +125,28 @@ const NORMAL_STATE_INTERVAL_CROWDED_MS = 33; // 30 Hz at 12+ players
 const NORMAL_STATE_INTERVAL_HEAVY_MS = 50; // 20 Hz at 28+ players
 const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
 const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
-// Zone PvP uses two explicitly separate replication lanes:
-// 1) binary, latest-wins transforms for visible drones/projectiles;
-// 2) low-frequency JSON state for HUD, loot, minimap and entity metadata.
-// Sending complete JSON worlds at 40-60 Hz was the source of the mobile backlog.
-const ZONE_STATE_INTERVAL_MS = 200;
+// Zone PvP has two lanes. Movement is a small latest-wins JSON packet at 30 Hz;
+// HUD, loot and minimap stay on a slower packet so they can never delay drones.
+const ZONE_STATE_INTERVAL_MS = 220;
 const ZONE_STATE_INTERVAL_CROWDED_MS = 240;
-const ZONE_STATE_INTERVAL_HEAVY_MS = 280;
-const ZONE_ENTITY_DEFINITION_INTERVAL_MS = 1400;
-const ZONE_PROJECTILE_DEFINITION_INTERVAL_MS = 450;
+const ZONE_STATE_INTERVAL_HEAVY_MS = 260;
+const ZONE_ENTITY_DEFINITION_INTERVAL_MS = 850;
+const ZONE_PROJECTILE_DEFINITION_INTERVAL_MS = 500;
 
-// 30 Hz binary snapshots are enough for 60/120 FPS interpolation while keeping
-// bandwidth and JS parsing low on old phones. A visual frame is still rendered
-// every requestAnimationFrame by the client.
+// A visual frame is rendered by requestAnimationFrame; 30 authoritative movement
+// packets per second provide enough samples for continuous interpolation without
+// overwhelming older mobile CPUs with 60 large JSON parses every second.
 const ZONE_TRANSFORM_INTERVAL_MS = 33;
-const ZONE_TRANSFORM_PLAYER_LIMIT = 28;
-const ZONE_TRANSFORM_PROJECTILE_LIMIT = 28;
-const ZONE_TRANSFORM_RANGE_PADDING = 760;
+const ZONE_TRANSFORM_PLAYER_LIMIT = 60;
+const ZONE_TRANSFORM_PROJECTILE_LIMIT = 48;
+const ZONE_TRANSFORM_RANGE_PADDING = 900;
+// Kept only for backwards-compatible type references. Zone no longer depends on
+// the fragile binary stream; movement uses a compact JSON event.
 const ZONE_TRANSFORM_PROTOCOL_VERSION = 1;
 const ZONE_TRANSFORM_PLAYER_BYTES = 32;
 const ZONE_TRANSFORM_PROJECTILE_BYTES = 28;
-const STATIC_STATE_INTERVAL_MS = 900; // minimap + leaderboard
-const VIEWPORT_ITEM_STATE_INTERVAL_MS = 450; // static nearby loot, per player
+const STATIC_STATE_INTERVAL_MS = 1100; // minimap + leaderboard
+const VIEWPORT_ITEM_STATE_INTERVAL_MS = 550; // static nearby loot, per player
 const PVP_CROWDED_STATE_THRESHOLD = 12;
 const PVP_HEAVY_STATE_THRESHOLD = 28;
 const ITEM_SPATIAL_CELL_SIZE = 1000;
@@ -4444,17 +4444,22 @@ export class GameGateway {
 
     for (const viewer of units) {
       if (viewer?.isBot) continue;
+
       const socket = this.server.sockets.sockets.get(viewer.id);
-      if (!socket) continue;
+      if (!socket?.connected) continue;
 
       const spectatorTarget = viewer.alive === false
         ? this.getStableSpectatorTarget(room, viewer)
         : null;
       const viewAnchor = spectatorTarget || viewer;
       const range = viewer.alive === false
-        ? VIEW_DISTANCE + 1500
+        ? VIEW_DISTANCE + 1700
         : VIEW_DISTANCE + ZONE_TRANSFORM_RANGE_PADDING;
 
+      // This deliberately contains only transform/combat fields. It does not
+      // carry loot, leaderboard, minimap, core metadata or large player objects.
+      // Older phones can parse it consistently, and Socket.IO can discard an
+      // obsolete packet when a new one is ready.
       const visiblePlayers = this.filterNear(
         viewAnchor,
         units.filter(
@@ -4464,77 +4469,55 @@ export class GameGateway {
         ),
         range,
         ZONE_TRANSFORM_PLAYER_LIMIT,
-      );
+      ).map((unit: any) => ({
+        id: unit.id,
+        x: Number(unit.x || 0),
+        y: Number(unit.y || 0),
+        velocityX: Number(unit.velocityX || 0),
+        velocityY: Number(unit.velocityY || 0),
+        moveAngle: Number(unit.moveAngle || 0),
+        isMoving: Boolean(unit.isMoving),
+        attacking: Boolean(unit.input?.attacking),
+        shieldActive: Boolean(unit.shieldActive),
+        alive: unit.alive !== false,
+        isBot: Boolean(unit.isBot),
+        drones: Math.max(0, Number(unit.drones || 0)),
+        hp: Number(unit.hp || 0),
+        // Skin is intentionally included here. A bot may become visible before
+        // its slow metadata packet reaches this client; it must still render.
+        skin: normalizeSkin(unit.skin),
+      }));
+
       const visibleProjectiles = this.filterNear(
         viewAnchor,
         room.projectiles || [],
-        range + 420,
+        range + 460,
         ZONE_TRANSFORM_PROJECTILE_LIMIT,
-      );
+      ).map((projectile: any) => ({
+        id: projectile.id,
+        ownerId: projectile.ownerId,
+        skin: normalizeSkin(projectile.skin),
+        x: Number(projectile.x || 0),
+        y: Number(projectile.y || 0),
+        vx: Number(projectile.vx || 0),
+        vy: Number(projectile.vy || 0),
+        angle: Number(projectile.angle || 0),
+        pierceLeft: Number(projectile.pierceLeft || 1),
+        shieldBreaker: Boolean(projectile.shieldBreaker),
+        piercesShield: Boolean(projectile.piercesShield),
+        createdAt: Number(projectile.createdAt || now),
+      }));
 
-      const bytes = Buffer.allocUnsafe(
-        8 +
-        visiblePlayers.length * ZONE_TRANSFORM_PLAYER_BYTES +
-        visibleProjectiles.length * ZONE_TRANSFORM_PROJECTILE_BYTES,
-      );
-      bytes.writeUInt16LE(ZONE_TRANSFORM_PROTOCOL_VERSION, 0);
-      bytes.writeUInt16LE(visiblePlayers.length, 2);
-      bytes.writeUInt16LE(visibleProjectiles.length, 4);
-      bytes.writeUInt16LE(0, 6);
-
-      let offset = 8;
-      for (const unit of visiblePlayers) {
-        let flags = 0;
-        if (unit.isMoving) flags |= 1;
-        if (unit.input?.attacking) flags |= 2;
-        if (unit.shieldActive) flags |= 4;
-        if (unit.alive !== false) flags |= 8;
-        if (unit.isBot) flags |= 16;
-
-        bytes.writeUInt32LE(this.ensureZonePvpNetId(room, unit.id), offset);
-        bytes.writeFloatLE(Number(unit.x || 0), offset + 4);
-        bytes.writeFloatLE(Number(unit.y || 0), offset + 8);
-        bytes.writeFloatLE(Number(unit.velocityX || 0), offset + 12);
-        bytes.writeFloatLE(Number(unit.velocityY || 0), offset + 16);
-        bytes.writeFloatLE(Number(unit.moveAngle || 0), offset + 20);
-        bytes.writeFloatLE(Number(unit.hp || 0), offset + 24);
-        bytes.writeUInt16LE(flags, offset + 28);
-        bytes.writeUInt8(Math.max(0, Math.min(255, Number(unit.drones || 0))), offset + 30);
-        bytes.writeUInt8(Math.max(0, Math.min(100, Math.round(Number(unit.energy || 0)))), offset + 31);
-        offset += ZONE_TRANSFORM_PLAYER_BYTES;
-      }
-
-      for (const projectile of visibleProjectiles) {
-        let flags = 0;
-        if (Number(projectile.pierceLeft || 1) > 1) flags |= 1;
-        if (projectile.shieldBreaker || projectile.piercesShield) flags |= 2;
-
-        bytes.writeUInt32LE(this.ensureZonePvpNetId(room, projectile.id), offset);
-        bytes.writeFloatLE(Number(projectile.x || 0), offset + 4);
-        bytes.writeFloatLE(Number(projectile.y || 0), offset + 8);
-        bytes.writeFloatLE(Number(projectile.vx || 0), offset + 12);
-        bytes.writeFloatLE(Number(projectile.vy || 0), offset + 16);
-        bytes.writeFloatLE(Number(projectile.angle || 0), offset + 20);
-        bytes.writeUInt16LE(flags, offset + 24);
-        bytes.writeUInt16LE(0, offset + 26);
-        offset += ZONE_TRANSFORM_PROJECTILE_BYTES;
-      }
-
-      // Volatile means an overloaded phone drops an old transform and receives
-      // the newest one. This is correct for world positions and prevents a
-      // stale packet queue from turning motion into visible slow motion.
-      socket.volatile.compress(false).emit(
-        "zone-pvp:transform",
-        {
-          roomId: room.id,
-          roundId: room.roundId || null,
-          phaseVersion: Number(room.phaseVersion || 0),
-          status: room.status,
-          sequence,
-          serverNow: now,
-        },
-        bytes,
-      );
+      socket.volatile.compress(false).emit("zone-pvp:movement", {
+        roomId: room.id,
+        roundId: room.roundId || null,
+        phaseVersion: Number(room.phaseVersion || 0),
+        status: room.status,
+        sequence,
+        serverNow: now,
+        players: visiblePlayers,
+        projectiles: visibleProjectiles,
+      });
     }
   }
 

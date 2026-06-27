@@ -217,12 +217,15 @@ function getRendererConfig(forceLowQuality) {
     // A 60-seat Zone round must protect transforms first. Detailed drone shells
     // are restricted on constrained devices; distant units remain cheap markers
     // and still receive every frame of binary transform data.
-    maxStaticItems: device.lowSpecDesktop ? 18 : device.weakMobile ? 20 : lightMobile ? 38 : 120,
-    maxPlayers: device.lowSpecDesktop ? 8 : device.weakMobile ? 8 : lightMobile ? 14 : MAX_RENDERED_PLAYERS,
-    maxSimplePlayers: device.lowSpecDesktop ? 20 : device.weakMobile ? 22 : lightMobile ? 30 : 60,
-    maxProjectiles: device.lowSpecDesktop ? 8 : device.weakMobile ? 9 : lightMobile ? 16 : MAX_RENDERED_PROJECTILES,
-    staticSyncInterval: device.lowSpecDesktop ? 420 : device.weakMobile ? 360 : lightMobile ? 260 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: device.lowSpecDesktop ? 10 : device.weakMobile ? 8 : lightMobile ? 5 : 1,
+    maxStaticItems: device.lowSpecDesktop ? 14 : device.weakMobile ? 16 : lightMobile ? 30 : 120,
+    maxPlayers: device.lowSpecDesktop ? 8 : device.weakMobile ? 10 : lightMobile ? 18 : MAX_RENDERED_PLAYERS,
+    // Every visible remote unit gets a transform. Only the far ones are reduced
+    // to cheap shared-context markers on constrained GPUs.
+    maxSimplePlayers: device.lowSpecDesktop ? 34 : device.weakMobile ? 40 : lightMobile ? 46 : 60,
+    maxProjectiles: device.lowSpecDesktop ? 8 : device.weakMobile ? 12 : lightMobile ? 20 : MAX_RENDERED_PROJECTILES,
+    maxSimpleProjectiles: device.lowSpecDesktop ? 18 : device.weakMobile ? 24 : lightMobile ? 30 : 48,
+    staticSyncInterval: device.lowSpecDesktop ? 500 : device.weakMobile ? 420 : lightMobile ? 300 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: device.lowSpecDesktop ? 12 : device.weakMobile ? 10 : lightMobile ? 6 : 1,
     disableExpensiveTerrain: Boolean(device.lowSpecDesktop || device.weakMobile || lightMobile),
   };
 }
@@ -809,7 +812,7 @@ function createUnitVisual(resources) {
 }
 
 function createSimpleVisual(resources) {
-  const root = new PIXI.Graphics(resources.simpleContext);
+  const root = new PIXI.Graphics(resources.simpleContexts.cyan);
   return { root, skin: "", lastSeenAt: 0 };
 }
 
@@ -2343,7 +2346,11 @@ function PixiArenaRenderer({
           resources,
           parent: projectilesLayer,
           bounds,
-          max: adaptiveTier === 2 ? 5 : adaptiveTier === 1 ? Math.min(14, Math.floor(config.maxProjectiles * 0.55)) : Math.floor(config.maxProjectiles * 0.55),
+          max: adaptiveTier === 2
+            ? Math.min(10, config.maxSimpleProjectiles)
+            : adaptiveTier === 1
+              ? Math.min(18, config.maxSimpleProjectiles)
+              : config.maxSimpleProjectiles,
           now,
         });
         // Normal PvP and Zone PvP request strict private combat text. In this

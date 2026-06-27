@@ -91,20 +91,20 @@ const NORMAL_STATE_INTERVAL_CROWDED_MS = 33;
 const NORMAL_STATE_INTERVAL_HEAVY_MS = 50;
 const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
 const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
-const ZONE_STATE_INTERVAL_MS = 200;
+const ZONE_STATE_INTERVAL_MS = 220;
 const ZONE_STATE_INTERVAL_CROWDED_MS = 240;
-const ZONE_STATE_INTERVAL_HEAVY_MS = 280;
-const ZONE_ENTITY_DEFINITION_INTERVAL_MS = 1400;
-const ZONE_PROJECTILE_DEFINITION_INTERVAL_MS = 450;
+const ZONE_STATE_INTERVAL_HEAVY_MS = 260;
+const ZONE_ENTITY_DEFINITION_INTERVAL_MS = 850;
+const ZONE_PROJECTILE_DEFINITION_INTERVAL_MS = 500;
 const ZONE_TRANSFORM_INTERVAL_MS = 33;
-const ZONE_TRANSFORM_PLAYER_LIMIT = 28;
-const ZONE_TRANSFORM_PROJECTILE_LIMIT = 28;
-const ZONE_TRANSFORM_RANGE_PADDING = 760;
+const ZONE_TRANSFORM_PLAYER_LIMIT = 60;
+const ZONE_TRANSFORM_PROJECTILE_LIMIT = 48;
+const ZONE_TRANSFORM_RANGE_PADDING = 900;
 const ZONE_TRANSFORM_PROTOCOL_VERSION = 1;
 const ZONE_TRANSFORM_PLAYER_BYTES = 32;
 const ZONE_TRANSFORM_PROJECTILE_BYTES = 28;
-const STATIC_STATE_INTERVAL_MS = 900;
-const VIEWPORT_ITEM_STATE_INTERVAL_MS = 450;
+const STATIC_STATE_INTERVAL_MS = 1100;
+const VIEWPORT_ITEM_STATE_INTERVAL_MS = 550;
 const PVP_CROWDED_STATE_THRESHOLD = 12;
 const PVP_HEAVY_STATE_THRESHOLD = 28;
 const ITEM_SPATIAL_CELL_SIZE = 1000;
@@ -3444,74 +3444,56 @@ let GameGateway = class GameGateway {
             if (viewer?.isBot)
                 continue;
             const socket = this.server.sockets.sockets.get(viewer.id);
-            if (!socket)
+            if (!socket?.connected)
                 continue;
             const spectatorTarget = viewer.alive === false
                 ? this.getStableSpectatorTarget(room, viewer)
                 : null;
             const viewAnchor = spectatorTarget || viewer;
             const range = viewer.alive === false
-                ? VIEW_DISTANCE + 1500
+                ? VIEW_DISTANCE + 1700
                 : VIEW_DISTANCE + ZONE_TRANSFORM_RANGE_PADDING;
             const visiblePlayers = this.filterNear(viewAnchor, units.filter((other) => other.id !== viewer.id &&
-                (viewer.alive !== false || other.alive !== false)), range, ZONE_TRANSFORM_PLAYER_LIMIT);
-            const visibleProjectiles = this.filterNear(viewAnchor, room.projectiles || [], range + 420, ZONE_TRANSFORM_PROJECTILE_LIMIT);
-            const bytes = Buffer.allocUnsafe(8 +
-                visiblePlayers.length * ZONE_TRANSFORM_PLAYER_BYTES +
-                visibleProjectiles.length * ZONE_TRANSFORM_PROJECTILE_BYTES);
-            bytes.writeUInt16LE(ZONE_TRANSFORM_PROTOCOL_VERSION, 0);
-            bytes.writeUInt16LE(visiblePlayers.length, 2);
-            bytes.writeUInt16LE(visibleProjectiles.length, 4);
-            bytes.writeUInt16LE(0, 6);
-            let offset = 8;
-            for (const unit of visiblePlayers) {
-                let flags = 0;
-                if (unit.isMoving)
-                    flags |= 1;
-                if (unit.input?.attacking)
-                    flags |= 2;
-                if (unit.shieldActive)
-                    flags |= 4;
-                if (unit.alive !== false)
-                    flags |= 8;
-                if (unit.isBot)
-                    flags |= 16;
-                bytes.writeUInt32LE(this.ensureZonePvpNetId(room, unit.id), offset);
-                bytes.writeFloatLE(Number(unit.x || 0), offset + 4);
-                bytes.writeFloatLE(Number(unit.y || 0), offset + 8);
-                bytes.writeFloatLE(Number(unit.velocityX || 0), offset + 12);
-                bytes.writeFloatLE(Number(unit.velocityY || 0), offset + 16);
-                bytes.writeFloatLE(Number(unit.moveAngle || 0), offset + 20);
-                bytes.writeFloatLE(Number(unit.hp || 0), offset + 24);
-                bytes.writeUInt16LE(flags, offset + 28);
-                bytes.writeUInt8(Math.max(0, Math.min(255, Number(unit.drones || 0))), offset + 30);
-                bytes.writeUInt8(Math.max(0, Math.min(100, Math.round(Number(unit.energy || 0)))), offset + 31);
-                offset += ZONE_TRANSFORM_PLAYER_BYTES;
-            }
-            for (const projectile of visibleProjectiles) {
-                let flags = 0;
-                if (Number(projectile.pierceLeft || 1) > 1)
-                    flags |= 1;
-                if (projectile.shieldBreaker || projectile.piercesShield)
-                    flags |= 2;
-                bytes.writeUInt32LE(this.ensureZonePvpNetId(room, projectile.id), offset);
-                bytes.writeFloatLE(Number(projectile.x || 0), offset + 4);
-                bytes.writeFloatLE(Number(projectile.y || 0), offset + 8);
-                bytes.writeFloatLE(Number(projectile.vx || 0), offset + 12);
-                bytes.writeFloatLE(Number(projectile.vy || 0), offset + 16);
-                bytes.writeFloatLE(Number(projectile.angle || 0), offset + 20);
-                bytes.writeUInt16LE(flags, offset + 24);
-                bytes.writeUInt16LE(0, offset + 26);
-                offset += ZONE_TRANSFORM_PROJECTILE_BYTES;
-            }
-            socket.volatile.compress(false).emit("zone-pvp:transform", {
+                (viewer.alive !== false || other.alive !== false)), range, ZONE_TRANSFORM_PLAYER_LIMIT).map((unit) => ({
+                id: unit.id,
+                x: Number(unit.x || 0),
+                y: Number(unit.y || 0),
+                velocityX: Number(unit.velocityX || 0),
+                velocityY: Number(unit.velocityY || 0),
+                moveAngle: Number(unit.moveAngle || 0),
+                isMoving: Boolean(unit.isMoving),
+                attacking: Boolean(unit.input?.attacking),
+                shieldActive: Boolean(unit.shieldActive),
+                alive: unit.alive !== false,
+                isBot: Boolean(unit.isBot),
+                drones: Math.max(0, Number(unit.drones || 0)),
+                hp: Number(unit.hp || 0),
+                skin: normalizeSkin(unit.skin),
+            }));
+            const visibleProjectiles = this.filterNear(viewAnchor, room.projectiles || [], range + 460, ZONE_TRANSFORM_PROJECTILE_LIMIT).map((projectile) => ({
+                id: projectile.id,
+                ownerId: projectile.ownerId,
+                skin: normalizeSkin(projectile.skin),
+                x: Number(projectile.x || 0),
+                y: Number(projectile.y || 0),
+                vx: Number(projectile.vx || 0),
+                vy: Number(projectile.vy || 0),
+                angle: Number(projectile.angle || 0),
+                pierceLeft: Number(projectile.pierceLeft || 1),
+                shieldBreaker: Boolean(projectile.shieldBreaker),
+                piercesShield: Boolean(projectile.piercesShield),
+                createdAt: Number(projectile.createdAt || now),
+            }));
+            socket.volatile.compress(false).emit("zone-pvp:movement", {
                 roomId: room.id,
                 roundId: room.roundId || null,
                 phaseVersion: Number(room.phaseVersion || 0),
                 status: room.status,
                 sequence,
                 serverNow: now,
-            }, bytes);
+                players: visiblePlayers,
+                projectiles: visibleProjectiles,
+            });
         }
     }
     broadcastZonePvpRoomState(room, now, reliable = false) {

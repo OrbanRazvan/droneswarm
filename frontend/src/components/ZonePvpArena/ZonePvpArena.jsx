@@ -37,7 +37,7 @@ const SELF_IDLE_FREEZE_DISTANCE = 360;
 const REMOTE_SMOOTHING = 34;
 const REMOTE_PREDICTION = 1.0;
 const REMOTE_HARD_SNAP_DISTANCE = 520;
-const REMOTE_MAX_EXTRAPOLATE_MS = 110;
+const REMOTE_MAX_EXTRAPOLATE_MS = 150;
 const ZONE_BINARY_PROTOCOL_VERSION = 1;
 const ZONE_BINARY_PLAYER_BYTES = 32;
 const ZONE_BINARY_PROJECTILE_BYTES = 28;
@@ -65,9 +65,9 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 
 // Multiplayer modern sync
 // Client-side prediction + server reconciliation + remote snapshot buffer.
-const INPUT_SEND_INTERVAL_MS = 20;
-const INPUT_HEARTBEAT_MS = 240;
-const SNAPSHOT_INTERPOLATION_DELAY_MS = 38;
+const INPUT_SEND_INTERVAL_MS = 33;
+const INPUT_HEARTBEAT_MS = 300;
+const SNAPSHOT_INTERPOLATION_DELAY_MS = 45;
 const SNAPSHOT_BUFFER_TTL_MS = 620;
 
 // Keep PvP desktop framing exactly locked to BattleRoyaleMode.
@@ -1569,28 +1569,30 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
 
       const snapshotsById = remoteSnapshotBufferRef.current;
-      const incomingForSnapshots = Array.isArray(state.players) ? state.players : [];
-      const activeRemoteIds = new Set();
-      const snapshotServerNow = Number(state?.serverNow || 0);
-      incomingForSnapshots.forEach((player) => {
-        if (!player?.id) return;
-        activeRemoteIds.add(player.id);
-        const oldBuffer = snapshotsById.get(player.id) || [];
-        snapshotsById.set(
-          player.id,
-          appendRemoteSnapshot(oldBuffer, player, now, snapshotServerNow),
-        );
-      });
+      // `players` is omitted from most low-frequency HUD packets. Treat an
+      // omitted field as "no metadata update", never as "every bot vanished".
+      // Removing buffers here was causing visible bots to blink/restart on
+      // slower phones whenever a lightweight HUD packet arrived.
+      if (Array.isArray(state.players)) {
+        const activeRemoteIds = new Set();
+        const snapshotServerNow = Number(state?.serverNow || 0);
 
-      for (const [id, entries] of snapshotsById.entries()) {
-        // A slower full HUD snapshot may temporarily omit a bot that is still
-        // present in the 60 Hz transform stream. Keep its recent buffer until
-        // it actually becomes stale instead of deleting/recreating it every
-        // snapshot (the source of visible stepping on phones).
-        const newest = entries?.[entries.length - 1];
-        const lastSeen = Number(newest?.__receivedAt || now);
-        if (!activeRemoteIds.has(id) && now - lastSeen > SNAPSHOT_BUFFER_TTL_MS) {
-          snapshotsById.delete(id);
+        state.players.forEach((player) => {
+          if (!player?.id) return;
+          activeRemoteIds.add(player.id);
+          const oldBuffer = snapshotsById.get(player.id) || [];
+          snapshotsById.set(
+            player.id,
+            appendRemoteSnapshot(oldBuffer, player, now, snapshotServerNow),
+          );
+        });
+
+        for (const [id, entries] of snapshotsById.entries()) {
+          const newest = entries?.[entries.length - 1];
+          const lastSeen = Number(newest?.__receivedAt || now);
+          if (!activeRemoteIds.has(id) && now - lastSeen > SNAPSHOT_BUFFER_TTL_MS * 2) {
+            snapshotsById.delete(id);
+          }
         }
       }
 
@@ -1767,10 +1769,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       });
     };
 
-    // Lightweight movement stream: the backend sends only transform data at a
-    // higher cadence than the full PvP snapshot. This keeps a player using a
-    // slower laptop visually fluid on a stronger receiver without increasing
-    // the cost of HUD, loot or minimap replication.
+    // Lightweight latest-wins transform stream. It contains only remote
+    // players and attack drones; no loot/minimap/HUD is allowed on this lane.
     const applyMovementFrame = (packet = {}) => {
       const currentRoomId = String(zonePhaseRef.current?.roomId || "");
       const packetRoomId = String(packet?.roomId || "");
@@ -1991,7 +1991,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     socket.on("zone-pvp:join-confirmed", handleJoinConfirmed);
     socket.on("zone-pvp:state", applyState);
     socket.on("zone-pvp:movement", applyMovementFrame);
-    socket.on("zone-pvp:transform", applyBinaryTransforms);
+    // The former binary lane is intentionally not subscribed. It could produce
+    // incomplete entity definitions on mobile and make bots disappear.
     socket.on("zone-pvp:collision", applyZoneCollisionImpulse);
     socket.on("zone-pvp:combat", applyPrivateCombatEvent);
     socket.on("zone-pvp:collect", applyCollectSync);
@@ -2085,7 +2086,6 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       socket.off("zone-pvp:join-confirmed", handleJoinConfirmed);
       socket.off("zone-pvp:state", applyState);
       socket.off("zone-pvp:movement", applyMovementFrame);
-      socket.off("zone-pvp:transform", applyBinaryTransforms);
       socket.off("zone-pvp:collision", applyZoneCollisionImpulse);
       socket.off("zone-pvp:combat", applyPrivateCombatEvent);
       socket.off("zone-pvp:collect", applyCollectSync);
@@ -2216,6 +2216,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         activeRemoteIds.add(id);
         remoteMap.set(id, {
           ...interpolated,
+          skin: normalizeSkin(interpolated.skin || "cyan"),
           x: interpolated.x,
           y: interpolated.y,
           attacking: Boolean(interpolated.attacking),
@@ -2326,16 +2327,28 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 980, liveCameraScale);
       const renderLimits = mobilePerformanceRef.current
-        ? { players: 14, orbs: 90, energy: 26, cores: 6, projectiles: 22 }
-        : null;
-      const visibleRemoteUnits = collectVisible(
-        remoteMap.values(),
-        (player) => player?.id !== liveYou?.id && isVisible(player, liveBounds, 380),
-        renderLimits?.players || MAX_VISIBLE_REMOTE_PLAYERS,
-        (player) => ({ ...player, skin: normalizeSkin(player.skin), isBot: Boolean(player.isBot) })
-      );
-      const livePlayers = visibleRemoteUnits.filter((player) => !player.isBot);
-      const liveBots = visibleRemoteUnits.filter((player) => player.isBot);
+        ? { detailed: 10, total: 46, orbs: 48, energy: 18, cores: 5, projectiles: 14, simpleProjectiles: 22 }
+        : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
+
+      // Map insertion order is not distance order. Sort by the camera subject
+      // so the nearest threats keep detailed shells and every other visible
+      // drone stays on a very cheap marker pool instead of vanishing.
+      const visibleRemoteUnits = [...remoteMap.values()]
+        .filter((player) => player?.id !== liveYou?.id && player?.alive !== false && isVisible(player, liveBounds, 460))
+        .map((player) => ({ ...player, skin: normalizeSkin(player.skin), isBot: Boolean(player.isBot) }))
+        .sort((a, b) => {
+          const ax = Number(a.x || 0) - Number(liveCameraSubject?.x || 0);
+          const ay = Number(a.y || 0) - Number(liveCameraSubject?.y || 0);
+          const bx = Number(b.x || 0) - Number(liveCameraSubject?.x || 0);
+          const by = Number(b.y || 0) - Number(liveCameraSubject?.y || 0);
+          return ax * ax + ay * ay - (bx * bx + by * by);
+        })
+        .slice(0, renderLimits.total);
+
+      const detailedRemoteUnits = visibleRemoteUnits.slice(0, renderLimits.detailed);
+      const simpleRemoteUnits = visibleRemoteUnits.slice(renderLimits.detailed);
+      const livePlayers = detailedRemoteUnits.filter((player) => !player.isBot);
+      const liveBots = detailedRemoteUnits.filter((player) => player.isBot);
 
       const liveOrbs = collectVisible(
         stableOrbMapRef.current.values(),
@@ -2352,22 +2365,31 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         (core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id) && isVisible(core, liveBounds, 130),
         renderLimits?.cores || 9
       );
-      const liveProjectiles = collectVisible(
-        projectileMap.values(),
-        (projectile) => isVisible(projectile, liveBounds, 180),
-        renderLimits?.projectiles || 45
+      const sortedVisibleProjectiles = [...projectileMap.values()]
+        .filter((projectile) => isVisible(projectile, liveBounds, 220))
+        .sort((a, b) => {
+          const ax = Number(a.x || 0) - Number(liveCameraSubject?.x || 0);
+          const ay = Number(a.y || 0) - Number(liveCameraSubject?.y || 0);
+          const bx = Number(b.x || 0) - Number(liveCameraSubject?.x || 0);
+          const by = Number(b.y || 0) - Number(liveCameraSubject?.y || 0);
+          return ax * ax + ay * ay - (bx * bx + by * by);
+        });
+      const liveProjectiles = sortedVisibleProjectiles.slice(0, renderLimits.projectiles);
+      const liveSimpleProjectiles = sortedVisibleProjectiles.slice(
+        renderLimits.projectiles,
+        renderLimits.projectiles + renderLimits.simpleProjectiles,
       );
 
       pixiLiveRef.current = {
         player: liveYou,
         players: livePlayers,
         bots: liveBots,
-        simpleBots: [],
+        simpleBots: simpleRemoteUnits,
         orbs: liveOrbs,
         energyCells: liveEnergyCells,
         cores: liveCores,
         projectiles: liveProjectiles,
-        simpleProjectiles: [],
+        simpleProjectiles: liveSimpleProjectiles,
         // Keep combat text private even on the render hot path.
         combatEvents: (data.combatEvents || []).filter(
           (event) =>
@@ -2793,14 +2815,28 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y * cameraScale : 0;
   const bounds = getViewportBounds(cameraX, cameraY, viewport, 720, cameraScale);
   const reactiveRenderLimits = isMobileControls
-    ? { players: 14, orbs: 90, energy: 26, cores: 6, projectiles: 22 }
-    : null;
+    ? { detailed: 10, total: 46, orbs: 48, energy: 18, cores: 5, projectiles: 14, simpleProjectiles: 22 }
+    : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
-  const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), reactiveRenderLimits?.orbs || 140);
-  const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), reactiveRenderLimits?.energy || 50);
-  const visibleCores = collectVisible(renderData.cores || [], (core) => isVisible(core, bounds, 120), reactiveRenderLimits?.cores || 9);
-  const visiblePlayers = collectVisible(renderData.players || [], (player) => isVisible(player, bounds, 360), reactiveRenderLimits?.players || MAX_VISIBLE_REMOTE_PLAYERS);
-  const visibleProjectiles = collectVisible(renderData.projectiles || [], (projectile) => isVisible(projectile, bounds, 160), reactiveRenderLimits?.projectiles || 45);
+  const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), reactiveRenderLimits.orbs);
+  const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), reactiveRenderLimits.energy);
+  const visibleCores = collectVisible(renderData.cores || [], (core) => isVisible(core, bounds, 120), reactiveRenderLimits.cores);
+  const visiblePlayers = [...(renderData.players || [])]
+    .filter((player) => isVisible(player, bounds, 420))
+    .sort((a, b) => {
+      const ax = Number(a.x || 0) - Number(cameraSubject?.x || 0);
+      const ay = Number(a.y || 0) - Number(cameraSubject?.y || 0);
+      const bx = Number(b.x || 0) - Number(cameraSubject?.x || 0);
+      const by = Number(b.y || 0) - Number(cameraSubject?.y || 0);
+      return ax * ax + ay * ay - (bx * bx + by * by);
+    })
+    .slice(0, reactiveRenderLimits.total);
+  const visibleProjectiles = [...(renderData.projectiles || [])]
+    .filter((projectile) => isVisible(projectile, bounds, 180))
+    .slice(0, reactiveRenderLimits.projectiles);
+  const visibleSimpleProjectiles = [...(renderData.projectiles || [])]
+    .filter((projectile) => isVisible(projectile, bounds, 180))
+    .slice(reactiveRenderLimits.projectiles, reactiveRenderLimits.projectiles + reactiveRenderLimits.simpleProjectiles);
 
   const rendererPlayer = isDead && spectatorTarget
     ? {
@@ -2815,13 +2851,17 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         }
       : null;
 
-  const rendererPlayers = visiblePlayers
+  const rendererRemoteUnits = visiblePlayers
     .filter((player) => player?.id !== rendererPlayer?.id)
     .map((player) => ({
       ...player,
       skin: normalizeSkin(player.skin),
       isBot: Boolean(player.isBot),
     }));
+  const rendererDetailedUnits = rendererRemoteUnits.slice(0, reactiveRenderLimits.detailed);
+  const rendererSimpleUnits = rendererRemoteUnits.slice(reactiveRenderLimits.detailed);
+  const rendererPlayers = rendererDetailedUnits.filter((player) => !player.isBot);
+  const rendererBots = rendererDetailedUnits.filter((player) => player.isBot);
 
   const activeBadges = useMemo(() => getActiveEffectBadges(hudYou), [hudYou]);
   const leaderboard = hudData.leaderboard || renderData.leaderboard || [];
@@ -2931,10 +2971,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       <PixiArenaRenderer
         player={rendererPlayer}
         players={rendererPlayers}
+        bots={rendererBots}
+        simpleBots={rendererSimpleUnits}
         orbs={visibleOrbs}
         energyCells={visibleEnergyCells}
         cores={visibleCores}
         projectiles={visibleProjectiles}
+        simpleProjectiles={visibleSimpleProjectiles}
         combatEvents={(renderData.combatEvents || []).filter(
           (event) =>
             Boolean(renderData.you?.id || worldRef.current.you?.id) &&
