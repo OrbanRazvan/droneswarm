@@ -2549,7 +2549,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const renderLimits = mobilePerformanceRef.current
         ? { detailed: 6, total: 50, orbs: 48, energy: 16, cores: 4, projectiles: 5, simpleProjectiles: 26 }
         : constrainedDesktopRef.current
-          ? { detailed: 10, total: 60, orbs: 96, energy: 34, cores: 7, projectiles: 14, simpleProjectiles: 42 }
+          ? { detailed: 7, total: 52, orbs: 74, energy: 26, cores: 5, projectiles: 8, simpleProjectiles: 30 }
           : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
       // Map insertion order is not distance order. Sort by the camera subject
@@ -2632,7 +2632,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         // Zone PvP shares the same premium space background as the good-desktop
         // profile. Pixi hides it only temporarily if emergency frame pressure is measured.
         worldTheme: "premium-space-battle",
-        staticItemBudget: mobilePerformanceRef.current ? 52 : 110,
+        staticItemBudget: mobilePerformanceRef.current ? 46 : constrainedDesktopRef.current ? 62 : 110,
         safeZoneRadius: zoneRadius,
         showZone: true,
         coreColorMap: coreColorMapRef.current,
@@ -3043,7 +3043,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     : constrainedDesktopRef.current
       // Keep premium drones nearby, but reduce far objects and static loot
       // first on older integrated GPUs.
-      ? { detailed: 8, total: 44, orbs: 72, energy: 24, cores: 5, projectiles: 10, simpleProjectiles: 30 }
+      ? { detailed: 7, total: 44, orbs: 64, energy: 22, cores: 5, projectiles: 8, simpleProjectiles: 28 }
       : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
   const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), reactiveRenderLimits.orbs);
@@ -3293,7 +3293,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldWidth={worldWidth}
         worldHeight={worldHeight}
         worldTheme="premium-space-battle"
-        staticItemBudget={isRealMobileDevice() ? 52 : constrainedDesktopRef.current ? 72 : 110}
+        staticItemBudget={isRealMobileDevice() ? 46 : constrainedDesktopRef.current ? 62 : 110}
         safeZoneRadius={safeZoneRadius}
         showZone={true}
       />

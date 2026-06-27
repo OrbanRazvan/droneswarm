@@ -1244,3 +1244,15 @@
     font-size: clamp(18px, 5vw, 26px);
   }
 }
+
+
+/* Extra low-end protection: preserve the green boundary but remove the
+   large composited smoke spread. The Pixi space background remains untouched. */
+.zone-pvp-dom-arena.is-constrained-desktop .zone-pvp-danger-smoke {
+  box-shadow: 0 0 0 9px rgba(103, 255, 177, 0.12) !important;
+  opacity: 0.78;
+}
+
+.zone-pvp-dom-arena.is-constrained-desktop .zone-pvp-battle-zone {
+  box-shadow: none !important;
+}

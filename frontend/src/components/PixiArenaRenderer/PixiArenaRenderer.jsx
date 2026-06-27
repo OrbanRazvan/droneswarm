@@ -211,7 +211,7 @@ function getRendererConfig(forceLowQuality) {
     : device.weakMobile
       ? 0.74
       : visualFirstDesktop
-        ? Math.min(1.0, device.dpr)
+        ? Math.min(0.84, device.dpr)
         : lightMobile
           ? 0.90
           : Math.min(1.35, device.dpr);
@@ -219,14 +219,14 @@ function getRendererConfig(forceLowQuality) {
   return {
     ...device,
     resolution,
-    antialias: !lowSpec && !lightMobile,
-    maxStaticItems: device.lowSpecDesktop ? 76 : device.weakMobile ? 62 : visualFirstDesktop ? 110 : lightMobile ? 76 : 120,
-    maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : visualFirstDesktop ? 10 : lightMobile ? 7 : MAX_RENDERED_PLAYERS,
+    antialias: !lowSpec && !lightMobile && !visualFirstDesktop,
+    maxStaticItems: device.lowSpecDesktop ? 66 : device.weakMobile ? 56 : visualFirstDesktop ? 84 : lightMobile ? 70 : 120,
+    maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : visualFirstDesktop ? 8 : lightMobile ? 7 : MAX_RENDERED_PLAYERS,
     maxSimplePlayers: device.lowSpecDesktop ? 56 : device.weakMobile ? 52 : visualFirstDesktop ? 60 : lightMobile ? 54 : 60,
-    maxProjectiles: device.lowSpecDesktop ? 5 : device.weakMobile ? 4 : visualFirstDesktop ? 14 : lightMobile ? 7 : MAX_RENDERED_PROJECTILES,
-    maxSimpleProjectiles: device.lowSpecDesktop ? 34 : device.weakMobile ? 28 : visualFirstDesktop ? 42 : lightMobile ? 32 : 48,
-    staticSyncInterval: device.lowSpecDesktop ? 340 : device.weakMobile ? 420 : visualFirstDesktop ? 170 : lightMobile ? 280 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: device.lowSpecDesktop ? 5 : device.weakMobile ? 6 : visualFirstDesktop ? 2 : lightMobile ? 3 : 1,
+    maxProjectiles: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : visualFirstDesktop ? 8 : lightMobile ? 6 : MAX_RENDERED_PROJECTILES,
+    maxSimpleProjectiles: device.lowSpecDesktop ? 28 : device.weakMobile ? 24 : visualFirstDesktop ? 30 : lightMobile ? 28 : 48,
+    staticSyncInterval: device.lowSpecDesktop ? 420 : device.weakMobile ? 460 : visualFirstDesktop ? 260 : lightMobile ? 320 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: device.lowSpecDesktop ? 7 : device.weakMobile ? 8 : visualFirstDesktop ? 3 : lightMobile ? 4 : 1,
     // Weak desktops keep the same premium space terrain. Only mobile/manual
     // low quality begins without it. Under real sustained load the adaptive
     // tier hides the terrain last-resort and restores it automatically.
@@ -882,19 +882,11 @@ function createSimpleProjectileVisual(resources) {
 }
 
 function createProjectileVisual(resources) {
-  // Launched attack drone: a miniature drone with a bright skin-specific
-  // lock-on halo, plasma vector and spinning rotors. All parts use shared
-  // graphics contexts and only transform per frame.
+  // One attack = one visible miniature drone. The former aura + jet were
+  // separate graphics in front/behind the body and could look like a second
+  // launched drone. The attack projectile is intentionally just this craft.
   const root = new PIXI.Container();
   root.eventMode = "none";
-
-  const aura = new PIXI.Graphics(resources.projectileAuraContexts.cyan);
-  aura.eventMode = "none";
-  root.addChild(aura);
-
-  const jet = new PIXI.Graphics(resources.projectileJetContexts.cyan);
-  jet.eventMode = "none";
-  root.addChild(jet);
 
   const body = new PIXI.Graphics(resources.miniContexts.cyan);
   body.eventMode = "none";
@@ -911,8 +903,6 @@ function createProjectileVisual(resources) {
 
   return {
     root,
-    aura,
-    jet,
     body,
     rotorSpins,
     skin: "cyan",
@@ -1444,8 +1434,6 @@ function updateProjectileVisual(visual, projectile, resources, now, compact = fa
   const skin = normalizeSkin(projectile.skin);
   if (visual.skin !== skin) {
     visual.skin = skin;
-    visual.aura.context = resources.projectileAuraContexts[skin] || resources.projectileAuraContexts.cyan;
-    visual.jet.context = resources.projectileJetContexts[skin] || resources.projectileJetContexts.cyan;
     visual.body.context = resources.miniContexts[skin] || resources.miniContexts.cyan;
     visual.rotorSpins.forEach((rotor) => {
       rotor.context = resources.rotorSpinContexts[skin] || resources.rotorSpinContexts.cyan;
@@ -1457,38 +1445,27 @@ function updateProjectileVisual(visual, projectile, resources, now, compact = fa
       Math.atan2(Number(projectile.vy || 0), Number(projectile.vx || 1)),
   );
 
-  // Mini drone artwork faces up in local space; add 90° so its nose points
-  // precisely along its real flight vector (angle 0 = moving right).
-  const flightScale = projectile.pierceLeft > 1 ? 1.24 : 1.12;
+  // The mini drone artwork faces up in local space.
+  const flightScale = projectile.pierceLeft > 1 ? 1.18 : 1.08;
   const phase = now * 0.016 + visual.flightSeed;
-  const hover = Math.sin(phase * 1.12) * 0.72;
-  const pulse = 1 + Math.sin(phase * 1.45) * 0.08;
+  const hover = compact ? 0 : Math.sin(phase * 1.12) * 0.44;
 
   visual.root.visible = true;
   visual.root.position.set(Number(projectile.x || 0), Number(projectile.y || 0));
   visual.root.rotation = heading + Math.PI * 0.5;
   visual.root.scale.set(flightScale);
-  visual.root.alpha = projectile.localOnly ? 0.92 : 1;
+  visual.root.alpha = projectile.localOnly ? 0.94 : 1;
+  visual.body.position.set(0, hover);
 
-  visual.aura.visible = !compact;
-  visual.jet.visible = !compact;
-  if (!compact) {
-    visual.aura.rotation = -phase * 0.65;
-    visual.aura.scale.set(pulse * (projectile.pierceLeft > 1 ? 1.12 : 1));
-    visual.aura.alpha = projectile.localOnly ? 0.68 : 0.84;
-
-    visual.jet.position.set(0, 19);
-    visual.jet.scale.set(0.78 + Math.sin(phase * 1.7) * 0.07, 0.92 + Math.sin(phase * 2.1) * 0.16);
-    visual.jet.alpha = projectile.shieldBreaker || projectile.piercesShield ? 1 : 0.82;
-  }
-
-  visual.body.position.set(0, compact ? 0 : hover);
+  // Weak laptops keep the drone itself, but not four independently animated
+  // projectile rotors. This saves per-frame transforms without changing shot
+  // position, hit logic, or the visible number of launched drones.
   visual.rotorSpins.forEach((rotor, index) => {
     const direction = index % 2 === 0 ? 1 : -1;
     rotor.visible = !compact;
     if (!compact) {
-      rotor.rotation = direction * now * 0.032 + index * Math.PI * 0.5;
-      rotor.alpha = 0.78;
+      rotor.rotation = direction * now * 0.026 + index * Math.PI * 0.5;
+      rotor.alpha = 0.72;
     }
   });
   visual.lastSeenAt = now;
@@ -1543,9 +1520,11 @@ function syncSimplePool({ pool, source, resources, parent, bounds, max, now, exc
 function syncProjectilePool({ pool, source, resources, parent, bounds, max, now, compact = false, simple = false, excludeIds = null }) {
   const visible = [];
   const ids = new Set();
+  const seen = new Set();
   for (const projectile of source || []) {
     const id = String(projectile?.id || "");
-    if (!projectile || !id || (excludeIds && excludeIds.has(id)) || !isVisibleInBounds(projectile, bounds, 120)) continue;
+    if (!projectile || !id || seen.has(id) || (excludeIds && excludeIds.has(id)) || !isVisibleInBounds(projectile, bounds, 120)) continue;
+    seen.add(id);
     visible.push(projectile);
     ids.add(id);
     if (visible.length >= max) break;
@@ -1578,8 +1557,6 @@ function createResources(coreTypes = []) {
   const engineGlowContexts = {};
   const engineVectorContexts = {};
   const miniBeaconContexts = {};
-  const projectileAuraContexts = {};
-  const projectileJetContexts = {};
   const shieldShellContexts = {};
   const shieldRingContexts = {};
   const shieldGlyphContexts = {};
@@ -1593,8 +1570,6 @@ function createResources(coreTypes = []) {
     engineGlowContexts[skin] = createEngineGlowContext(colors);
     engineVectorContexts[skin] = createEngineVectorContext(colors);
     miniBeaconContexts[skin] = createMiniBeaconContext(colors);
-    projectileAuraContexts[skin] = createProjectileAuraContext(colors);
-    projectileJetContexts[skin] = createProjectileJetContext(colors);
     shieldShellContexts[skin] = createShieldShellContext(colors);
     shieldRingContexts[skin] = createShieldRingContext(colors);
     shieldGlyphContexts[skin] = createShieldGlyphContext(colors);
@@ -1602,8 +1577,17 @@ function createResources(coreTypes = []) {
 
     simpleContexts[skin] = createLiteDroneContext(colors);
 
+    // Cheap fallback is still recognizably a tiny quadcopter, not an arrow.
+    // It is a shared static context, so many far attack drones stay inexpensive.
     const simpleProjectile = new PIXI.GraphicsContext();
-    simpleProjectile.poly([9, 0, -6, -5, -6, 5]).fill({ color: colors[0], alpha: 0.96 });
+    simpleProjectile.circle(0, 0, 7.2).fill({ color: colors[2], alpha: 0.96 });
+    simpleProjectile.circle(0, 0, 5.6).fill({ color: colors[0], alpha: 0.96 });
+    simpleProjectile.roundRect(-11, -2.1, 22, 4.2, 1.8).fill({ color: colors[1], alpha: 0.72 });
+    simpleProjectile.roundRect(-2.1, -11, 4.2, 22, 1.8).fill({ color: colors[1], alpha: 0.72 });
+    simpleProjectile.circle(-10, -10, 2.6).fill({ color: colors[0], alpha: 0.96 });
+    simpleProjectile.circle(10, -10, 2.6).fill({ color: colors[0], alpha: 0.96 });
+    simpleProjectile.circle(-10, 10, 2.6).fill({ color: colors[0], alpha: 0.96 });
+    simpleProjectile.circle(10, 10, 2.6).fill({ color: colors[0], alpha: 0.96 });
     simpleProjectileContexts[skin] = simpleProjectile;
   });
 
@@ -1622,8 +1606,6 @@ function createResources(coreTypes = []) {
     engineGlowContexts,
     engineVectorContexts,
     miniBeaconContexts,
-    projectileAuraContexts,
-    projectileJetContexts,
     shieldShellContexts,
     shieldRingContexts,
     shieldGlyphContexts,
@@ -2278,7 +2260,7 @@ function PixiArenaRenderer({
       const applyAdaptiveResolution = () => {
         if (!app?.renderer || !(config.lowSpecDesktop || config.weakMobile || config.forcedMobileQuality || config.visualFirstWeakDesktop)) return;
         const ratio = config.visualFirstWeakDesktop
-          ? (adaptiveTier === 2 ? 0.82 : adaptiveTier === 1 ? 0.92 : 1)
+          ? (adaptiveTier === 2 ? 0.68 : adaptiveTier === 1 ? 0.82 : 1)
           : (adaptiveTier === 2 ? 0.68 : adaptiveTier === 1 ? 0.84 : 1);
         const nextResolution = Math.max(0.34, Number((config.resolution * ratio).toFixed(2)));
         if (Math.abs(nextResolution - dynamicResolution) < 0.01) return;
@@ -2308,11 +2290,14 @@ function PixiArenaRenderer({
         const tickMs = Math.min(80, Math.max(1, Number(app.ticker.deltaMS || 16.7)));
         frameTimeEma = frameTimeEma * 0.92 + tickMs * 0.08;
 
-        if (now - lastAdaptiveChangeAt > 700) {
+        if (now - lastAdaptiveChangeAt > 520) {
+          const tierTwoThreshold = config.visualFirstWeakDesktop ? 19.2 : 21.5;
+          const tierOneThreshold = config.visualFirstWeakDesktop ? 17.0 : 17.2;
+          const recoveryThreshold = config.visualFirstWeakDesktop ? 16.35 : 16.6;
           const desiredTier =
-            frameTimeEma > 21.5 ? 2 :
-            frameTimeEma > 17.2 ? 1 :
-            frameTimeEma < 16.6 ? 0 :
+            frameTimeEma > tierTwoThreshold ? 2 :
+            frameTimeEma > tierOneThreshold ? 1 :
+            frameTimeEma < recoveryThreshold ? 0 :
             adaptiveTier;
           if (desiredTier !== adaptiveTier) {
             adaptiveTier = desiredTier;
@@ -2335,7 +2320,10 @@ function PixiArenaRenderer({
         // Weak desktops keep the same premium terrain by default. If a real
         // sustained GPU drop reaches emergency tier 2, terrain is temporarily
         // hidden so combat stays responsive; it returns automatically at tier 0/1.
-        const shouldRenderTerrain = !config.disableExpensiveTerrain && adaptiveTier < 2;
+        // The premium background remains visible on weak desktops; lower
+        // WebGL resolution and remote effects first instead of dropping it.
+        const shouldRenderTerrain = !config.disableExpensiveTerrain &&
+          (config.visualFirstWeakDesktop || adaptiveTier < 2);
         terrainLayer.visible = shouldRenderTerrain;
         if (shouldRenderTerrain) {
           try {
@@ -2439,7 +2427,11 @@ function PixiArenaRenderer({
         // needs it; gameplay simulation remains untouched.
         // Keep nearby remote drones visually close to desktop quality at tier 0.
         // Effects are removed only after actual frame-time pressure is detected.
-        const remoteEffectTier = adaptiveTier;
+        // Keep drone models and background, but remove animated remote glows/
+        // rotors on old PCs before frame time can fall below the 60 FPS target.
+        const remoteEffectTier = config.visualFirstWeakDesktop
+          ? Math.max(1, adaptiveTier)
+          : adaptiveTier;
         syncUnitPool({
           pool: playerPool,
           source: playerSource,
@@ -2451,9 +2443,9 @@ function PixiArenaRenderer({
           isPlayer: true,
         });
         const fullUnitCap = adaptiveTier === 2
-          ? Math.min(config.maxPlayers, config.visualFirstWeakDesktop ? 5 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
+          ? Math.min(config.maxPlayers, config.visualFirstWeakDesktop ? 4 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
           : adaptiveTier === 1
-            ? Math.min(config.maxPlayers, config.visualFirstWeakDesktop ? 7 : config.lowSpecDesktop || config.weakMobile ? 3 : 5)
+            ? Math.min(config.maxPlayers, config.visualFirstWeakDesktop ? 6 : config.lowSpecDesktop || config.weakMobile ? 3 : 5)
             : config.maxPlayers;
         const fullRemoteIds = syncUnitPool({
           pool: remotePool,
@@ -2491,9 +2483,9 @@ function PixiArenaRenderer({
           excludeIds: fullEntityIds,
         });
         const fullProjectileCap = adaptiveTier === 2
-          ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 5 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
+          ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 3 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
           : adaptiveTier === 1
-            ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 8 : config.lowSpecDesktop || config.weakMobile ? 3 : 5)
+            ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 5 : config.lowSpecDesktop || config.weakMobile ? 3 : 5)
             : config.maxProjectiles;
         const fullProjectileIds = syncProjectilePool({
           pool: projectilePool,
@@ -2503,7 +2495,7 @@ function PixiArenaRenderer({
           bounds,
           max: fullProjectileCap,
           now,
-          compact: adaptiveTier > 0,
+          compact: adaptiveTier > 0 || config.visualFirstWeakDesktop,
         });
         syncProjectilePool({
           pool: simpleProjectilePool,
