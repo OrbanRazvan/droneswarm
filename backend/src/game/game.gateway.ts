@@ -179,7 +179,14 @@ const EMPTY_ROOM_GRACE_MS = 30000;
 
 // A temporary network interruption must never create another Zone lobby or
 // restart an existing round. Human seats are reserved by a per-tab resume token.
-const ZONE_PVP_RECONNECT_GRACE_MS = 60000;
+// A real mobile/Wi-Fi handoff can pause a websocket for more than one minute.
+// Keep the authoritative Zone seat resumable long enough for Socket.IO to
+// reconnect and for the client to re-send its idempotent resume join.
+const ZONE_PVP_RECONNECT_GRACE_MS = 180000;
+// Input packets are volatile by design. The client also sends a tiny reliable
+// application heartbeat, so an active tab is never removed merely because a
+// burst of volatile inputs was dropped during a congested frame.
+const ZONE_PVP_SILENT_SOCKET_GRACE_MS = 180000;
 const ZONE_PVP_RESUME_TOKEN_MIN_LENGTH = 20;
 const ZONE_PVP_RESUME_TOKEN_MAX_LENGTH = 160;
 
@@ -283,13 +290,16 @@ function normalizeSkin(skin) {
   // Mobile browsers can briefly pause timers while a page changes orientation
   // or returns from the background. Keep the transport alive long enough for
   // the client-side idempotent join handshake to recover cleanly.
-  pingInterval: 25000,
-  pingTimeout: 60000,
+  // Keep transport liveness forgiving during Wi-Fi/4G handoffs and when
+  // browsers briefly pause timers. Gameplay still uses the explicit input
+  // freshness timeout, so a stale movement vector can never keep moving.
+  pingInterval: 20000,
+  pingTimeout: 120000,
   // Socket.IO can restore the Engine.IO session/rooms after a short network
   // interruption. Manual Zone seat recovery below remains the authoritative
   // fallback for deployments or browsers where recovery is not available.
   connectionStateRecovery: {
-    maxDisconnectionDuration: 120000,
+    maxDisconnectionDuration: 240000,
     skipMiddlewares: true,
   },
 })
@@ -1836,6 +1846,20 @@ export class GameGateway {
       playerId: client.id,
       serverNow: Date.now(),
     });
+  }
+
+
+
+  // A connection can remain alive while a browser temporarily drops volatile
+  // movement packets. This lightweight reliable heartbeat protects the Zone
+  // seat from cleanup without keeping the player moving or firing.
+  @SubscribeMessage("zone-pvp:heartbeat")
+  handleZonePvpHeartbeat(@ConnectedSocket() client: Socket) {
+    const room = this.getZonePvpRoomBySocket(client.id);
+    const player = room?.players.get(client.id);
+    if (!room || !player || player.isBot) return;
+
+    player.lastSeenAt = Date.now();
   }
 
   @SubscribeMessage("zone-pvp:input")
@@ -4530,7 +4554,7 @@ export class GameGateway {
         room.status === "playing" &&
         player.alive !== false &&
         socketOnline &&
-        now - Number(player.lastSeenAt || now) > 45000;
+        now - Number(player.lastSeenAt || now) > ZONE_PVP_SILENT_SOCKET_GRACE_MS;
 
       if (disconnectedTooLong || shouldExpireSilentActivePlayer) {
         // A disconnected resumable seat is intentionally no longer present in

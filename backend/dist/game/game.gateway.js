@@ -120,7 +120,8 @@ const NORMAL_CROWDED_ORB_ADD_LIMIT = 12;
 const NORMAL_CROWDED_ORB_EXTRA_CAP = 30;
 const SPECTATOR_KILL_CREDIT_WINDOW_MS = 6000;
 const EMPTY_ROOM_GRACE_MS = 30000;
-const ZONE_PVP_RECONNECT_GRACE_MS = 60000;
+const ZONE_PVP_RECONNECT_GRACE_MS = 180000;
+const ZONE_PVP_SILENT_SOCKET_GRACE_MS = 180000;
 const ZONE_PVP_RESUME_TOKEN_MIN_LENGTH = 20;
 const ZONE_PVP_RESUME_TOKEN_MAX_LENGTH = 160;
 const ROOM_START_COUNTDOWN_MS = 5000;
@@ -1444,6 +1445,13 @@ let GameGateway = class GameGateway {
             playerId: client.id,
             serverNow: Date.now(),
         });
+    }
+    handleZonePvpHeartbeat(client) {
+        const room = this.getZonePvpRoomBySocket(client.id);
+        const player = room?.players.get(client.id);
+        if (!room || !player || player.isBot)
+            return;
+        player.lastSeenAt = Date.now();
     }
     handleZonePvpInput(client, input) {
         const room = this.getZonePvpRoomBySocket(client.id);
@@ -3508,7 +3516,7 @@ let GameGateway = class GameGateway {
             const shouldExpireSilentActivePlayer = room.status === "playing" &&
                 player.alive !== false &&
                 socketOnline &&
-                now - Number(player.lastSeenAt || now) > 45000;
+                now - Number(player.lastSeenAt || now) > ZONE_PVP_SILENT_SOCKET_GRACE_MS;
             if (disconnectedTooLong || shouldExpireSilentActivePlayer) {
                 if (!this.zonePvpSocketRoom.has(player.id)) {
                     this.zonePvpSocketRoom.set(player.id, room.id);
@@ -4218,6 +4226,13 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], GameGateway.prototype, "handleZonePvpLeave", null);
 __decorate([
+    (0, websockets_1.SubscribeMessage)("zone-pvp:heartbeat"),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket]),
+    __metadata("design:returntype", void 0)
+], GameGateway.prototype, "handleZonePvpHeartbeat", null);
+__decorate([
     (0, websockets_1.SubscribeMessage)("zone-pvp:input"),
     __param(0, (0, websockets_1.ConnectedSocket)()),
     __param(1, (0, websockets_1.MessageBody)()),
@@ -4243,10 +4258,10 @@ exports.GameGateway = GameGateway = __decorate([
         allowUpgrades: true,
         perMessageDeflate: false,
         httpCompression: false,
-        pingInterval: 25000,
-        pingTimeout: 60000,
+        pingInterval: 20000,
+        pingTimeout: 120000,
         connectionStateRecovery: {
-            maxDisconnectionDuration: 120000,
+            maxDisconnectionDuration: 240000,
             skipMiddlewares: true,
         },
     }),

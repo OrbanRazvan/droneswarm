@@ -71,6 +71,7 @@ export declare class GameGateway {
     handleBattleRoyaleOnlineInput(client: Socket, input: any): void;
     handleZonePvpJoin(client: Socket, data: any): void;
     handleZonePvpLeave(client: Socket): void;
+    handleZonePvpHeartbeat(client: Socket): void;
     handleZonePvpInput(client: Socket, input: any): void;
     handleZonePvpInputStop(client: Socket, payload: any): void;
     startLoop(): void;
