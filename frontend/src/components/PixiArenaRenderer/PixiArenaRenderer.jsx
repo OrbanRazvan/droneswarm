@@ -176,13 +176,15 @@ function getRendererDeviceProfile(forceLowQuality = false) {
     cores <= 4 || (deviceMemory !== null && deviceMemory <= 8)
   );
 
-  // Weak desktop hardware starts in the same visual profile as a good desktop.
-  // It is not permanently downgraded based only on CPU/RAM heuristics; the
-  // adaptive loop below lowers detail only if real frame time proves it is needed.
-  // `forceLowQuality` remains an explicit player choice.
+  // Desktop/laptop weak profile remains exactly the existing one:
+  // automatic profile when hardware looks weak, or manual forceLowQuality.
+  // Only a non-mobile device that is not in either weak branch is premium.
   const lowSpecDesktop = Boolean(!mobile && forceLowQuality);
   const visualFirstWeakDesktop = Boolean(!mobile && weakDesktop && !forceLowQuality);
-  const forcedMobileQuality = Boolean(mobile && forceLowQuality);
+
+  // Mobile never uses the desktop premium profile. Stronger phones keep a
+  // balanced mobile image; weaker phones keep the original lower-budget path.
+  const mobileStandardProfile = Boolean(mobile);
 
   return {
     mobile,
@@ -193,60 +195,111 @@ function getRendererDeviceProfile(forceLowQuality = false) {
     weakDesktop,
     lowSpecDesktop,
     visualFirstWeakDesktop,
-    forcedMobileQuality,
+    mobileStandardProfile,
+    // Kept for compatibility with the rest of the renderer. Mobile no longer
+    // upgrades itself to desktop-premium graphics through this flag.
+    forcedMobileQuality: false,
   };
 }
 
 function getRendererConfig(forceLowQuality) {
   const device = getRendererDeviceProfile(forceLowQuality);
+  const lowSpec = device.weakMobile || device.lowSpecDesktop;
+  const visualFirstDesktop = device.visualFirstWeakDesktop;
+  const mobileProfile = device.mobileStandardProfile;
 
-  // Doar laptopurile / PC-urile slabe intră în profilul performant.
-  // Telefoanele primesc mereu grafica premium, exact ca device-urile bune.
-  const weakLaptop =
-    !device.mobile &&
-    (device.weakDesktop || Boolean(forceLowQuality));
+  // PREMIUM: only good desktop/laptop.
+  // WEAK DESKTOP: keeps exactly the previous visual-first / low-spec budgets.
+  // MOBILE: keeps a balanced mobile profile, never the desktop premium path.
+  const resolution = device.lowSpecDesktop
+    ? 0.68
+    : device.weakMobile
+      ? 0.66
+      : visualFirstDesktop
+        ? Math.min(0.68, device.dpr)
+        : mobileProfile
+          ? Math.min(0.80, device.dpr)
+          : Math.min(1.35, device.dpr);
 
   return {
     ...device,
+    resolution,
 
-    // IMPORTANT:
-    // Telefonul nu mai este niciodată redus automat, indiferent de RAM / core-uri.
-    weakMobile: false,
-    forcedMobileQuality: false,
+    // MSAA is premium-desktop only. Weak desktop and all mobile profiles keep
+    // the existing GPU-saving behavior.
+    antialias: !lowSpec && !mobileProfile && !visualFirstDesktop,
 
-    // Doar desktop/laptop slab primește optimizare.
-    weakDesktop: weakLaptop,
-    lowSpecDesktop: weakLaptop,
-    visualFirstWeakDesktop: false,
+    // Weak desktop numbers are intentionally unchanged from the current file.
+    // A capable desktop receives the full visual pool.
+    maxStaticItems: device.lowSpecDesktop
+      ? 38
+      : device.weakMobile
+        ? 38
+        : visualFirstDesktop
+          ? 58
+          : mobileProfile
+            ? 46
+            : 120,
 
-    // Telefon / PC bun: calitate premium.
-    // Laptop slab: rezoluție mai mică pentru FPS stabil.
-    resolution: weakLaptop
-      ? 0.72
-      : Math.min(1.35, device.dpr),
+    maxPlayers: device.lowSpecDesktop
+      ? 4
+      : device.weakMobile
+        ? 3
+        : visualFirstDesktop
+          ? 5
+          : mobileProfile
+            ? 5
+            : MAX_RENDERED_PLAYERS,
 
-    // Laptop slab: fără MSAA, pentru a nu consuma GPU inutil.
-    // Telefon și PC bun: anti-alias activ.
-    antialias: !weakLaptop,
-
-    // Telefon și PC bun: toate obiectele premium.
-    // Laptop slab: limite mai mici, dar dronele apropiate rămân complete.
-    maxStaticItems: weakLaptop ? 48 : 120,
-    maxPlayers: weakLaptop ? 6 : MAX_RENDERED_PLAYERS,
     maxSimplePlayers: 60,
 
-    // Attack drone-urile apropiate rămân prioritate și pe laptop slab.
-    maxProjectiles: weakLaptop ? 10 : MAX_RENDERED_PROJECTILES,
-    maxSimpleProjectiles: weakLaptop ? 32 : 48,
+    maxProjectiles: device.lowSpecDesktop
+      ? 6
+      : device.weakMobile
+        ? 5
+        : visualFirstDesktop
+          ? 9
+          : mobileProfile
+            ? 6
+            : MAX_RENDERED_PROJECTILES,
 
-    // Telefon și PC bun: animații complete.
-    // Laptop slab: mai rar pentru orbs/energy, ca dronele să rămână la 60 FPS.
-    staticSyncInterval: weakLaptop ? 520 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: weakLaptop ? 7 : 1,
+    maxSimpleProjectiles: device.lowSpecDesktop
+      ? 30
+      : device.weakMobile
+        ? 26
+        : visualFirstDesktop
+          ? 32
+          : mobileProfile
+            ? 26
+            : 48,
 
-    // Telefonul păstrează terrain-ul premium.
-    // Laptop slab îl oprește, fiind doar decor și cel mai costisitor vizual.
-    disableExpensiveTerrain: weakLaptop,
+    staticSyncInterval: device.lowSpecDesktop
+      ? 620
+      : device.weakMobile
+        ? 620
+        : visualFirstDesktop
+          ? 560
+          : mobileProfile
+            ? 480
+            : STATIC_SYNC_INTERVAL_MS,
+
+    animateStaticEvery: device.lowSpecDesktop
+      ? 10
+      : device.weakMobile
+        ? 10
+        : visualFirstDesktop
+          ? 7
+          : mobileProfile
+            ? 6
+            : 1,
+
+    // Terrain remains exclusive to a good PC/laptop because it is decorative
+    // and the largest fill-rate cost in the renderer.
+    disableExpensiveTerrain: Boolean(
+      mobileProfile ||
+      device.lowSpecDesktop ||
+      visualFirstDesktop
+    ),
   };
 }
 
