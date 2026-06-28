@@ -105,7 +105,7 @@ const ZONE_STATE_INTERVAL_CROWDED_MS = 620;
 const ZONE_STATE_INTERVAL_HEAVY_MS = 760;
 const ZONE_ENTITY_DEFINITION_INTERVAL_MS = 900;
 const ZONE_PROJECTILE_DEFINITION_INTERVAL_MS = 800;
-const ZONE_TRANSFORM_INTERVAL_MS = 25;
+const ZONE_TRANSFORM_INTERVAL_MS = 20;
 const ZONE_TRANSFORM_PLAYER_LIMIT = 60;
 const ZONE_TRANSFORM_PROJECTILE_LIMIT = 36;
 const ZONE_TRANSFORM_RANGE_PADDING = 820;
@@ -749,6 +749,9 @@ let GameGateway = class GameGateway {
         const openingFarm = phase === "prepare";
         const centerX = WORLD_WIDTH * 0.5;
         const centerY = WORLD_HEIGHT * 0.5;
+        const botCount = alive.reduce((count, unit) => count + (unit?.isBot ? 1 : 0), 0);
+        const maxBotPlansThisTick = Math.max(7, Math.ceil(botCount / 6));
+        let botPlansThisTick = 0;
         const orbClaims = new Map();
         for (const unit of alive) {
             if (!unit?.isBot || !unit?.aiTargetOrbId)
@@ -761,6 +764,11 @@ let GameGateway = class GameGateway {
                 continue;
             if (now < Number(bot.aiPlanUntil || 0))
                 continue;
+            if (botPlansThisTick >= maxBotPlansThisTick) {
+                bot.aiPlanUntil = now + 12 + Math.floor(Math.random() * 14);
+                continue;
+            }
+            botPlansThisTick += 1;
             const nextPlanMs = ZONE_PVP_BOT_REPLAN_MIN_MS +
                 Math.floor(Math.random() * (ZONE_PVP_BOT_REPLAN_MAX_MS - ZONE_PVP_BOT_REPLAN_MIN_MS));
             bot.aiPlanUntil = now + nextPlanMs;

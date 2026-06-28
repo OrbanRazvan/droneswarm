@@ -43,10 +43,16 @@ const REMOTE_HARD_SNAP_DISTANCE = 900;
 const REMOTE_MAX_EXTRAPOLATE_MS = 220;
 const REMOTE_PRESENTATION_LEAD_MS = 26;
 const REMOTE_FOLLOW_RESPONSE = 92;
+// Weak desktops coalesce socket bursts to one newest transform per display
+// frame. A small extra visual lead hides that one-frame batching cost while
+// velocity-based prediction keeps the authoritative path continuous.
+const WEAK_DESKTOP_REMOTE_PRESENTATION_LEAD_MS = 46;
 // Attack drones are rendered from their newest authoritative velocity with a
 // tiny presentation lead. This removes the old "one packet behind" feel even
 // when an older laptop skips an animation frame.
 const PROJECTILE_PRESENTATION_LEAD_MS = 30;
+const WEAK_DESKTOP_PROJECTILE_PRESENTATION_LEAD_MS = 50;
+const WEAK_DESKTOP_RENDER_SELECTION_REFRESH_MS = 90;
 const PROJECTILE_MAX_EXTRAPOLATE_MS = 180;
 const PROJECTILE_STREAM_MISSING_MS = 190;
 // Do not remove a remote drone just because one or two volatile transform
@@ -1075,9 +1081,9 @@ function upsertRemoteMotion(map, incoming, receivedAt, serverAt = 0, metadataOnl
   return next;
 }
 
-function resolveRemoteMotion(motion, now, dt) {
+function resolveRemoteMotion(motion, now, dt, presentationLeadMs = REMOTE_PRESENTATION_LEAD_MS) {
   if (!motion) return null;
-  const ageMs = clamp(now - Number(motion.receivedAt || now) + REMOTE_PRESENTATION_LEAD_MS, 0, REMOTE_MAX_EXTRAPOLATE_MS);
+  const ageMs = clamp(now - Number(motion.receivedAt || now) + presentationLeadMs, 0, REMOTE_MAX_EXTRAPOLATE_MS);
   const moving = Boolean(motion.isMoving);
   const targetX = Number(motion.sourceX || 0) + (moving ? Number(motion.velocityX || 0) * (ageMs / 1000) : 0);
   const targetY = Number(motion.sourceY || 0) + (moving ? Number(motion.velocityY || 0) * (ageMs / 1000) : 0);
@@ -1151,14 +1157,14 @@ function upsertProjectileMotion(map, incoming, receivedAt, serverAt = 0) {
   return next;
 }
 
-function resolveProjectileMotion(motion, now) {
+function resolveProjectileMotion(motion, now, presentationLeadMs = PROJECTILE_PRESENTATION_LEAD_MS) {
   if (!motion) return null;
 
   // vx/vy are server world pixels per 60 Hz frame. Predict only from the last
   // authoritative transform to the display time; no damp/lerp remains in the
   // attack-drone path, because a projectile has a fixed trajectory.
   const ageMs = clamp(
-    now - Number(motion.receivedAt || now) + PROJECTILE_PRESENTATION_LEAD_MS,
+    now - Number(motion.receivedAt || now) + presentationLeadMs,
     0,
     PROJECTILE_MAX_EXTRAPOLATE_MS,
   );
@@ -1429,6 +1435,16 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const lastFrameRef = useRef(performance.now());
   const fpsRef = useRef({ frames: 0, lastAt: performance.now(), value: 60 });
   const lastRenderSyncRef = useRef(0);
+  // Weak desktop frames must not be interrupted by multiple Socket.IO movement
+  // handlers. The newest packet is enough because the transform lane is
+  // latest-wins and the renderer predicts between packets.
+  const weakRenderSelectionRef = useRef({
+    refreshedAt: 0,
+    cameraX: Number.NaN,
+    cameraY: Number.NaN,
+    detailedIds: [],
+    simpleIds: [],
+  });
   const mobilePerformanceRef = useRef(isRealMobileDevice());
   // Weak desktop hardware uses the same protected render path as older phones:
   // fewer expensive shells, all other drones as cheap live markers.
@@ -2490,9 +2506,27 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const applyMovementFrame = (packet = {}) => {
       lastZoneServerPacketAtRef.current = Date.now();
-      // This handler mutates only small Maps. Processing it now removes the
-      // extra requestAnimationFrame delay that made drones feel one frame late.
-      // Pixi still renders at display refresh through liveDataRef.
+
+      // PvE never has socket callbacks in the middle of a render frame. On an
+      // older desktop, up to 40–50 Zone transform callbacks/sec can otherwise
+      // split the JS frame and make the local camera/projectile feel uneven.
+      // Consume only the newest tuple packet on the next display frame. The
+      // motion resolver below extrapolates velocity by a small fixed lead, so
+      // the player sees continuous 60 Hz motion rather than delayed steps.
+      if (constrainedDesktopRef.current && !mobilePerformanceRef.current) {
+        latestMovementPacketRef.current = packet;
+        if (!movementFlushRafRef.current) {
+          movementFlushRafRef.current = window.requestAnimationFrame(() => {
+            movementFlushRafRef.current = 0;
+            const latestPacket = latestMovementPacketRef.current;
+            latestMovementPacketRef.current = null;
+            if (latestPacket) consumeMovementFrame(latestPacket);
+          });
+        }
+        return;
+      }
+
+      // Good desktops and phones keep the existing immediate behavior.
       consumeMovementFrame(packet);
     };
 
@@ -3015,6 +3049,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         spectatorTargetRef.current = currentSpectatorTarget;
       }
 
+      const weakDesktopMotion = constrainedDesktopRef.current && !mobilePerformanceRef.current;
+      const remotePresentationLead = weakDesktopMotion
+        ? WEAK_DESKTOP_REMOTE_PRESENTATION_LEAD_MS
+        : REMOTE_PRESENTATION_LEAD_MS;
+      const projectilePresentationLead = weakDesktopMotion
+        ? WEAK_DESKTOP_PROJECTILE_PRESENTATION_LEAD_MS
+        : PROJECTILE_PRESENTATION_LEAD_MS;
       const motions = remoteMotionRef.current;
       const activeRemoteIds = new Set();
 
@@ -3040,7 +3081,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           motions.delete(id);
           continue;
         }
-        const resolved = resolveRemoteMotion(motion, now, dt);
+        const resolved = resolveRemoteMotion(motion, now, dt, remotePresentationLead);
         if (!resolved) continue;
         activeRemoteIds.add(id);
         remoteMap.set(id, {
@@ -3063,7 +3104,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       // most recent authoritative transform. This is both smoother and cheaper
       // than allocating a merged Map plus blending each drone toward stale data.
       for (const [id, motion] of movementProjectiles.entries()) {
-        const target = resolveProjectileMotion(motion, now);
+        const target = resolveProjectileMotion(motion, now, projectilePresentationLead);
         if (!target) continue;
 
         const belongsToLocalPlayer =
@@ -3162,25 +3203,71 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           ? { detailed: 7, total: 60, orbs: 72, energy: 26, cores: 6, projectiles: 10, simpleProjectiles: 34 }
           : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
-      // Map insertion order is not distance order. Sort by the camera subject
-      // so the nearest threats keep detailed shells and every other visible
-      // drone stays on a very cheap marker pool instead of vanishing.
-      const visibleRemoteUnits = [...remoteMap.values()]
-        .filter((player) => player?.id !== liveYou?.id && player?.alive !== false && isVisible(player, liveBounds, 460))
-        .map((player) => ({ ...player, skin: normalizeSkin(player.skin), isBot: Boolean(player.isBot) }))
-        .sort((a, b) => {
-          const ax = Number(a.x || 0) - Number(liveCameraSubject?.x || 0);
-          const ay = Number(a.y || 0) - Number(liveCameraSubject?.y || 0);
-          const bx = Number(b.x || 0) - Number(liveCameraSubject?.x || 0);
-          const by = Number(b.y || 0) - Number(liveCameraSubject?.y || 0);
-          return ax * ax + ay * ay - (bx * bx + by * by);
-        })
-        .slice(0, renderLimits.total);
+      // Map insertion order is not distance order. On a good desktop we keep
+      // the existing per-frame sort. On a weak desktop, only the *membership*
+      // of the detailed/simple pools is cached for a short interval—the actual
+      // drone objects are still read from remoteMap every rAF, so positions and
+      // attack drones remain as live as in the PvE path.
+      let detailedRemoteUnits = [];
+      let simpleRemoteUnits = [];
 
-      const detailedRemoteUnits = visibleRemoteUnits.slice(0, renderLimits.detailed);
-      const simpleRemoteUnits = visibleRemoteUnits.slice(renderLimits.detailed);
-      const livePlayers = detailedRemoteUnits.filter((player) => !player.isBot);
-      const liveBots = detailedRemoteUnits.filter((player) => player.isBot);
+      if (weakDesktopMotion) {
+        const selection = weakRenderSelectionRef.current;
+        const cameraX = Number(liveCameraSubject?.x || 0);
+        const cameraY = Number(liveCameraSubject?.y || 0);
+        const cameraMoved = Math.hypot(cameraX - Number(selection.cameraX || 0), cameraY - Number(selection.cameraY || 0)) > 150;
+        const shouldRefreshSelection =
+          now - Number(selection.refreshedAt || 0) >= WEAK_DESKTOP_RENDER_SELECTION_REFRESH_MS ||
+          cameraMoved ||
+          !Array.isArray(selection.detailedIds);
+
+        if (shouldRefreshSelection) {
+          const candidates = [];
+          for (const player of remoteMap.values()) {
+            if (!player || player.id === liveYou?.id || player.alive === false || !isVisible(player, liveBounds, 460)) continue;
+            const dx = Number(player.x || 0) - cameraX;
+            const dy = Number(player.y || 0) - cameraY;
+            candidates.push({ id: player.id, distanceSq: dx * dx + dy * dy });
+          }
+          candidates.sort((a, b) => a.distanceSq - b.distanceSq);
+          const capped = candidates.slice(0, renderLimits.total);
+          selection.detailedIds = capped.slice(0, renderLimits.detailed).map((item) => item.id);
+          selection.simpleIds = capped.slice(renderLimits.detailed).map((item) => item.id);
+          selection.refreshedAt = now;
+          selection.cameraX = cameraX;
+          selection.cameraY = cameraY;
+        }
+
+        for (const id of selection.detailedIds) {
+          const player = remoteMap.get(id);
+          if (player?.alive !== false && isVisible(player, liveBounds, 460)) detailedRemoteUnits.push(player);
+        }
+        for (const id of selection.simpleIds) {
+          const player = remoteMap.get(id);
+          if (player?.alive !== false && isVisible(player, liveBounds, 460)) simpleRemoteUnits.push(player);
+        }
+      } else {
+        const visibleRemoteUnits = [...remoteMap.values()]
+          .filter((player) => player?.id !== liveYou?.id && player?.alive !== false && isVisible(player, liveBounds, 460))
+          .map((player) => ({ ...player, skin: normalizeSkin(player.skin), isBot: Boolean(player.isBot) }))
+          .sort((a, b) => {
+            const ax = Number(a.x || 0) - Number(liveCameraSubject?.x || 0);
+            const ay = Number(a.y || 0) - Number(liveCameraSubject?.y || 0);
+            const bx = Number(b.x || 0) - Number(liveCameraSubject?.x || 0);
+            const by = Number(b.y || 0) - Number(liveCameraSubject?.y || 0);
+            return ax * ax + ay * ay - (bx * bx + by * by);
+          })
+          .slice(0, renderLimits.total);
+        detailedRemoteUnits = visibleRemoteUnits.slice(0, renderLimits.detailed);
+        simpleRemoteUnits = visibleRemoteUnits.slice(renderLimits.detailed);
+      }
+
+      const livePlayers = [];
+      const liveBots = [];
+      for (const player of detailedRemoteUnits) {
+        if (player?.isBot) liveBots.push(player);
+        else livePlayers.push(player);
+      }
 
       const liveOrbs = collectVisible(
         stableOrbMapRef.current.values(),

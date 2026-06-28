@@ -157,7 +157,7 @@ const ZONE_PROJECTILE_DEFINITION_INTERVAL_MS = 800;
 // Forty transform updates/second plus local display-rate interpolation is a
 // better mobile trade-off than 60 large JSON payloads.  The server always sends
 // the newest transform and clients discard an obsolete packet before processing.
-const ZONE_TRANSFORM_INTERVAL_MS = 25; // 40 Hz compact latest-wins transforms for smoother attack drones.
+const ZONE_TRANSFORM_INTERVAL_MS = 20; // 50 Hz compact latest-wins transforms; client still renders/predicts at display refresh.
 const ZONE_TRANSFORM_PLAYER_LIMIT = 60;
 const ZONE_TRANSFORM_PROJECTILE_LIMIT = 36;
 const ZONE_TRANSFORM_RANGE_PADDING = 820;
@@ -978,6 +978,14 @@ export class GameGateway {
     const openingFarm = phase === "prepare";
     const centerX = WORLD_WIDTH * 0.5;
     const centerY = WORLD_HEIGHT * 0.5;
+    const botCount = alive.reduce((count: number, unit: any) => count + (unit?.isBot ? 1 : 0), 0);
+    // A tick can occasionally arrive late on a shared Render CPU. Without a
+    // cap, many staggered bot plans become due together and create one long
+    // server frame—the exact moment human movement/projectiles feel delayed.
+    // Bots keep their previous held vector when deferred, so physics and game
+    // rules stay identical while expensive target searches are spread out.
+    const maxBotPlansThisTick = Math.max(7, Math.ceil(botCount / 6));
+    let botPlansThisTick = 0;
 
     // Route reservations stop 57 bots from selecting the exact same nearest
     // orb in prepare phase. They still react dynamically when an orb is taken.
@@ -991,6 +999,15 @@ export class GameGateway {
     for (const bot of alive) {
       if (!bot?.isBot) continue;
       if (now < Number(bot.aiPlanUntil || 0)) continue;
+
+      if (botPlansThisTick >= maxBotPlansThisTick) {
+        // Keep the current held input for one short stagger slot. This is a
+        // visual/CPU scheduling change only; movement integration still runs
+        // for every bot on every 60 Hz simulation tick.
+        bot.aiPlanUntil = now + 12 + Math.floor(Math.random() * 14);
+        continue;
+      }
+      botPlansThisTick += 1;
 
       const nextPlanMs =
         ZONE_PVP_BOT_REPLAN_MIN_MS +
