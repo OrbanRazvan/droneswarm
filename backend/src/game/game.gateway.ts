@@ -1562,6 +1562,33 @@ export class GameGateway {
     this.removeNormalPlayer(client.id);
   }
 
+  // A browser returning after a long background period can still report a
+  // connected Engine.IO transport even though Render restarted and the in-memory
+  // Normal PvP room disappeared. This reliable check lets the client decide
+  // whether to rejoin immediately instead of waiting forever for a volatile
+  // world snapshot that can no longer arrive.
+  @SubscribeMessage("normal-pvp:session-check")
+  handleNormalPvpSessionCheck(@ConnectedSocket() client: Socket) {
+    const now = Date.now();
+    const room = this.getNormalRoomBySocket(client.id);
+    const player = room?.players?.get(client.id);
+    const active = Boolean(room && player);
+
+    if (player) {
+      player.lastSeenAt = now;
+      player.lastInputReceivedAt = now;
+    }
+
+    client.emit("normal-pvp:session-check:result", {
+      ok: true,
+      active,
+      roomId: room?.id || null,
+      playerId: active ? client.id : null,
+      status: room?.status || "missing",
+      serverNow: now,
+    });
+  }
+
   @SubscribeMessage("normal-pvp:input")
   handleNormalPvpInput(
     @ConnectedSocket() client: Socket,
@@ -1893,6 +1920,49 @@ export class GameGateway {
 
     this.emitZonePvpJoined(client, room, player, false);
     this.broadcastZonePvpRoomState(room, now, true);
+  }
+
+  // Same reliable lifecycle probe as Normal PvP. It is intentionally separate
+  // from movement/state packets so a stale browser can recover even when the
+  // latest volatile snapshot was lost during a long sleep or a Render restart.
+  @SubscribeMessage("zone-pvp:session-check")
+  handleZonePvpSessionCheck(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: any,
+  ) {
+    const now = Date.now();
+    const room = this.getZonePvpRoomBySocket(client.id);
+    const player = room?.players?.get(client.id);
+
+    if (room && player) {
+      player.lastSeenAt = now;
+      player.lastInputReceivedAt = now;
+      player.disconnectedAt = 0;
+      client.emit("zone-pvp:session-check:result", {
+        ok: true,
+        active: true,
+        resumable: false,
+        roomId: room.id,
+        playerId: client.id,
+        status: room.status,
+        serverNow: now,
+      });
+      return;
+    }
+
+    const resumeToken = this.normalizeZonePvpResumeToken(data?.resumeToken);
+    const seat = this.findZonePvpResumeSeat(resumeToken);
+    const resumable = Boolean(seat?.room && seat?.player && seat.room.status !== "finished");
+
+    client.emit("zone-pvp:session-check:result", {
+      ok: true,
+      active: false,
+      resumable,
+      roomId: resumable ? seat.room.id : null,
+      playerId: resumable ? seat.player.id : null,
+      status: resumable ? seat.room.status : "missing",
+      serverNow: now,
+    });
   }
 
   @SubscribeMessage("zone-pvp:resync")

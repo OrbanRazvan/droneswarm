@@ -1222,6 +1222,24 @@ let GameGateway = class GameGateway {
     handleNormalPvpLeave(client) {
         this.removeNormalPlayer(client.id);
     }
+    handleNormalPvpSessionCheck(client) {
+        const now = Date.now();
+        const room = this.getNormalRoomBySocket(client.id);
+        const player = room?.players?.get(client.id);
+        const active = Boolean(room && player);
+        if (player) {
+            player.lastSeenAt = now;
+            player.lastInputReceivedAt = now;
+        }
+        client.emit("normal-pvp:session-check:result", {
+            ok: true,
+            active,
+            roomId: room?.id || null,
+            playerId: active ? client.id : null,
+            status: room?.status || "missing",
+            serverNow: now,
+        });
+    }
     handleNormalPvpInput(client, input) {
         const room = this.getNormalRoomBySocket(client.id);
         const player = room?.players.get(client.id);
@@ -1492,6 +1510,38 @@ let GameGateway = class GameGateway {
         }
         this.emitZonePvpJoined(client, room, player, false);
         this.broadcastZonePvpRoomState(room, now, true);
+    }
+    handleZonePvpSessionCheck(client, data) {
+        const now = Date.now();
+        const room = this.getZonePvpRoomBySocket(client.id);
+        const player = room?.players?.get(client.id);
+        if (room && player) {
+            player.lastSeenAt = now;
+            player.lastInputReceivedAt = now;
+            player.disconnectedAt = 0;
+            client.emit("zone-pvp:session-check:result", {
+                ok: true,
+                active: true,
+                resumable: false,
+                roomId: room.id,
+                playerId: client.id,
+                status: room.status,
+                serverNow: now,
+            });
+            return;
+        }
+        const resumeToken = this.normalizeZonePvpResumeToken(data?.resumeToken);
+        const seat = this.findZonePvpResumeSeat(resumeToken);
+        const resumable = Boolean(seat?.room && seat?.player && seat.room.status !== "finished");
+        client.emit("zone-pvp:session-check:result", {
+            ok: true,
+            active: false,
+            resumable,
+            roomId: resumable ? seat.room.id : null,
+            playerId: resumable ? seat.player.id : null,
+            status: resumable ? seat.room.status : "missing",
+            serverNow: now,
+        });
     }
     handleZonePvpResync(client, data) {
         this.handleZonePvpJoin(client, {
@@ -4257,6 +4307,13 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], GameGateway.prototype, "handleNormalPvpLeave", null);
 __decorate([
+    (0, websockets_1.SubscribeMessage)("normal-pvp:session-check"),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket]),
+    __metadata("design:returntype", void 0)
+], GameGateway.prototype, "handleNormalPvpSessionCheck", null);
+__decorate([
     (0, websockets_1.SubscribeMessage)("normal-pvp:input"),
     __param(0, (0, websockets_1.ConnectedSocket)()),
     __param(1, (0, websockets_1.MessageBody)()),
@@ -4295,6 +4352,14 @@ __decorate([
     __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
     __metadata("design:returntype", void 0)
 ], GameGateway.prototype, "handleZonePvpJoin", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)("zone-pvp:session-check"),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", void 0)
+], GameGateway.prototype, "handleZonePvpSessionCheck", null);
 __decorate([
     (0, websockets_1.SubscribeMessage)("zone-pvp:resync"),
     __param(0, (0, websockets_1.ConnectedSocket)()),

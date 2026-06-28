@@ -48,9 +48,7 @@ const HUD_SYNC_INTERVAL_MS = 125;
 const MOBILE_REACT_RENDER_SYNC_INTERVAL_MS = 260;
 const MOBILE_HUD_SYNC_INTERVAL_MS = 250;
 const MOBILE_RENDER_LIMITS = Object.freeze({
-  // Pixi renders the nearest few with the premium shell and all remaining
-  // visible enemies through its animated lightweight drone pool.
-  players: 60,
+  players: 12,
   // Normal PvP now has a denser server world. These limits remain modest
   // enough for older phones, while showing substantially more nearby loot.
   orbs: 140,
@@ -940,7 +938,7 @@ function projectileHitsAnyTarget(projectile, targets = []) {
   return false;
 }
 
-function createLocalProjectile(unit, mouseWorldX, mouseWorldY, now, fallbackSkin = "cyan") {
+function createLocalProjectile(unit, mouseWorldX, mouseWorldY, now) {
   if (!unit || unit.alive === false || (unit.drones || 0) <= 0) return null;
 
   const angle = Math.atan2(mouseWorldY - unit.y, mouseWorldX - unit.x);
@@ -958,9 +956,7 @@ function createLocalProjectile(unit, mouseWorldX, mouseWorldY, now, fallbackSkin
     vx: Math.cos(angle) * speed,
     vy: Math.sin(angle) * speed,
     angle,
-    // Never use the renderer default cyan while the self metadata is still
-    // arriving. The selected/owner skin is known locally at fire time.
-    skin: normalizeSkin(unit.skin || fallbackSkin || "cyan"),
+    skin: normalizeSkin(unit.skin || "cyan"),
     pierceLeft: Math.max(1, unit.piercingShots || 1),
     shieldBreaker: (unit.shieldBreakerShots || 0) > 0,
     piercesShield: (unit.shieldBreakerShots || 0) > 0,
@@ -1215,7 +1211,12 @@ function FlyingAttackDrone({ projectile }) {
 }
 
 function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
+  // Dashboard can refresh the account object after a long idle period. Keep
+  // networking mounted and always read the newest identity at join time.
+  const userRef = useRef(user);
+  userRef.current = user;
   const socketRef = useRef(null);
+  const lastNormalServerPacketAtRef = useRef(Date.now());
   const keysRef = useRef({});
   const mouseRef = useRef({
     x: window.innerWidth / 2,
@@ -1331,16 +1332,25 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     // listener exists, leaving a guest on an empty arena until refresh.
     const socket = io(API_URL, {
       autoConnect: false,
-      transports: ["websocket"],
+      // WebSocket remains preferred. Polling only takes over when a browser
+      // wakes after a long sleep and the old WebSocket/proxy path is gone.
+      transports: ["websocket", "polling"],
+      upgrade: true,
+      forceNew: true,
+      multiplex: false,
       withCredentials: false,
+      timeout: 12000,
       reconnection: true,
       reconnectionAttempts: Infinity,
-      reconnectionDelay: 700,
+      reconnectionDelay: 500,
+      reconnectionDelayMax: 2500,
+      randomizationFactor: 0.25,
     });
 
     socketRef.current = socket;
 
     const applyState = (state) => {
+      lastNormalServerPacketAtRef.current = Date.now();
       const now = performance.now();
       const wallNow = Date.now();
       const combatViewerId = state?.you?.id || worldRef.current.you?.id || socket.id;
@@ -1600,6 +1610,9 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     let disposed = false;
     let joinAttempts = 0;
     let joinRetryTimer = null;
+    let normalSessionCheckTimer = null;
+    let normalForcedReconnectTimer = null;
+    let normalSessionCheckInFlight = false;
 
     const clearJoinRetry = () => {
       if (joinRetryTimer !== null) {
@@ -1621,11 +1634,12 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       clearJoinRetry();
       combatEventMapRef.current.clear();
       selfCombatSnapshotRef.current = null;
+      const currentUser = userRef.current;
       socket.emit("normal-pvp:join", {
-        userId: user?.isGuest ? null : user?.id,
-        isGuest: Boolean(user?.isGuest),
-        username: getDisplayName(user),
-        skin: getSelectedSkin(user),
+        userId: currentUser?.isGuest ? null : currentUser?.id,
+        isGuest: Boolean(currentUser?.isGuest),
+        username: getDisplayName(currentUser),
+        skin: getSelectedSkin(currentUser),
       });
 
       joinAttempts += 1;
@@ -1645,10 +1659,70 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }, 850);
     };
 
+    const clearNormalSessionCheck = () => {
+      if (normalSessionCheckTimer !== null) {
+        window.clearTimeout(normalSessionCheckTimer);
+        normalSessionCheckTimer = null;
+      }
+      normalSessionCheckInFlight = false;
+    };
+
+    const forceNormalTransportReconnect = () => {
+      if (disposed) return;
+      clearNormalSessionCheck();
+      clearJoinRetry();
+      joinAttempts = 0;
+      setConnectionError("Se restabilește conexiunea la Normal PvP...");
+      socket.disconnect();
+      if (normalForcedReconnectTimer !== null) window.clearTimeout(normalForcedReconnectTimer);
+      normalForcedReconnectTimer = window.setTimeout(() => {
+        normalForcedReconnectTimer = null;
+        if (!disposed) socket.connect();
+      }, 120);
+    };
+
+    const verifyNormalSession = () => {
+      if (disposed || document.visibilityState === "hidden") return;
+      if (!socket.connected) {
+        socket.connect();
+        return;
+      }
+      if (normalSessionCheckInFlight) return;
+
+      normalSessionCheckInFlight = true;
+      socket.emit("normal-pvp:session-check");
+      normalSessionCheckTimer = window.setTimeout(() => {
+        if (normalSessionCheckInFlight) forceNormalTransportReconnect();
+      }, 3500);
+    };
+
     const handleConnect = () => {
       setConnectionError("");
       joinAttempts = 0;
       requestNormalPvpJoin();
+    };
+
+    const handleNormalSessionCheckResult = (result = {}) => {
+      clearNormalSessionCheck();
+      if (disposed) return;
+      lastNormalServerPacketAtRef.current = Date.now();
+      // Both a valid room and a missing post-restart room recover through the
+      // idempotent join route. It sends a reliable complete snapshot or creates
+      // a fresh room immediately.
+      joinAttempts = 0;
+      requestNormalPvpJoin();
+    };
+
+    const handleNormalDisconnect = (reason) => {
+      clearNormalSessionCheck();
+      if (!disposed && reason !== "io client disconnect") {
+        setConnectionError("Conexiunea Normal PvP s-a întrerupt. Se reconectează...");
+      }
+    };
+
+    const recoverVisibleNormalSession = () => {
+      if (disposed || document.visibilityState === "hidden") return;
+      verifyNormalSession();
     };
 
     socket.on("connect_error", () => {
@@ -1906,6 +1980,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         clearJoinRetry();
       }
     });
+    socket.on("normal-pvp:session-check:result", handleNormalSessionCheckResult);
     socket.on("normal-pvp:state", applyState);
     socket.on("normal-pvp:collision", applyNormalCollisionImpulse);
     socket.on("normal-pvp:combat", applyPrivateCombatEvent);
@@ -1918,9 +1993,19 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       ),
     );
     socket.on("connect", handleConnect);
+    socket.on("disconnect", handleNormalDisconnect);
+    document.addEventListener("visibilitychange", recoverVisibleNormalSession);
+    window.addEventListener("pageshow", recoverVisibleNormalSession);
 
     // All listeners are ready before the transport starts.
     socket.connect();
+
+    const normalSessionWatchdog = window.setInterval(() => {
+      if (disposed || document.visibilityState === "hidden") return;
+      if (Date.now() - Number(lastNormalServerPacketAtRef.current || 0) > 12000) {
+        verifyNormalSession();
+      }
+    }, 4000);
 
     const sendInputNow = (force = false) => {
       if (!socket.connected) return;
@@ -2033,7 +2118,17 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       clearJoinRetry();
       window.clearInterval(inputTimer);
       window.clearInterval(hudTimer);
+      window.clearInterval(normalSessionWatchdog);
+      clearNormalSessionCheck();
+      if (normalForcedReconnectTimer !== null) {
+        window.clearTimeout(normalForcedReconnectTimer);
+        normalForcedReconnectTimer = null;
+      }
+      document.removeEventListener("visibilitychange", recoverVisibleNormalSession);
+      window.removeEventListener("pageshow", recoverVisibleNormalSession);
       socket.off("connect", handleConnect);
+      socket.off("disconnect", handleNormalDisconnect);
+      socket.off("normal-pvp:session-check:result", handleNormalSessionCheckResult);
       socket.off("normal-pvp:collision", applyNormalCollisionImpulse);
       socket.off("normal-pvp:combat", applyPrivateCombatEvent);
       socket.off("normal-pvp:world-delta", applyWorldItemDelta);
@@ -2042,7 +2137,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       socketRef.current = null;
       sendInputRef.current = () => {};
     };
-  }, [user]);
+  }, []);
 
   useEffect(() => {
     let rafId = 0;
@@ -2147,7 +2242,6 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
             mouseWorldX,
             mouseWorldY,
             now,
-            getSelectedSkin(user),
           );
 
           if (localProjectile) {
@@ -2217,9 +2311,6 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         const current = projectileMap.get(id) || target;
 
         if (target.ownerId && target.ownerId === me?.id) {
-          // The shooter already owns the instant local mini drone. Remove a
-          // server alias instead of leaving both IDs alive in the render map.
-          if (!String(id).startsWith("local-")) projectileMap.delete(id);
           continue;
         }
 
@@ -2999,9 +3090,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         `}</style>
       )}
 
-      {/* Hide the cyan aim reticle in PvP: the launched mini-drone is the
-          only attack object visible to the player. */}
-      {false && you && !isDead && (!isMobileControls || mobileAttackActive) && (
+      {you && !isDead && (!isMobileControls || mobileAttackActive) && (
         <svg className={`aim-svg ${isMobileControls ? "mobile-aim-svg" : ""}`} aria-hidden="true">
           <line
             className="aim-svg-line"

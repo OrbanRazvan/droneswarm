@@ -67,11 +67,13 @@ export declare class GameGateway {
     private emitNormalPvpJoined;
     handleNormalPvpJoin(client: Socket, data: any): void;
     handleNormalPvpLeave(client: Socket): void;
+    handleNormalPvpSessionCheck(client: Socket): void;
     handleNormalPvpInput(client: Socket, input: any): void;
     handleBattleRoyaleOnlineJoin(client: Socket, data: any): void;
     handleBattleRoyaleOnlineLeave(client: Socket): void;
     handleBattleRoyaleOnlineInput(client: Socket, input: any): void;
     handleZonePvpJoin(client: Socket, data: any): void;
+    handleZonePvpSessionCheck(client: Socket, data: any): void;
     handleZonePvpResync(client: Socket, data: any): {
         ok: boolean;
         serverNow: number;

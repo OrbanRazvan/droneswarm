@@ -1140,7 +1140,7 @@ function getZoneStatusRank(status) {
   return ZONE_STATUS_RANK[String(status || "connecting")] ?? -1;
 }
 
-function shouldAcceptZonePhase(current, incoming = {}) {
+function shouldAcceptZonePhase(current, incoming = {}, allowFreshRoom = false) {
   const incomingRoomId = incoming?.roomId ? String(incoming.roomId) : "";
   const currentRoomId = current?.roomId ? String(current.roomId) : "";
   const incomingVersion = Number(incoming?.phaseVersion || 0);
@@ -1152,6 +1152,7 @@ function shouldAcceptZonePhase(current, incoming = {}) {
   // must never replace the live round on screen. Only an explicit Exit creates
   // a fresh component and therefore a fresh phase ref.
   if (
+    !allowFreshRoom &&
     currentRank >= ZONE_STATUS_RANK.playing &&
     incomingRoomId &&
     currentRoomId &&
@@ -1273,6 +1274,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const zoneJoinAcceptedRef = useRef(false);
   const zoneJoinAttemptRef = useRef(0);
   const zoneJoinRetryTimerRef = useRef(null);
+  // A tab can sleep for hours while the browser still exposes socket.connected.
+  // Track real server traffic separately, then verify/rejoin instead of leaving
+  // the user stuck in a dead in-memory room after a Render restart.
+  const lastZoneServerPacketAtRef = useRef(Date.now());
+  const allowFreshZoneRoomRef = useRef(false);
   const keysRef = useRef({});
   const mouseRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const lastFrameRef = useRef(performance.now());
@@ -1413,8 +1419,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     // loot/HUD traffic and is the main cause of slow-motion remote drones.
     const socket = io(API_URL, {
       autoConnect: false,
-      transports: ["websocket"],
-      upgrade: false,
+      // WebSocket stays the fast path. Polling is only a recovery fallback
+      // for a browser returning after long sleep or a proxy/Render cold start.
+      transports: ["websocket", "polling"],
+      upgrade: true,
       forceNew: true,
       multiplex: false,
       withCredentials: false,
@@ -1478,6 +1486,109 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }, retryDelay);
     };
 
+    const resetZoneAfterExpiredSession = () => {
+      clearZonePvpResumeToken();
+      resumeTokenRef.current = getZonePvpResumeToken();
+      allowFreshZoneRoomRef.current = true;
+      zoneJoinAcceptedRef.current = false;
+      zoneJoinAttemptRef.current = 0;
+      lastArenaStatusRef.current = "connecting";
+      zonePhaseRef.current = {
+        roomId: null,
+        roundId: null,
+        phaseVersion: -1,
+        status: "connecting",
+        lockedRoomId: null,
+      };
+      predictedYouRef.current = null;
+      spectatorTargetRef.current = null;
+      remotePlayersRef.current.clear();
+      remoteSnapshotBufferRef.current.clear();
+      remoteMotionRef.current.clear();
+      projectileMovementRef.current.clear();
+      projectilesRef.current.clear();
+      zoneEntityMetaRef.current.clear();
+      zoneProjectileMetaRef.current.clear();
+      combatEventMapRef.current.clear();
+      stableOrbMapRef.current.clear();
+      stableEnergyMapRef.current.clear();
+      stableMinimapOrbMapRef.current.clear();
+      stableMinimapEnergyMapRef.current.clear();
+      stableCoreMapRef.current.clear();
+      hiddenOrbIdsRef.current.clear();
+      hiddenEnergyIdsRef.current.clear();
+      hiddenCoreIdsRef.current.clear();
+      removedPlayerIdsRef.current.clear();
+      removedPlayerNetIdsRef.current.clear();
+      worldRef.current = {
+        ...worldRef.current,
+        roomId: null,
+        roundId: null,
+        phaseVersion: -1,
+        status: "connecting",
+        winnerId: null,
+        winnerName: null,
+        countdown: null,
+        you: null,
+        players: [],
+        spectatingPlayer: null,
+        orbs: [],
+        minimapOrbs: [],
+        minimapEnergyCells: [],
+        energyCells: [],
+        cores: [],
+        minimapCores: [],
+        projectiles: [],
+        combatEvents: [],
+        leaderboard: [],
+      };
+      setRenderData({ ...worldRef.current, fps: fpsRef.current.value });
+      setHudData({ ...worldRef.current, fps: fpsRef.current.value });
+    };
+
+    let zoneSessionCheckTimer = null;
+    let zoneForcedReconnectTimer = null;
+    let zoneSessionCheckInFlight = false;
+
+    const clearZoneSessionCheck = () => {
+      if (zoneSessionCheckTimer !== null) {
+        window.clearTimeout(zoneSessionCheckTimer);
+        zoneSessionCheckTimer = null;
+      }
+      zoneSessionCheckInFlight = false;
+    };
+
+    const forceZoneTransportReconnect = () => {
+      if (disposed) return;
+      clearZoneSessionCheck();
+      zoneJoinAcceptedRef.current = false;
+      zoneJoinAttemptRef.current = 0;
+      setConnectionError("Se restabilește conexiunea la sesiunea PvP...");
+      socket.disconnect();
+      if (zoneForcedReconnectTimer !== null) window.clearTimeout(zoneForcedReconnectTimer);
+      zoneForcedReconnectTimer = window.setTimeout(() => {
+        zoneForcedReconnectTimer = null;
+        if (!disposed) socket.connect();
+      }, 120);
+    };
+
+    const verifyZoneSession = () => {
+      if (disposed || document.visibilityState === "hidden") return;
+      if (!socket.connected) {
+        socket.connect();
+        return;
+      }
+      if (zoneSessionCheckInFlight) return;
+
+      zoneSessionCheckInFlight = true;
+      socket.emit("zone-pvp:session-check", {
+        resumeToken: resumeTokenRef.current,
+      });
+      zoneSessionCheckTimer = window.setTimeout(() => {
+        if (zoneSessionCheckInFlight) forceZoneTransportReconnect();
+      }, 3500);
+    };
+
     const updateServerClockOffset = (serverNow) => {
       const serverTime = Number(serverNow || 0);
       if (!serverTime) return;
@@ -1497,7 +1608,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
 
     const applyState = (state) => {
-      if (!state || !shouldAcceptZonePhase(zonePhaseRef.current, state)) {
+      lastZoneServerPacketAtRef.current = Date.now();
+      if (!state || !shouldAcceptZonePhase(zonePhaseRef.current, state, allowFreshZoneRoomRef.current)) {
         return;
       }
 
@@ -1507,6 +1619,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       const incomingRoomId = state?.roomId ? String(state.roomId) : "";
       const currentRoomId = zonePhaseRef.current?.roomId ? String(zonePhaseRef.current.roomId) : "";
+      if (allowFreshZoneRoomRef.current && incomingRoomId) {
+        allowFreshZoneRoomRef.current = false;
+      }
       if (incomingRoomId && currentRoomId && incomingRoomId !== currentRoomId) {
         // Socket reconnected into a genuinely different room. Clear only
         // visual caches; the new authoritative state below repopulates them.
@@ -1892,19 +2007,39 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
 
     const handleJoinConfirmed = (confirmation = {}) => {
+      lastZoneServerPacketAtRef.current = Date.now();
       markZoneJoinAccepted(confirmation);
+    };
+
+    const handleZoneSessionCheckResult = (result = {}) => {
+      clearZoneSessionCheck();
+      if (disposed) return;
+      lastZoneServerPacketAtRef.current = Date.now();
+
+      if (result?.active || result?.resumable) {
+        zoneJoinAcceptedRef.current = false;
+        zoneJoinAttemptRef.current = 0;
+        requestZoneJoin();
+        return;
+      }
+
+      // The old in-memory room no longer exists (for example after a Render
+      // restart or a very long sleep). Drop only the stale tab token and enter
+      // a fresh lobby immediately instead of showing Connection Error forever.
+      resetZoneAfterExpiredSession();
+      requestZoneJoin();
+    };
+
+    const handleZoneResumeMissing = () => {
+      clearZoneSessionCheck();
+      if (disposed) return;
+      resetZoneAfterExpiredSession();
+      requestZoneJoin();
     };
 
     const recoverVisibleZoneSession = () => {
       if (disposed || document.visibilityState === "hidden") return;
-      if (!socket.connected) {
-        socket.connect();
-        return;
-      }
-      if (!zoneJoinAcceptedRef.current) {
-        zoneJoinAttemptRef.current = 0;
-        requestZoneJoin();
-      }
+      verifyZoneSession();
     };
 
     socket.on("connect_error", handleConnectError);
@@ -2089,6 +2224,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
 
     const applyMovementFrame = (packet = {}) => {
+      lastZoneServerPacketAtRef.current = Date.now();
       latestMovementPacketRef.current = packet;
       if (movementFlushRafRef.current) return;
 
@@ -2353,6 +2489,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     socket.on("zone-pvp:joined", applyState);
     socket.on("zone-pvp:join-confirmed", handleJoinConfirmed);
+    socket.on("zone-pvp:session-check:result", handleZoneSessionCheckResult);
+    socket.on("zone-pvp:resume-missing", handleZoneResumeMissing);
     socket.on("zone-pvp:state", applyState);
     socket.on("zone-pvp:movement", applyMovementFrame);
     // The former binary lane is intentionally not subscribed. It could produce
@@ -2371,6 +2509,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     document.addEventListener("visibilitychange", recoverVisibleZoneSession);
     window.addEventListener("pageshow", recoverVisibleZoneSession);
     socket.connect();
+
+    const zoneSessionWatchdog = window.setInterval(() => {
+      if (disposed || document.visibilityState === "hidden") return;
+      if (Date.now() - Number(lastZoneServerPacketAtRef.current || 0) > 12000) {
+        verifyZoneSession();
+      }
+    }, 4000);
 
     const sendInputNow = (force = false) => {
       if (!socket.connected) return;
@@ -2448,6 +2593,12 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       clearZoneJoinRetry();
       window.clearInterval(inputTimer);
       window.clearInterval(hudTimer);
+      window.clearInterval(zoneSessionWatchdog);
+      clearZoneSessionCheck();
+      if (zoneForcedReconnectTimer !== null) {
+        window.clearTimeout(zoneForcedReconnectTimer);
+        zoneForcedReconnectTimer = null;
+      }
       if (movementFlushRafRef.current) {
         window.cancelAnimationFrame(movementFlushRafRef.current);
         movementFlushRafRef.current = 0;
@@ -2460,6 +2611,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       socket.off("disconnect", handleDisconnect);
       socket.off("zone-pvp:joined", applyState);
       socket.off("zone-pvp:join-confirmed", handleJoinConfirmed);
+      socket.off("zone-pvp:session-check:result", handleZoneSessionCheckResult);
+      socket.off("zone-pvp:resume-missing", handleZoneResumeMissing);
       socket.off("zone-pvp:state", applyState);
       socket.off("zone-pvp:movement", applyMovementFrame);
       socket.off("zone-pvp:collision", applyZoneCollisionImpulse);
