@@ -198,52 +198,37 @@ function getRendererDeviceProfile(forceLowQuality = false) {
 }
 
 function getRendererConfig(forceLowQuality) {
-  const device = getRendererDeviceProfile(forceLowQuality);
-  const lowSpec = device.weakMobile || device.lowSpecDesktop;
-  const lightMobile = device.forcedMobileQuality && !device.weakMobile;
-  const visualFirstDesktop = device.visualFirstWeakDesktop;
-
-  // Weak integrated GPUs are normally fill-rate limited. Keep the same drone
-  // artwork and terrain, but render them in a slightly smaller internal
-  // framebuffer and disable MSAA (the premium outlines already provide their
-  // own anti-aliased vector edges). This is much cheaper than removing models,
-  // props or the world background.
-  const resolution = device.lowSpecDesktop
-    ? 0.68
-    : device.weakMobile
-      ? 0.66
-      : visualFirstDesktop
-        ? Math.min(0.68, device.dpr)
-        : lightMobile
-          ? 0.80
-          : Math.min(1.35, device.dpr);
+  const device = getRendererDeviceProfile(false);
 
   return {
     ...device,
-    resolution,
-    // MSAA is especially expensive on Intel/older Radeon iGPUs. The weak
-    // desktop profile keeps all geometry but avoids paying the extra render
-    // target resolve every frame.
-    antialias: !lowSpec && !lightMobile && !visualFirstDesktop,
-    // Nearby drones remain premium. Distant drones retain their full bodies,
-    // rotors, propulsion and escort count; only the amount of static loot and
-    // decoration work is budgeted for older desktop GPUs.
-    maxStaticItems: device.lowSpecDesktop ? 38 : device.weakMobile ? 38 : visualFirstDesktop ? 58 : lightMobile ? 46 : 120,
-    maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : visualFirstDesktop ? 5 : lightMobile ? 5 : MAX_RENDERED_PLAYERS,
+
+    // Calitate maximă pe toate device-urile.
+    resolution: Math.min(1.35, device.dpr),
+    antialias: true,
+
+    // Toate dronele apropiate sunt randate complet.
+    maxStaticItems: 120,
+    maxPlayers: MAX_RENDERED_PLAYERS,
     maxSimplePlayers: 60,
-    maxProjectiles: device.lowSpecDesktop ? 6 : device.weakMobile ? 5 : visualFirstDesktop ? 9 : lightMobile ? 6 : MAX_RENDERED_PROJECTILES,
-    maxSimpleProjectiles: device.lowSpecDesktop ? 30 : device.weakMobile ? 26 : visualFirstDesktop ? 32 : lightMobile ? 26 : 48,
-    staticSyncInterval: device.lowSpecDesktop ? 620 : device.weakMobile ? 620 : visualFirstDesktop ? 560 : lightMobile ? 480 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: device.lowSpecDesktop ? 10 : device.weakMobile ? 10 : visualFirstDesktop ? 7 : lightMobile ? 6 : 1,
-    // The large terrain texture is fill-rate expensive on Intel/older Radeon
-    // iGPUs. Weak desktops keep every gameplay model/projectile, but start
-    // without that purely decorative layer to preserve a stable 60 FPS.
-    disableExpensiveTerrain: Boolean(
-      device.weakMobile ||
-      device.lowSpecDesktop ||
-      visualFirstDesktop ||
-      lightMobile,
-    ),
+
+    // Attack drone-urile sunt randate complet.
+    maxProjectiles: MAX_RENDERED_PROJECTILES,
+    maxSimpleProjectiles: 48,
+
+    // Orbs / energy / cores se actualizează la frecvența maximă.
+    staticSyncInterval: STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: 1,
+
+    // Activează harta/terrain-ul premium pe orice device.
+    disableExpensiveTerrain: false,
+
+    // Dezactivează toate profilele low-spec folosite mai jos în renderer.
+    weakMobile: false,
+    weakDesktop: false,
+    lowSpecDesktop: false,
+    visualFirstWeakDesktop: false,
+    forcedMobileQuality: false,
   };
 }
 
