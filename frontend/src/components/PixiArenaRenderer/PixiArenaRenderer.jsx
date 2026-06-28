@@ -1265,7 +1265,8 @@ function updateLaggedTrail(trail, targetX, targetY, response, scale, alpha, delt
 
 function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = false, effectTier = 0) {
   const skin = normalizeSkin(unit.skin);
-  if (visual.skin !== skin) {
+  const skinChanged = visual.skin !== skin;
+  if (skinChanged) {
     visual.skin = skin;
     visual.body.context = resources.droneContexts[skin] || resources.droneContexts.cyan;
     visual.aura.context = resources.droneAuraContexts[skin] || resources.droneAuraContexts.cyan;
@@ -1481,9 +1482,10 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
   visual.lastSeenAt = now;
 }
 
-function updateSimpleVisual(visual, unit, resources, now) {
+function updateSimpleVisual(visual, unit, resources, now, decorIntervalMs = 0) {
   const skin = normalizeSkin(unit.skin);
-  if (visual.skin !== skin) {
+  const skinChanged = visual.skin !== skin;
+  if (skinChanged) {
     visual.skin = skin;
     visual.body.context = resources.simpleContexts[skin] || resources.simpleContexts.cyan;
     visual.engine.context = resources.engineVectorContexts[skin] || resources.engineVectorContexts.cyan;
@@ -1522,50 +1524,63 @@ function updateSimpleVisual(visual, unit, resources, now) {
   visual.root.scale.set(0.96);
   visual.root.alpha = unit.alive === false ? 0.32 : 0.98;
 
-  // Cheap transform-only propulsion: one engine scale/alpha plus four rotor
-  // rotations. This costs far less than the premium aura/shield/escort layer.
-  visual.body.position.set(0, Math.sin(phase) * 0.72);
-  visual.engine.visible = true;
-  visual.engine.scale.set(
-    0.36 + throttle * 0.08,
-    0.34 + throttle * 0.15 + Math.sin(phase * 1.7) * 0.025,
-  );
-  visual.engine.alpha = moving ? 0.72 : 0.38;
+  // Keep root position/facing at the display refresh rate. On weak hardware,
+  // only the decorative child transforms are sampled at 30/20 FPS; the same
+  // engine, propellers and escort models remain on screen, without per-frame
+  // property churn across dozens of distant drones.
+  const updateDecor =
+    skinChanged ||
+    !decorIntervalMs ||
+    now - Number(visual.lastDecorAt || 0) >= decorIntervalMs;
 
-  visual.rotors.forEach((rotor, index) => {
-    const direction = index % 2 === 0 ? 1 : -1;
-    rotor.rotation = direction * now * 0.026 + index * Math.PI * 0.5;
-    rotor.alpha = moving ? 0.62 : 0.42;
-  });
-
-  // Escort drones are intentionally simpler than the near premium pool:
-  // no glow and no extra rotor objects, but the same skin, body and orbit
-  // count remain visible for every remote player/bot.
-  const escortCount = Math.min(MAX_MINI_DRONES, Math.max(0, Number(unit.drones || 0)));
-  const escortRadius = 56;
-  const escortSpin = now * (moving ? 0.00185 : 0.00125) + visual.hoverSeed;
-  visual.minis.forEach((mini, index) => {
-    const visible = index < escortCount;
-    mini.visible = visible;
-    if (!visible) return;
-
-    const angle = (index / Math.max(1, escortCount)) * Math.PI * 2 + escortSpin;
-    mini.position.set(
-      Math.cos(angle) * escortRadius,
-      Math.sin(angle) * escortRadius + Math.sin(now * 0.004 + index * 1.7) * 1.45,
+  if (updateDecor) {
+    visual.lastDecorAt = now;
+    // Cheap transform-only propulsion: one engine scale/alpha plus four rotor
+    // rotations. This costs far less than the premium aura/shield/escort layer.
+    visual.body.position.set(0, Math.sin(phase) * 0.72);
+    visual.engine.visible = true;
+    visual.engine.scale.set(
+      0.36 + throttle * 0.08,
+      0.34 + throttle * 0.15 + Math.sin(phase * 1.7) * 0.025,
     );
-    mini.rotation = Math.sin(now * 0.003 + index) * 0.05;
-    const pulse = 0.50 + Math.sin(now * 0.0045 + index) * 0.018;
-    mini.scale.set(pulse);
-    mini.alpha = 0.93;
-  });
+    visual.engine.alpha = moving ? 0.72 : 0.38;
+
+    visual.rotors.forEach((rotor, index) => {
+      const direction = index % 2 === 0 ? 1 : -1;
+      rotor.rotation = direction * now * 0.026 + index * Math.PI * 0.5;
+      rotor.alpha = moving ? 0.62 : 0.42;
+    });
+
+    // Escort drones are intentionally simpler than the near premium pool:
+    // no glow and no extra rotor objects, but the same skin, body and orbit
+    // count remain visible for every remote player/bot.
+    const escortCount = Math.min(MAX_MINI_DRONES, Math.max(0, Number(unit.drones || 0)));
+    const escortRadius = 56;
+    const escortSpin = now * (moving ? 0.00185 : 0.00125) + visual.hoverSeed;
+    visual.minis.forEach((mini, index) => {
+      const visible = index < escortCount;
+      mini.visible = visible;
+      if (!visible) return;
+
+      const angle = (index / Math.max(1, escortCount)) * Math.PI * 2 + escortSpin;
+      mini.position.set(
+        Math.cos(angle) * escortRadius,
+        Math.sin(angle) * escortRadius + Math.sin(now * 0.004 + index * 1.7) * 1.45,
+      );
+      mini.rotation = Math.sin(now * 0.003 + index) * 0.05;
+      const pulse = 0.50 + Math.sin(now * 0.0045 + index) * 0.018;
+      mini.scale.set(pulse);
+      mini.alpha = 0.93;
+    });
+  }
 
   visual.lastSeenAt = now;
 }
 
-function updateSimpleProjectileVisual(visual, projectile, resources, now) {
+function updateSimpleProjectileVisual(visual, projectile, resources, now, decorIntervalMs = 0) {
   const skin = normalizeSkin(projectile.skin);
-  if (visual.skin !== skin) {
+  const skinChanged = visual.skin !== skin;
+  if (skinChanged) {
     visual.skin = skin;
     visual.body.context = resources.miniContexts[skin] || resources.miniContexts.cyan;
     visual.rotors.forEach((rotor) => {
@@ -1584,12 +1599,19 @@ function updateSimpleProjectileVisual(visual, projectile, resources, now) {
   visual.root.rotation = heading + Math.PI * 0.5;
   visual.root.scale.set(1.02);
   visual.root.alpha = 0.96;
-  visual.body.position.set(0, Math.sin(phase) * 0.42);
-  visual.rotors.forEach((rotor, index) => {
-    const direction = index % 2 === 0 ? 1 : -1;
-    rotor.rotation = direction * now * 0.036 + index * Math.PI * 0.5;
-    rotor.alpha = 0.68;
-  });
+  const updateDecor =
+    skinChanged ||
+    !decorIntervalMs ||
+    now - Number(visual.lastDecorAt || 0) >= decorIntervalMs;
+  if (updateDecor) {
+    visual.lastDecorAt = now;
+    visual.body.position.set(0, Math.sin(phase) * 0.42);
+    visual.rotors.forEach((rotor, index) => {
+      const direction = index % 2 === 0 ? 1 : -1;
+      rotor.rotation = direction * now * 0.036 + index * Math.PI * 0.5;
+      rotor.alpha = 0.68;
+    });
+  }
   visual.lastSeenAt = now;
 }
 
@@ -1664,7 +1686,7 @@ function syncUnitPool({ pool, source, resources, parent, bounds, max, now, isPla
   return ids;
 }
 
-function syncSimplePool({ pool, source, resources, parent, bounds, max, now, excludeIds = null }) {
+function syncSimplePool({ pool, source, resources, parent, bounds, max, now, excludeIds = null, decorIntervalMs = 0 }) {
   const visible = pool.__visibleScratch || (pool.__visibleScratch = []);
   const seen = pool.__seenScratch || (pool.__seenScratch = new Set());
   visible.length = 0;
@@ -1685,11 +1707,11 @@ function syncSimplePool({ pool, source, resources, parent, bounds, max, now, exc
       visual.root.visible = false;
       continue;
     }
-    updateSimpleVisual(visual, unit, resources, now);
+    updateSimpleVisual(visual, unit, resources, now, decorIntervalMs);
   }
 }
 
-function syncProjectilePool({ pool, source, resources, parent, bounds, max, now, compact = false, simple = false, excludeIds = null }) {
+function syncProjectilePool({ pool, source, resources, parent, bounds, max, now, compact = false, simple = false, excludeIds = null, decorIntervalMs = 0 }) {
   const visible = pool.__visibleScratch || (pool.__visibleScratch = []);
   const ids = pool.__idsScratch || (pool.__idsScratch = new Set());
   visible.length = 0;
@@ -1711,7 +1733,7 @@ function syncProjectilePool({ pool, source, resources, parent, bounds, max, now,
       continue;
     }
     if (simple) {
-      updateSimpleProjectileVisual(visual, projectile, resources, now);
+      updateSimpleProjectileVisual(visual, projectile, resources, now, decorIntervalMs);
     } else {
       updateProjectileVisual(visual, projectile, resources, now, compact);
     }
@@ -2643,6 +2665,13 @@ function PixiArenaRenderer({
         // Keep nearby remote drones visually close to desktop quality at tier 0.
         // Effects are removed only after actual frame-time pressure is detected.
         const remoteEffectTier = adaptiveTier;
+        // The visual model is unchanged on weak devices. This only batches
+        // child-level rotor/engine/escort transforms for far simple units;
+        // root motion, camera and projectile position still update every rAF.
+        const simpleDecorIntervalMs =
+          config.weakMobile || config.lowSpecDesktop || config.visualFirstWeakDesktop
+            ? (adaptiveTier > 0 ? 50 : 33)
+            : 0;
         syncUnitPool({
           pool: playerPool,
           source: playerSource,
@@ -2699,6 +2728,7 @@ function PixiArenaRenderer({
           max: config.maxSimplePlayers,
           now,
           excludeIds: fullEntityIds,
+          decorIntervalMs: simpleDecorIntervalMs,
         });
         const fullProjectileCap = adaptiveTier === 2
           ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 5 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
@@ -2729,6 +2759,7 @@ function PixiArenaRenderer({
           compact: true,
           simple: true,
           excludeIds: fullProjectileIds,
+          decorIntervalMs: simpleDecorIntervalMs,
         });
         // Normal PvP and Zone PvP request strict private combat text. In this
         // mode an event must explicitly belong to the local player. Other

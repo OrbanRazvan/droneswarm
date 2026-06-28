@@ -44,6 +44,11 @@ const REMOTE_MAX_EXTRAPOLATE_MS = 180;
 const REMOTE_PRESENTATION_LEAD_MS = 22;
 const REMOTE_FOLLOW_RESPONSE = 56;
 const REMOTE_STALE_TIMEOUT_MS = 850;
+// During a reconnect we deliberately freeze the last authoritative picture
+// instead of deleting every remote player/bot after one missing packet.
+const ZONE_RENDER_HOLD_WHILE_RECONNECTING_MS = 12000;
+const ZONE_SERVER_SILENCE_RECONNECT_MS = 9000;
+const ZONE_TRANSPORT_RESTART_COOLDOWN_MS = 2500;
 const ZONE_BINARY_PROTOCOL_VERSION = 1;
 const ZONE_BINARY_PLAYER_BYTES = 32;
 const ZONE_BINARY_PROJECTILE_BYTES = 28;
@@ -51,11 +56,12 @@ const ZONE_BINARY_PROJECTILE_BYTES = 28;
 // Remote attack drones are advanced locally at display refresh rate.
 // The network packet is only a correction target, so their visual path stays
 // continuous even when a packet arrives late after a weak-frame spike.
-const PROJECTILE_SMOOTHING = 42;
-const PROJECTILE_REMOTE_HARD_RESYNC_DISTANCE = 240;
-const PROJECTILE_REMOTE_LEAD_MS = 32;
-const PROJECTILE_REMOTE_MAX_AHEAD_MS = 160;
+const PROJECTILE_SMOOTHING = 52;
+const PROJECTILE_REMOTE_HARD_RESYNC_DISTANCE = 340;
+const PROJECTILE_REMOTE_LEAD_MS = 46;
+const PROJECTILE_REMOTE_MAX_AHEAD_MS = 260;
 const PROJECTILE_MOVEMENT_STALE_MS = 1400;
+const PROJECTILE_NETWORK_HOLD_MS = 700;
 const PROJECTILE_FRAME_SCALE = 60;
 const PROJECTILE_VISUAL_TTL = 10000;
 const LOCAL_PROJECTILE_MIN_VISUAL_MS = 85;
@@ -651,7 +657,7 @@ function mergeRemoteProjectileVisual(projectileMap, id, target, localPlayer, now
   const error = Math.hypot(targetX - Number(current.x || 0), targetY - Number(current.y || 0));
   const blend = error >= PROJECTILE_REMOTE_HARD_RESYNC_DISTANCE
     ? 1
-    : Math.max(0.58, 1 - Math.exp(-PROJECTILE_SMOOTHING * Math.max(0.001, dt)));
+    : Math.max(0.44, 1 - Math.exp(-PROJECTILE_SMOOTHING * Math.max(0.001, dt)));
 
   current.ownerId = target.ownerId || current.ownerId;
   current.ownerNetId = target.ownerNetId || current.ownerNetId;
@@ -1359,6 +1365,9 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const explicitExitFinishedRef = useRef(false);
   const explicitExitTimerRef = useRef(null);
   const transportHealthTimerRef = useRef(null);
+  const transportRecoverTimerRef = useRef(null);
+  const lastZoneServerPacketAtRef = useRef(performance.now());
+  const lastTransportRestartAtRef = useRef(0);
   const socketRef = useRef(null);
   // Join state is deliberately separate from socket.connected. A mobile
   // transport may be connected while its first join packet was delayed.
@@ -1523,9 +1532,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       // a last-resort connection fallback for proxies/Wi-Fi networks that
       // occasionally reject a fresh WebSocket handshake. Once WebSocket is
       // available it remains the active transport.
-      transports: ["websocket", "polling"],
+      // Start with the transport that is most likely to work through proxies,
+      // then upgrade to WebSocket. Staying permanently on polling caused long
+      // packets to queue behind state traffic after a minute or two.
+      transports: ["polling", "websocket"],
       tryAllTransports: true,
-      upgrade: false,
+      upgrade: true,
+      rememberUpgrade: true,
       forceNew: true,
       multiplex: false,
       withCredentials: false,
@@ -1564,12 +1577,23 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const getZoneJoinPayload = () => {
       const currentUser = userRef.current;
+      const previousWorld = worldRef.current || {};
+      const previousYou = predictedYouRef.current || previousWorld.you || {};
+      const resumeRoomId = String(previousWorld.roomId || zonePhaseRef.current?.roomId || "");
+      const resumePlayerId = String(previousYou?.id || "");
+      const resumeRoundId = String(previousWorld.roundId || zonePhaseRef.current?.roundId || "");
       return {
         userId: currentUser?.isGuest ? null : currentUser?.id,
         isGuest: Boolean(currentUser?.isGuest),
         username: getDisplayName(currentUser),
         skin: getSelectedSkin(currentUser),
         resumeToken: resumeTokenRef.current,
+        // The server uses these only together with the token/account proof.
+        // They prevent a reconnect race from creating a new empty room.
+        resumeRoomId: resumeRoomId || null,
+        resumePlayerId: resumePlayerId || null,
+        resumeRoundId: resumeRoundId || null,
+        resumeOnly: Boolean(resumeRoomId && resumePlayerId && previousWorld.status !== "finished"),
       };
     };
 
@@ -1607,11 +1631,19 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       serverClockOffsetRef.current = current + boundedDelta * 0.16;
     };
 
+    const markZoneServerActivity = (serverNow = 0) => {
+      lastZoneServerPacketAtRef.current = performance.now();
+      if (serverNow) updateServerClockOffset(serverNow);
+    };
+
     const applyState = (state) => {
       if (!state || !shouldAcceptZonePhase(zonePhaseRef.current, state)) {
         return;
       }
 
+      // Any accepted state proves that this socket is still attached to the
+      // original room. It also resets the zombie-transport watchdog.
+      markZoneServerActivity(state?.serverNow || state?.serverTime);
       // zone-pvp:joined and the following authoritative state both prove that
       // this socket is in a room. Stop the idempotent mobile join retry loop.
       markZoneJoinAccepted(state);
@@ -1975,6 +2007,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
 
     const handleConnect = () => {
+      lastZoneServerPacketAtRef.current = performance.now();
       setConnectionError("");
       combatEventMapRef.current.clear();
       selfCombatSnapshotRef.current = null;
@@ -2000,6 +2033,27 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const handleJoinConfirmed = (confirmation = {}) => {
       markZoneJoinAccepted(confirmation);
+    };
+
+    const handleHeartbeatAck = (ack = {}) => {
+      const expectedRoomId = String(zonePhaseRef.current?.roomId || "");
+      const ackRoomId = String(ack?.roomId || "");
+      if (expectedRoomId && ackRoomId && expectedRoomId !== ackRoomId) return;
+      markZoneServerActivity(ack?.serverNow);
+    };
+
+    const handleResumeUnavailable = (event = {}) => {
+      if (disposed || intentionalExitRef.current) return;
+      // Do not silently create a fresh lobby while the former room still has
+      // this player object. Retry the exact resume request instead.
+      zoneJoinAcceptedRef.current = false;
+      markZoneServerActivity(event?.serverNow);
+      setConnectionError("Sesiunea se reataseaza. Pastrez runda curenta, nu creez alta...");
+      clearZoneJoinRetry();
+      const retryAfterMs = clamp(Number(event?.retryAfterMs || 650), 250, 1800);
+      zoneJoinRetryTimerRef.current = window.setTimeout(() => {
+        if (!disposed && !intentionalExitRef.current && socket.connected) requestZoneJoin();
+      }, retryAfterMs);
     };
 
     const recoverVisibleZoneSession = () => {
@@ -2031,6 +2085,27 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       if (!zoneJoinAcceptedRef.current) {
         zoneJoinAttemptRef.current = 0;
         requestZoneJoin();
+        return;
+      }
+
+      const now = performance.now();
+      const silenceMs = now - Number(lastZoneServerPacketAtRef.current || now);
+      if (
+        silenceMs >= ZONE_SERVER_SILENCE_RECONNECT_MS &&
+        now - Number(lastTransportRestartAtRef.current || 0) >= ZONE_TRANSPORT_RESTART_COOLDOWN_MS
+      ) {
+        // Socket.IO can report connected while an intermediary has silently
+        // stopped forwarding packets. Force a clean, resumable transport reset
+        // rather than leaving this browser in a ghost room.
+        lastTransportRestartAtRef.current = now;
+        zoneJoinAcceptedRef.current = false;
+        setConnectionError("Legatura a devenit inactiva. Reiau exact sesiunea curenta...");
+        socket.disconnect();
+        if (transportRecoverTimerRef.current) window.clearTimeout(transportRecoverTimerRef.current);
+        transportRecoverTimerRef.current = window.setTimeout(() => {
+          transportRecoverTimerRef.current = null;
+          if (!disposed && !intentionalExitRef.current && !socket.connected) socket.connect();
+        }, 60);
         return;
       }
 
@@ -2170,6 +2245,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       const now = performance.now();
       const serverNow = Number(packet?.t || packet?.serverNow || 0);
+      markZoneServerActivity(serverNow);
       const movementSequence = Number(packet?.s || packet?.sequence || 0);
       if (movementSequence > 0 && movementSequence <= Number(lastMovementSequenceRef.current || 0)) return;
       if (movementSequence > 0) lastMovementSequenceRef.current = movementSequence;
@@ -2406,6 +2482,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     socket.on("zone-pvp:joined", applyState);
     socket.on("zone-pvp:join-confirmed", handleJoinConfirmed);
+    socket.on("zone-pvp:heartbeat-ack", handleHeartbeatAck);
+    socket.on("zone-pvp:resume-unavailable", handleResumeUnavailable);
     socket.on("zone-pvp:state", applyState);
     socket.on("zone-pvp:movement", applyMovementFrame);
     // The former binary lane is intentionally not subscribed. It could produce
@@ -2515,6 +2593,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         window.clearInterval(transportHealthTimerRef.current);
         transportHealthTimerRef.current = null;
       }
+      if (transportRecoverTimerRef.current) {
+        window.clearTimeout(transportRecoverTimerRef.current);
+        transportRecoverTimerRef.current = null;
+      }
       socket.off("connect", handleConnect);
       socket.off("connect_error", handleConnectError);
       socket.off("disconnect", handleDisconnect);
@@ -2522,6 +2604,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       socket.io.off("reconnect", handleReconnectSuccess);
       socket.off("zone-pvp:joined", applyState);
       socket.off("zone-pvp:join-confirmed", handleJoinConfirmed);
+      socket.off("zone-pvp:heartbeat-ack", handleHeartbeatAck);
+      socket.off("zone-pvp:resume-unavailable", handleResumeUnavailable);
       socket.off("zone-pvp:state", applyState);
       socket.off("zone-pvp:movement", applyMovementFrame);
       socket.off("zone-pvp:collision", applyZoneCollisionImpulse);
@@ -2652,10 +2736,17 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const motions = remoteMotionRef.current;
       const activeRemoteIds = activeRemoteIdsRef.current;
       activeRemoteIds.clear();
+      const transportDegraded =
+        !socketRef.current?.connected ||
+        !zoneJoinAcceptedRef.current ||
+        now - Number(lastZoneServerPacketAtRef.current || now) > REMOTE_STALE_TIMEOUT_MS;
+      const remoteStaleTimeout = transportDegraded
+        ? ZONE_RENDER_HOLD_WHILE_RECONNECTING_MS
+        : REMOTE_STALE_TIMEOUT_MS;
 
       for (const [id, motion] of motions.entries()) {
         if (id === me?.id) continue;
-        if (now - Number(motion?.lastSeenAt || now) > REMOTE_STALE_TIMEOUT_MS) {
+        if (now - Number(motion?.lastSeenAt || now) > remoteStaleTimeout) {
           motions.delete(id);
           continue;
         }
@@ -2691,7 +2782,17 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       // rows only correct this path toward their present-time extrapolated
       // position; they never make an enemy projectile wait for the next packet.
       for (const projectile of projectileMap.values()) {
-        advanceProjectileInPlace(projectile, dt);
+        const projectileSeenAgo = now - Number(projectile?.__seenAt || now);
+        // Continue the attack drone for a short packet gap, then hold it in
+        // place while transport recovery is running. This prevents a missing
+        // transform stream from sending enemy projectiles far past the arena.
+        if (
+          projectile?.localOnly ||
+          !transportDegraded ||
+          projectileSeenAgo <= PROJECTILE_NETWORK_HOLD_MS
+        ) {
+          advanceProjectileInPlace(projectile, dt);
+        }
       }
 
       // The low-frequency state can introduce the first frame before the hot

@@ -28,6 +28,7 @@ export declare class GameGateway {
     private normalizeZonePvpResumeToken;
     private rememberZonePvpResumeSeat;
     private findZonePvpResumeSeat;
+    private findZonePvpResumeSeatByProof;
     private detachZonePvpSocket;
     private rebindZonePvpResumeSeat;
     private getZoneBotPower;
