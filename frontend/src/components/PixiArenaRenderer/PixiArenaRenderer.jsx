@@ -1719,7 +1719,15 @@ function syncUnitPool({ pool, source, resources, parent, bounds, max, now, isPla
   visible.length = 0;
   ids.clear();
   for (const unit of source || []) {
-    if (!unit || unit.alive === false || (!preCulled && !isVisibleInBounds(unit, bounds, 320))) continue;
+    // The local drone must never be visibility-culled. On mobile the camera
+    // and the newest player snapshot may arrive one render tick apart; culling
+    // here could otherwise hide the player's own drone for an entire frame or
+    // until the next packet. Remote drones keep the normal camera culling.
+    if (
+      !unit ||
+      unit.alive === false ||
+      (!isPlayer && !preCulled && !isVisibleInBounds(unit, bounds, 320))
+    ) continue;
     visible.push(unit);
     ids.add(String(unit.id || ""));
     if (visible.length >= max) break;
@@ -2484,6 +2492,12 @@ function PixiArenaRenderer({
       const combatTextMap = new Map();
       const terrainState = { key: null, failedKey: null };
 
+      // Keep the latest valid local transform briefly. This only protects the
+      // local player during a mobile React/socket hand-off; it never invents
+      // gameplay state and is cleared immediately when the player is dead.
+      let lastRenderableLocalPlayer = null;
+      let lastRenderableLocalPlayerAt = 0;
+
       // Mobile browsers can occasionally lose a WebGL context when changing
       // mode. Prevent the default discard and force terrain/static layers to
       // rebuild from their already-live data after restoration.
@@ -2763,7 +2777,35 @@ function PixiArenaRenderer({
           });
         }
 
-        const playerSource = data.player && data.player.alive !== false ? [data.player] : [];
+        // The live ref can be replaced one frame before the local player field
+        // is copied on mobile. Keep the last valid local transform for a short
+        // grace window so the own drone never disappears during that hand-off.
+        const incomingLocalPlayer = data.player || latestRef.current?.player || null;
+        const hasValidIncomingLocalPlayer = Boolean(
+          incomingLocalPlayer &&
+          incomingLocalPlayer.alive !== false &&
+          Number.isFinite(Number(incomingLocalPlayer.x)) &&
+          Number.isFinite(Number(incomingLocalPlayer.y)),
+        );
+
+        if (hasValidIncomingLocalPlayer) {
+          lastRenderableLocalPlayer = incomingLocalPlayer;
+          lastRenderableLocalPlayerAt = now;
+        } else if (incomingLocalPlayer?.alive === false) {
+          lastRenderableLocalPlayer = null;
+          lastRenderableLocalPlayerAt = 0;
+        }
+
+        const localPlayerFallbackStillFresh = Boolean(
+          lastRenderableLocalPlayer &&
+          now - lastRenderableLocalPlayerAt <= 2500,
+        );
+        const playerSource = hasValidIncomingLocalPlayer
+          ? [incomingLocalPlayer]
+          : localPlayerFallbackStillFresh
+            ? [lastRenderableLocalPlayer]
+            : [];
+
         // Player keeps the complete visual treatment. Remote/bot effects scale
         // down only when the actual device profile or adaptive frame budget
         // needs it; gameplay simulation remains untouched.
