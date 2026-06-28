@@ -176,15 +176,13 @@ function getRendererDeviceProfile(forceLowQuality = false) {
     cores <= 4 || (deviceMemory !== null && deviceMemory <= 8)
   );
 
-  // Desktop/laptop weak profile remains exactly the existing one:
-  // automatic profile when hardware looks weak, or manual forceLowQuality.
-  // Only a non-mobile device that is not in either weak branch is premium.
+  // Weak desktop hardware starts in the same visual profile as a good desktop.
+  // It is not permanently downgraded based only on CPU/RAM heuristics; the
+  // adaptive loop below lowers detail only if real frame time proves it is needed.
+  // `forceLowQuality` remains an explicit player choice.
   const lowSpecDesktop = Boolean(!mobile && forceLowQuality);
   const visualFirstWeakDesktop = Boolean(!mobile && weakDesktop && !forceLowQuality);
-
-  // Mobile never uses the desktop premium profile. Stronger phones keep a
-  // balanced mobile image; weaker phones keep the original lower-budget path.
-  const mobileStandardProfile = Boolean(mobile);
+  const forcedMobileQuality = Boolean(mobile && forceLowQuality);
 
   return {
     mobile,
@@ -195,110 +193,56 @@ function getRendererDeviceProfile(forceLowQuality = false) {
     weakDesktop,
     lowSpecDesktop,
     visualFirstWeakDesktop,
-    mobileStandardProfile,
-    // Kept for compatibility with the rest of the renderer. Mobile no longer
-    // upgrades itself to desktop-premium graphics through this flag.
-    forcedMobileQuality: false,
+    forcedMobileQuality,
   };
 }
 
 function getRendererConfig(forceLowQuality) {
   const device = getRendererDeviceProfile(forceLowQuality);
   const lowSpec = device.weakMobile || device.lowSpecDesktop;
+  const lightMobile = device.forcedMobileQuality && !device.weakMobile;
   const visualFirstDesktop = device.visualFirstWeakDesktop;
-  const mobileProfile = device.mobileStandardProfile;
 
-  // PREMIUM: only good desktop/laptop.
-  // WEAK DESKTOP: keeps exactly the previous visual-first / low-spec budgets.
-  // MOBILE: keeps a balanced mobile profile, never the desktop premium path.
+  // Weak integrated GPUs are normally fill-rate limited. Keep the same drone
+  // artwork and terrain, but render them in a slightly smaller internal
+  // framebuffer and disable MSAA (the premium outlines already provide their
+  // own anti-aliased vector edges). This is much cheaper than removing models,
+  // props or the world background.
   const resolution = device.lowSpecDesktop
     ? 0.68
     : device.weakMobile
       ? 0.66
       : visualFirstDesktop
         ? Math.min(0.68, device.dpr)
-        : mobileProfile
-          ? Math.min(0.80, device.dpr)
+        : lightMobile
+          ? 0.80
           : Math.min(1.35, device.dpr);
 
   return {
     ...device,
     resolution,
-
-    // MSAA is premium-desktop only. Weak desktop and all mobile profiles keep
-    // the existing GPU-saving behavior.
-    antialias: !lowSpec && !mobileProfile && !visualFirstDesktop,
-
-    // Weak desktop numbers are intentionally unchanged from the current file.
-    // A capable desktop receives the full visual pool.
-    maxStaticItems: device.lowSpecDesktop
-      ? 38
-      : device.weakMobile
-        ? 38
-        : visualFirstDesktop
-          ? 58
-          : mobileProfile
-            ? 46
-            : 120,
-
-    maxPlayers: device.lowSpecDesktop
-      ? 4
-      : device.weakMobile
-        ? 3
-        : visualFirstDesktop
-          ? 5
-          : mobileProfile
-            ? 5
-            : MAX_RENDERED_PLAYERS,
-
+    // MSAA is especially expensive on Intel/older Radeon iGPUs. The weak
+    // desktop profile keeps all geometry but avoids paying the extra render
+    // target resolve every frame.
+    antialias: !lowSpec && !lightMobile && !visualFirstDesktop,
+    // Nearby drones remain premium. Distant drones retain their full bodies,
+    // rotors, propulsion and escort count; only the amount of static loot and
+    // decoration work is budgeted for older desktop GPUs.
+    maxStaticItems: device.lowSpecDesktop ? 38 : device.weakMobile ? 38 : visualFirstDesktop ? 58 : lightMobile ? 46 : 120,
+    maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : visualFirstDesktop ? 5 : lightMobile ? 5 : MAX_RENDERED_PLAYERS,
     maxSimplePlayers: 60,
-
-    maxProjectiles: device.lowSpecDesktop
-      ? 6
-      : device.weakMobile
-        ? 5
-        : visualFirstDesktop
-          ? 9
-          : mobileProfile
-            ? 6
-            : MAX_RENDERED_PROJECTILES,
-
-    maxSimpleProjectiles: device.lowSpecDesktop
-      ? 30
-      : device.weakMobile
-        ? 26
-        : visualFirstDesktop
-          ? 32
-          : mobileProfile
-            ? 26
-            : 48,
-
-    staticSyncInterval: device.lowSpecDesktop
-      ? 620
-      : device.weakMobile
-        ? 620
-        : visualFirstDesktop
-          ? 560
-          : mobileProfile
-            ? 480
-            : STATIC_SYNC_INTERVAL_MS,
-
-    animateStaticEvery: device.lowSpecDesktop
-      ? 10
-      : device.weakMobile
-        ? 10
-        : visualFirstDesktop
-          ? 7
-          : mobileProfile
-            ? 6
-            : 1,
-
-    // Terrain remains exclusive to a good PC/laptop because it is decorative
-    // and the largest fill-rate cost in the renderer.
+    maxProjectiles: device.lowSpecDesktop ? 6 : device.weakMobile ? 5 : visualFirstDesktop ? 9 : lightMobile ? 6 : MAX_RENDERED_PROJECTILES,
+    maxSimpleProjectiles: device.lowSpecDesktop ? 30 : device.weakMobile ? 26 : visualFirstDesktop ? 32 : lightMobile ? 26 : 48,
+    staticSyncInterval: device.lowSpecDesktop ? 620 : device.weakMobile ? 620 : visualFirstDesktop ? 560 : lightMobile ? 480 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: device.lowSpecDesktop ? 10 : device.weakMobile ? 10 : visualFirstDesktop ? 7 : lightMobile ? 6 : 1,
+    // The large terrain texture is fill-rate expensive on Intel/older Radeon
+    // iGPUs. Weak desktops keep every gameplay model/projectile, but start
+    // without that purely decorative layer to preserve a stable 60 FPS.
     disableExpensiveTerrain: Boolean(
-      mobileProfile ||
+      device.weakMobile ||
       device.lowSpecDesktop ||
-      visualFirstDesktop
+      visualFirstDesktop ||
+      lightMobile,
     ),
   };
 }
