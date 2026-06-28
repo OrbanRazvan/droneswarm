@@ -48,13 +48,7 @@ const ZONE_BINARY_PROTOCOL_VERSION = 1;
 const ZONE_BINARY_PLAYER_BYTES = 32;
 const ZONE_BINARY_PROJECTILE_BYTES = 28;
 
-// Projectile transforms use their own authoritative motion record. A projectile is
-// advanced every display frame and corrected toward the newest server position;
-// it is never repeatedly pulled back to a stale 25-40 Hz packet.
-const PROJECTILE_SMOOTHING = 72;
-const PROJECTILE_REMOTE_HARD_RESYNC_DISTANCE = 180;
-const PROJECTILE_REMOTE_MAX_AHEAD_MS = 260;
-const PROJECTILE_MOVEMENT_STALE_MS = 900;
+const PROJECTILE_SMOOTHING = 18;
 const PROJECTILE_FRAME_SCALE = 60;
 const PROJECTILE_VISUAL_TTL = 10000;
 const LOCAL_PROJECTILE_MIN_VISUAL_MS = 85;
@@ -583,9 +577,11 @@ function collectVisible(source, predicate, limit, mapFn) {
 function advanceProjectile(projectile, dt) {
   if (!projectile) return projectile;
 
-  projectile.x = Number(projectile.x || 0) + Number(projectile.vx || 0) * dt * PROJECTILE_FRAME_SCALE;
-  projectile.y = Number(projectile.y || 0) + Number(projectile.vy || 0) * dt * PROJECTILE_FRAME_SCALE;
-  return projectile;
+  return {
+    ...projectile,
+    x: projectile.x + (projectile.vx || 0) * dt * PROJECTILE_FRAME_SCALE,
+    y: projectile.y + (projectile.vy || 0) * dt * PROJECTILE_FRAME_SCALE,
+  };
 }
 
 function getProjectileTravelDistance(projectile) {
@@ -1090,86 +1086,11 @@ function resolveRemoteMotion(motion, now, dt) {
     }
   }
 
-  // Keep the same object identity in the render map. This avoids allocating
-  // 50-60 new drone objects every animation frame on an older laptop.
-  motion.x = Number(motion.renderX || 0);
-  motion.y = Number(motion.renderY || 0);
-  return motion;
-}
-
-function upsertZoneProjectileMotion(map, incoming, receivedAt, serverAt = 0) {
-  if (!incoming?.id) return null;
-
-  const id = String(incoming.id);
-  const previous = map.get(id);
-  const incomingServerAt = Number(serverAt || incoming?.__serverAt || 0);
-
-  // A delayed definition packet must never replace a newer hot transform.
-  if (previous && incomingServerAt > 0 && Number(previous.serverAt || 0) > incomingServerAt) {
-    previous.skin = normalizeSkin(incoming.skin || previous.skin || "cyan");
-    previous.ownerId = incoming.ownerId || previous.ownerId;
-    previous.pierceLeft = incoming.pierceLeft ?? previous.pierceLeft;
-    previous.shieldBreaker = Boolean(incoming.shieldBreaker ?? previous.shieldBreaker);
-    previous.piercesShield = Boolean(incoming.piercesShield ?? previous.piercesShield);
-    return previous;
-  }
-
-  const sourceX = Number(incoming.x ?? previous?.sourceX ?? previous?.x ?? 0);
-  const sourceY = Number(incoming.y ?? previous?.sourceY ?? previous?.y ?? 0);
-  const next = previous || {};
-
-  Object.assign(next, incoming, {
-    id,
-    skin: normalizeSkin(incoming.skin || previous?.skin || "cyan"),
-    sourceX,
-    sourceY,
-    vx: Number(incoming.vx ?? previous?.vx ?? 0),
-    vy: Number(incoming.vy ?? previous?.vy ?? 0),
-    serverAt: incomingServerAt || Number(previous?.serverAt || 0),
-    receivedAt,
-    lastSeenAt: receivedAt,
-    renderX: previous?.ready ? Number(previous.renderX) : sourceX,
-    renderY: previous?.ready ? Number(previous.renderY) : sourceY,
-    ready: Boolean(previous?.ready),
-    localOnly: false,
-  });
-
-  map.set(id, next);
-  return next;
-}
-
-function resolveZoneProjectileMotion(motion, now, dt) {
-  if (!motion) return null;
-
-  const ageMs = clamp(
-    now - Number(motion.receivedAt || now) + 12,
-    0,
-    PROJECTILE_REMOTE_MAX_AHEAD_MS,
-  );
-  const targetX = Number(motion.sourceX || 0) + Number(motion.vx || 0) * (ageMs / 1000) * PROJECTILE_FRAME_SCALE;
-  const targetY = Number(motion.sourceY || 0) + Number(motion.vy || 0) * (ageMs / 1000) * PROJECTILE_FRAME_SCALE;
-
-  if (!motion.ready) {
-    motion.renderX = targetX;
-    motion.renderY = targetY;
-    motion.ready = true;
-  } else {
-    const dx = targetX - Number(motion.renderX || 0);
-    const dy = targetY - Number(motion.renderY || 0);
-    const distance = Math.hypot(dx, dy);
-    if (distance >= PROJECTILE_REMOTE_HARD_RESYNC_DISTANCE) {
-      motion.renderX = targetX;
-      motion.renderY = targetY;
-    } else {
-      const follow = 1 - Math.exp(-PROJECTILE_SMOOTHING * Math.max(0.001, dt));
-      motion.renderX += dx * follow;
-      motion.renderY += dy * follow;
-    }
-  }
-
-  motion.x = Number(motion.renderX || 0);
-  motion.y = Number(motion.renderY || 0);
-  return motion;
+  return {
+    ...motion,
+    x: Number(motion.renderX || 0),
+    y: Number(motion.renderY || 0),
+  };
 }
 
 function getBattlePrepareRemainingMs(data = {}) {
@@ -1351,12 +1272,6 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const zoneJoinAcceptedRef = useRef(false);
   const zoneJoinAttemptRef = useRef(0);
   const zoneJoinRetryTimerRef = useRef(null);
-  // The resume identity is updated only by an authoritative room state. It is
-  // sent on reconnect so the backend never creates a second "ghost" lobby.
-  const zoneResumeIdentityRef = useRef({ roomId: null, playerId: null });
-  const lastZonePacketAtRef = useRef(performance.now());
-  const lastZoneResyncAtRef = useRef(0);
-  const zoneResyncTimerRef = useRef(null);
   const keysRef = useRef({});
   const mouseRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const lastFrameRef = useRef(performance.now());
@@ -1464,22 +1379,6 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const predictedYouRef = useRef(null);
   const spectatorTargetRef = useRef(null);
   const remotePlayersRef = useRef(new Map());
-  const remoteActiveIdsRef = useRef(new Set());
-  const renderSelectionRef = useRef({
-    nextAt: 0,
-    remote: [],
-    detailed: [],
-    simple: [],
-    players: [],
-    bots: [],
-    orbs: [],
-    energy: [],
-    cores: [],
-    projectiles: [],
-    simpleProjectiles: [],
-    combatEvents: [],
-  });
-  const pixiFrameRef = useRef({});
   const projectilesRef = useRef(new Map());
   const lastLocalProjectileAtRef = useRef(0);
   const stableOrbMapRef = useRef(new Map());
@@ -1506,19 +1405,17 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     // loot/HUD traffic and is the main cause of slow-motion remote drones.
     const socket = io(API_URL, {
       autoConnect: false,
-      // Start on WebSocket for latency, but keep long-polling as a real
-      // fallback. A proxy/Wi-Fi WebSocket reset must not eject a live player.
-      transports: ["websocket", "polling"],
-      upgrade: true,
-      tryAllTransports: true,
-      rememberUpgrade: true,
+      transports: ["websocket"],
+      upgrade: false,
+      forceNew: true,
+      multiplex: false,
       withCredentials: false,
-      timeout: 20000,
+      timeout: 12000,
       reconnection: true,
       reconnectionAttempts: Infinity,
-      reconnectionDelay: 650,
-      reconnectionDelayMax: 3500,
-      randomizationFactor: 0.18,
+      reconnectionDelay: 500,
+      reconnectionDelayMax: 2500,
+      randomizationFactor: 0.25,
     });
 
     socketRef.current = socket;
@@ -1548,20 +1445,12 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const getZoneJoinPayload = () => {
       const currentUser = userRef.current;
-      const identity = zoneResumeIdentityRef.current || {};
-      const resumeRoomId = identity.roomId ? String(identity.roomId) : null;
-      const resumePlayerId = identity.playerId ? String(identity.playerId) : null;
       return {
         userId: currentUser?.isGuest ? null : currentUser?.id,
         isGuest: Boolean(currentUser?.isGuest),
         username: getDisplayName(currentUser),
         skin: getSelectedSkin(currentUser),
         resumeToken: resumeTokenRef.current,
-        resumeRoomId,
-        resumePlayerId,
-        // Once a round has been seen, reconnect may restore only that exact
-        // seat. The server must never silently create another room.
-        resumeOnly: Boolean(resumeRoomId && resumePlayerId),
       };
     };
 
@@ -1579,18 +1468,6 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       zoneJoinRetryTimerRef.current = window.setTimeout(() => {
         requestZoneJoin();
       }, retryDelay);
-    };
-
-    const requestZoneResync = () => {
-      if (disposed || !socket.connected) return;
-      const identity = zoneResumeIdentityRef.current || {};
-      const payload = {
-        ...getZoneJoinPayload(),
-        roomId: identity.roomId || null,
-        playerId: identity.playerId || null,
-        resumeOnly: Boolean(identity.roomId && identity.playerId),
-      };
-      socket.emit("zone-pvp:resync", payload);
     };
 
     const updateServerClockOffset = (serverNow) => {
@@ -1659,13 +1536,6 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       const now = performance.now();
       const nowWall = Date.now();
-      lastZonePacketAtRef.current = now;
-      if (incomingRoomId && state?.you?.id) {
-        zoneResumeIdentityRef.current = {
-          roomId: incomingRoomId,
-          playerId: String(state.you.id),
-        };
-      }
       updateServerClockOffset(state?.serverNow || state?.serverTime);
 
       // Definitions are small and rare. They make the binary transform lane
@@ -1704,30 +1574,30 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           zoneProjectileMetaRef.current.set(netId, { ...projectile });
           if (previousKey !== currentKey) {
             // A transform can arrive one frame before the low-frequency
-            // projectile definition. Migrate the mutable motion record instead
-            // of cloning it, so one server projectile keeps one visual object.
+            // projectile definition. Migrate *both* transform and rendered
+            // maps from the temporary net key to the UUID; otherwise Pixi
+            // receives the same attack drone twice for one server projectile.
             const temporary = projectileMovementRef.current.get(previousKey);
             if (temporary) {
               projectileMovementRef.current.delete(previousKey);
-              temporary.id = currentKey;
-              Object.assign(temporary, projectile);
-              projectileMovementRef.current.set(currentKey, temporary);
+              projectileMovementRef.current.set(currentKey, { ...temporary, ...projectile, id: currentKey });
             }
 
             const rendered = projectilesRef.current.get(previousKey);
             if (rendered) {
               projectilesRef.current.delete(previousKey);
-              rendered.id = currentKey;
-              Object.assign(rendered, projectile, { localOnly: false, __seenAt: now });
-              if (!projectilesRef.current.has(currentKey)) projectilesRef.current.set(currentKey, rendered);
+              const currentRendered = projectilesRef.current.get(currentKey);
+              if (!currentRendered) {
+                projectilesRef.current.set(currentKey, {
+                  ...rendered,
+                  ...projectile,
+                  id: currentKey,
+                  localOnly: false,
+                  __seenAt: now,
+                });
+              }
             }
           }
-          upsertZoneProjectileMotion(
-            projectileMovementRef.current,
-            { ...projectile, id: currentKey },
-            now,
-            Number(state?.serverNow || state?.serverTime || 0),
-          );
         }
       }
 
@@ -1987,21 +1857,17 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const handleConnect = () => {
       setConnectionError("");
-      // Keep the last rendered room alive while the transport reconnects. Do
-      // not clear world maps here: clearing them was the source of the empty
-      // camera / vanished-bot screen after a short WebSocket reset.
+      combatEventMapRef.current.clear();
+      selfCombatSnapshotRef.current = null;
+      // A new Engine.IO session has a new socket id and must be admitted again.
       zoneJoinAcceptedRef.current = false;
       zoneJoinAttemptRef.current = 0;
       clearZoneJoinRetry();
-      lastZonePacketAtRef.current = performance.now();
-      requestZoneResync();
-      window.setTimeout(() => {
-        if (!disposed && socket.connected && !zoneJoinAcceptedRef.current) requestZoneJoin();
-      }, 450);
+      requestZoneJoin();
     };
 
     const handleConnectError = () => {
-      if (!disposed) setConnectionError("Serverul PvP se reconecteaza automat...");
+      setConnectionError("Nu ma pot conecta la serverul PvP. Se reincerca automat...");
     };
 
     const handleDisconnect = (reason) => {
@@ -2009,15 +1875,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       zoneJoinAttemptRef.current = 0;
       clearZoneJoinRetry();
       if (!disposed && reason !== "io client disconnect") {
-        setConnectionError("Conexiunea Zone PvP s-a intrerupt. Reiau aceeași sesiune...");
+        setConnectionError("Conexiunea Zone PvP s-a intrerupt. Se reconecteaza...");
       }
-    };
-
-    const handleResumeMissing = () => {
-      // Never silently join a fresh room when a live seat cannot be restored.
-      // Keeping the last frame is safer than showing a camera from another room.
-      zoneJoinAcceptedRef.current = false;
-      setConnectionError("Sesiunea veche nu poate fi restaurată încă. Se încearcă din nou...");
     };
 
     const handleJoinConfirmed = (confirmation = {}) => {
@@ -2151,7 +2010,6 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       if (currentRoomId && packetRoomId && currentRoomId !== packetRoomId) return;
 
       const now = performance.now();
-      lastZonePacketAtRef.current = now;
       const serverNow = Number(packet?.t || packet?.serverNow || 0);
       const movementSequence = Number(packet?.s || packet?.sequence || 0);
       if (movementSequence > 0 && movementSequence <= Number(lastMovementSequenceRef.current || 0)) return;
@@ -2159,8 +2017,471 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       updateServerClockOffset(serverNow);
 
       const motions = remoteMotionRef.current;
-      const activeRemoteIds = remoteActiveIdsRef.current;
-      activeRemoteIds.clear();
+      const playerRows = Array.isArray(packet?.p) ? packet.p : (packet?.players || []);
+      for (const row of playerRows) {
+        const netId = Array.isArray(row) ? Number(row[0] || 0) : Number(row?.netId || 0);
+        const meta = netId > 0 ? (zoneEntityMetaRef.current.get(netId) || {}) : {};
+        const movement = decodeZonePlayerRow(row, meta);
+        if (!movement?.id) continue;
+        upsertRemoteMotion(motions, movement, now, serverNow, false);
+      }
+
+      const movementProjectiles = projectileMovementRef.current;
+      const packetProjectileIds = new Set();
+      const projectileRows = Array.isArray(packet?.q) ? packet.q : (packet?.projectiles || []);
+      for (const row of projectileRows) {
+        const netId = Array.isArray(row) ? Number(row[0] || 0) : Number(row?.netId || 0);
+        const ownerNetId = Array.isArray(row) ? Number(row[1] || 0) : Number(row?.ownerNetId || 0);
+        const meta = netId > 0 ? (zoneProjectileMetaRef.current.get(netId) || {}) : {};
+        const ownerMeta = ownerNetId > 0 ? (zoneEntityMetaRef.current.get(ownerNetId) || {}) : {};
+        const localOwner = Number(worldRef.current?.you?.netId || 0) === ownerNetId
+          ? worldRef.current?.you
+          : null;
+        const projectile = decodeZoneProjectileRow(row, {
+          ...meta,
+          ownerId: meta?.ownerId || ownerMeta?.id || localOwner?.id || meta?.ownerId,
+          // On the very first projectile frame metadata can still be absent.
+          // Prefer q[9], then the currently known owner skin, so there is no
+          // temporary cyan attack drone before the normal definition arrives.
+          skin:
+            (Array.isArray(row) ? row[9] : row?.skin) ||
+            meta?.skin ||
+            ownerMeta?.skin ||
+            localOwner?.skin ||
+            "cyan",
+        });
+        if (!projectile?.id) continue;
+        packetProjectileIds.add(projectile.id);
+        const existing = movementProjectiles.get(projectile.id);
+        movementProjectiles.set(projectile.id, {
+          ...(existing || {}),
+          ...projectile,
+          __movementSeenAt: now,
+          __serverAt: serverNow,
+        });
+      }
+
+      for (const [id, projectile] of movementProjectiles.entries()) {
+        if (!packetProjectileIds.has(id) && now - Number(projectile?.__movementSeenAt || now) > 700) {
+          movementProjectiles.delete(id);
+        }
+      }
+    };
+
+    const applyMovementFrame = (packet = {}) => {
+      latestMovementPacketRef.current = packet;
+      if (movementFlushRafRef.current) return;
+
+      movementFlushRafRef.current = window.requestAnimationFrame(() => {
+        movementFlushRafRef.current = 0;
+        const latest = latestMovementPacketRef.current;
+        latestMovementPacketRef.current = null;
+        if (latest) consumeMovementFrame(latest);
+      });
+    };
+
+    // Legacy binary packets are intentionally ignored. The JSON transform lane
+    // now contains complete entities, so bots never wait for separate metadata.
+    const applyBinaryTransforms = () => {};
+    const ignoredBinaryTransforms = (packet = {}, binaryPayload) => {
+      const currentRoomId = String(zonePhaseRef.current?.roomId || "");
+      const packetRoomId = String(packet?.roomId || "");
+      if (currentRoomId && packetRoomId && currentRoomId !== packetRoomId) return;
+      if (packet?.status && packet.status !== "playing") return;
+
+      const sequence = Number(packet?.sequence || 0);
+      if (sequence > 0 && sequence <= Number(lastMovementSequenceRef.current || 0)) return;
+      if (sequence > 0) lastMovementSequenceRef.current = sequence;
+
+      const bytes = toZoneBinaryArrayBuffer(binaryPayload);
+      if (!bytes || bytes.byteLength < 8) return;
+
+      const view = new DataView(bytes);
+      const version = view.getUint16(0, true);
+      if (version !== ZONE_BINARY_PROTOCOL_VERSION) return;
+      const playerCount = view.getUint16(2, true);
+      const projectileCount = view.getUint16(4, true);
+      const expectedBytes = 8 + playerCount * ZONE_BINARY_PLAYER_BYTES + projectileCount * ZONE_BINARY_PROJECTILE_BYTES;
+      if (bytes.byteLength < expectedBytes) return;
+
+      const now = performance.now();
+      const serverNow = Number(packet?.serverNow || 0);
+      updateServerClockOffset(serverNow);
+
+      let offset = 8;
+      const snapshotsById = remoteSnapshotBufferRef.current;
+      for (let index = 0; index < playerCount; index += 1) {
+        const netId = view.getUint32(offset, true);
+        const meta = zoneEntityMetaRef.current.get(netId) || {};
+        const flags = view.getUint16(offset + 28, true);
+        const id = meta.id || zoneNetKey(netId);
+        const movement = {
+          ...meta,
+          id,
+          netId,
+          x: view.getFloat32(offset + 4, true),
+          y: view.getFloat32(offset + 8, true),
+          velocityX: view.getFloat32(offset + 12, true),
+          velocityY: view.getFloat32(offset + 16, true),
+          moveAngle: view.getFloat32(offset + 20, true),
+          hp: view.getFloat32(offset + 24, true),
+          isMoving: Boolean(flags & 1),
+          attacking: Boolean(flags & 2),
+          shieldActive: Boolean(flags & 4),
+          alive: Boolean(flags & 8),
+          isBot: Boolean(flags & 16) || Boolean(meta.isBot),
+          drones: view.getUint8(offset + 30),
+          energy: view.getUint8(offset + 31),
+        };
+        const oldBuffer = snapshotsById.get(id) || [];
+        snapshotsById.set(id, appendRemoteSnapshot(oldBuffer, movement, now, serverNow));
+        offset += ZONE_BINARY_PLAYER_BYTES;
+      }
+
+      const movementProjectiles = projectileMovementRef.current;
+      for (let index = 0; index < projectileCount; index += 1) {
+        const netId = view.getUint32(offset, true);
+        const meta = zoneProjectileMetaRef.current.get(netId) || {};
+        const flags = view.getUint16(offset + 24, true);
+        const id = meta.id || zoneNetKey(netId);
+        movementProjectiles.set(id, {
+          ...meta,
+          id,
+          netId,
+          x: view.getFloat32(offset + 4, true),
+          y: view.getFloat32(offset + 8, true),
+          vx: view.getFloat32(offset + 12, true),
+          vy: view.getFloat32(offset + 16, true),
+          angle: view.getFloat32(offset + 20, true),
+          pierceLeft: flags & 1 ? Math.max(2, Number(meta.pierceLeft || 2)) : Number(meta.pierceLeft || 1),
+          shieldBreaker: Boolean(flags & 2),
+          piercesShield: Boolean(flags & 2),
+          __movementSeenAt: now,
+          __serverAt: serverNow,
+        });
+        offset += ZONE_BINARY_PROJECTILE_BYTES;
+      }
+    };
+
+    const applyZoneCollisionImpulse = (event = {}) => {
+      const collisionVersion = Number(event.collisionVersion || 0);
+      if (!collisionVersion || collisionVersion <= Number(lastCollisionVersionRef.current || 0)) return;
+
+      const current = predictedYouRef.current || worldRef.current.you;
+      if (!current || current.alive === false) return;
+
+      lastCollisionVersionRef.current = collisionVersion;
+      const impulseX = Number(event.impulseX || 0);
+      const impulseY = Number(event.impulseY || 0);
+      const serverX = Number(event.x);
+      const serverY = Number(event.y);
+      const correctionDistance = Number.isFinite(serverX) && Number.isFinite(serverY)
+        ? Math.hypot(serverX - Number(current.x || 0), serverY - Number(current.y || 0))
+        : Infinity;
+
+      const next = {
+        ...current,
+        // A small authoritative separation fixes visual overlap. Ignore a late
+        // packet that is far behind the locally predicted drone.
+        x: correctionDistance <= 96 ? serverX : current.x,
+        y: correctionDistance <= 96 ? serverY : current.y,
+        knockbackX: impulseX,
+        knockbackY: impulseY,
+        collisionVersion,
+        lastCollisionAt: Number(event.serverTime || Date.now()),
+      };
+
+      predictedYouRef.current = next;
+      worldRef.current = { ...worldRef.current, you: next };
+      if (pixiLiveRef.current) {
+        pixiLiveRef.current = { ...pixiLiveRef.current, you: next };
+      }
+    };
+
+    const applyPrivateCombatEvent = (event) => {
+      const viewerId = String(worldRef.current.you?.id || socket.id || "");
+      if (!event?.id || !viewerId) return;
+      let normalizedEvent = {
+        ...event,
+        viewerId: String(event.viewerId || viewerId),
+      };
+      if (normalizedEvent.viewerId !== viewerId) return;
+
+      const visualAnchor = predictedYouRef.current || worldRef.current.you;
+      if (
+        visualAnchor &&
+        normalizedEvent.kind === "heal" &&
+        /^ENERGY\s*\+/.test(String(normalizedEvent.text || ""))
+      ) {
+        normalizedEvent = {
+          ...normalizedEvent,
+          x: Number(visualAnchor.x || normalizedEvent.x || 0),
+          y: Number(visualAnchor.y || normalizedEvent.y || 0) - 34,
+        };
+      }
+
+      combatEventMapRef.current = mergePrivateCombatEvents(
+        combatEventMapRef.current,
+        [normalizedEvent],
+        viewerId,
+        Date.now(),
+      );
+      const combatEvents = [...combatEventMapRef.current.values()];
+      worldRef.current = {
+        ...worldRef.current,
+        combatEvents,
+      };
+
+      // Do not wait for React state or the next volatile world snapshot.
+      // Pixi reads this live object on its next WebGL frame, matching the
+      // immediate local feedback used by BattleRoyaleMode.
+      if (pixiLiveRef.current) {
+        pixiLiveRef.current = {
+          ...pixiLiveRef.current,
+          combatEvents,
+          combatViewerId: viewerId,
+          combatEventsPrivate: true,
+        };
+      }
+    };
+
+    socket.on("zone-pvp:joined", applyState);
+    socket.on("zone-pvp:join-confirmed", handleJoinConfirmed);
+    socket.on("zone-pvp:state", applyState);
+    socket.on("zone-pvp:movement", applyMovementFrame);
+    // The former binary lane is intentionally not subscribed. It could produce
+    // incomplete entity definitions on mobile and make bots disappear.
+    socket.on("zone-pvp:collision", applyZoneCollisionImpulse);
+    socket.on("zone-pvp:combat", applyPrivateCombatEvent);
+    socket.on("zone-pvp:collect", applyCollectSync);
+    socket.on("zone-pvp:world-delta", applyWorldItemDelta);
+    socket.on("zone-pvp:eliminated", applyEliminated);
+    socket.on("zone-pvp:error", (message) => setConnectionError(typeof message === "string" ? message : "Eroare Zone PvP."));
+
+    // All listeners are attached before transport starts, avoiding a fast
+    // join/state race on mobile browsers.
+    socket.on("connect", handleConnect);
+    document.addEventListener("visibilitychange", recoverVisibleZoneSession);
+    window.addEventListener("pageshow", recoverVisibleZoneSession);
+    socket.connect();
+
+    const sendInputNow = (force = false) => {
+      if (!socket.connected) return;
+
+      const now = performance.now();
+      const elapsed = now - lastInputSentAtRef.current;
+      if (!force && elapsed < INPUT_SEND_INTERVAL_MS) return;
+
+      const you = predictedYouRef.current || worldRef.current.you;
+      // Once eliminated this client only receives spectator snapshots; do not
+      // send stale movement input that could compete with the camera state.
+      if (you?.alive === false) return;
+      const mouse = mouseRef.current;
+      const mouseWorldX = you ? you.x + (mouse.x - window.innerWidth / 2) : 0;
+      const mouseWorldY = you ? you.y + (mouse.y - window.innerHeight / 2) : 0;
+      const mobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
+      const battleLocked = isBattlePrepareLocked(worldRef.current);
+
+      const input = {
+        seq: inputSeqRef.current + 1,
+        dt: Math.min(50, Math.max(1, elapsed)),
+        clientSentAt: now,
+        w: Boolean(keysRef.current.w || keysRef.current.arrowup || (mobileMove.active && mobileMove.y < -0.22)),
+        a: Boolean(keysRef.current.a || keysRef.current.arrowleft || (mobileMove.active && mobileMove.x < -0.22)),
+        s: Boolean(keysRef.current.s || keysRef.current.arrowdown || (mobileMove.active && mobileMove.y > 0.22)),
+        d: Boolean(keysRef.current.d || keysRef.current.arrowright || (mobileMove.active && mobileMove.x > 0.22)),
+        moveX: mobileMove.active ? mobileMove.x : 0,
+        moveY: mobileMove.active ? mobileMove.y : 0,
+        mobileMove: Boolean(mobileMove.active),
+        attacking: !battleLocked && Boolean(keysRef.current.mouseDown),
+        shield: !battleLocked && Boolean(keysRef.current.rightMouseDown),
+        mouseX: mouseWorldX,
+        mouseY: mouseWorldY,
+      };
+
+      const signature = [
+        input.w, input.a, input.s, input.d, input.mobileMove,
+        Math.round(input.moveX * 100), Math.round(input.moveY * 100),
+        input.attacking, input.shield,
+        Math.round(input.mouseX / 8), Math.round(input.mouseY / 8),
+      ].join("|");
+
+      const hasActiveControl = Boolean(
+        input.w || input.a || input.s || input.d || input.mobileMove || input.attacking || input.shield
+      );
+      if (!force && !hasActiveControl && signature === lastInputSignatureRef.current && elapsed < INPUT_HEARTBEAT_MS) return;
+
+      inputSeqRef.current = input.seq;
+      lastInputSentAtRef.current = now;
+      lastInputSignatureRef.current = signature;
+
+      // Inputs are latest-wins. Reliable input at 50 Hz can form a TCP queue on
+      // mobile and makes *other* drones appear seconds behind. A reliable STOP
+      // packet handles release, while active held input is volatile and current.
+      const sendStop = !hasActiveControl && hadActiveControlRef.current;
+      hadActiveControlRef.current = hasActiveControl;
+      if (sendStop) {
+        socket.emit("zone-pvp:input-stop", { seq: input.seq });
+      } else {
+        socket.volatile.emit("zone-pvp:input", input);
+      }
+    };
+
+    sendInputRef.current = sendInputNow;
+
+    const inputTimer = window.setInterval(sendInputNow, INPUT_SEND_INTERVAL_MS);
+
+    const hudTimer = window.setInterval(() => {
+      const data = worldRef.current;
+      setHudData({ ...data, you: predictedYouRef.current || data.you, fps: fpsRef.current.value });
+    }, (mobilePerformanceRef.current || constrainedDesktopRef.current) ? 280 : 140);
+
+    return () => {
+      disposed = true;
+      clearZoneJoinRetry();
+      window.clearInterval(inputTimer);
+      window.clearInterval(hudTimer);
+      if (movementFlushRafRef.current) {
+        window.cancelAnimationFrame(movementFlushRafRef.current);
+        movementFlushRafRef.current = 0;
+      }
+      latestMovementPacketRef.current = null;
+      document.removeEventListener("visibilitychange", recoverVisibleZoneSession);
+      window.removeEventListener("pageshow", recoverVisibleZoneSession);
+      socket.off("connect", handleConnect);
+      socket.off("connect_error", handleConnectError);
+      socket.off("disconnect", handleDisconnect);
+      socket.off("zone-pvp:joined", applyState);
+      socket.off("zone-pvp:join-confirmed", handleJoinConfirmed);
+      socket.off("zone-pvp:state", applyState);
+      socket.off("zone-pvp:movement", applyMovementFrame);
+      socket.off("zone-pvp:collision", applyZoneCollisionImpulse);
+      socket.off("zone-pvp:combat", applyPrivateCombatEvent);
+      socket.off("zone-pvp:collect", applyCollectSync);
+      socket.off("zone-pvp:world-delta", applyWorldItemDelta);
+      socket.off("zone-pvp:left");
+      clearExplicitExitTimer();
+      // Only an explicit EXIT TO MENU permanently removes the seat. Component
+      // remounts, StrictMode, background recovery and connection changes keep
+      // the resumable player in the same live room.
+      if (intentionalExitRef.current && !explicitLeaveSentRef.current) {
+        explicitLeaveSentRef.current = true;
+        socket.emit("zone-pvp:leave");
+      }
+      socket.disconnect();
+      socketRef.current = null;
+      sendInputRef.current = () => {};
+    };
+  }, []);
+
+  useEffect(() => {
+    let rafId = 0;
+
+    const tick = (now) => {
+      const data = worldRef.current;
+      const dt = Math.min(0.05, Math.max(0.001, (now - lastFrameRef.current) / 1000));
+      lastFrameRef.current = now;
+
+      fpsRef.current.frames += 1;
+      if (now - fpsRef.current.lastAt >= 500) {
+        fpsRef.current.value = Math.round((fpsRef.current.frames * 1000) / (now - fpsRef.current.lastAt));
+        fpsRef.current.frames = 0;
+        fpsRef.current.lastAt = now;
+      }
+
+      const worldWidth = data.worldWidth || WORLD_WIDTH_FALLBACK;
+      const worldHeight = data.worldHeight || WORLD_HEIGHT_FALLBACK;
+      const zoneRadius = data.safeZoneRadius || ZONE_RADIUS_FALLBACK;
+
+      if (data.you) {
+        const current = predictedYouRef.current || { ...data.you };
+        const mobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
+        const input = {
+          w: Boolean(keysRef.current.w || keysRef.current.arrowup || (mobileMove.active && mobileMove.y < -0.22)),
+          a: Boolean(keysRef.current.a || keysRef.current.arrowleft || (mobileMove.active && mobileMove.x < -0.22)),
+          s: Boolean(keysRef.current.s || keysRef.current.arrowdown || (mobileMove.active && mobileMove.y > 0.22)),
+          d: Boolean(keysRef.current.d || keysRef.current.arrowright || (mobileMove.active && mobileMove.x > 0.22)),
+          moveX: mobileMove.active ? mobileMove.x : 0,
+          moveY: mobileMove.active ? mobileMove.y : 0,
+          mobileMove: Boolean(mobileMove.active),
+          attacking: !isBattlePrepareLocked(worldRef.current) && Boolean(keysRef.current.mouseDown),
+          shield: !isBattlePrepareLocked(worldRef.current) && Boolean(keysRef.current.rightMouseDown),
+          mouseX: current.x + (mouseRef.current.x - window.innerWidth / 2),
+          mouseY: current.y + (mouseRef.current.y - window.innerHeight / 2),
+        };
+
+        if (getMoveVectorFromInput(input).moving) {
+          lastLocalMovementAtRef.current = now;
+        }
+
+        predictedYouRef.current = predictUnitFromInput(
+          current,
+          input,
+          dt,
+          worldWidth,
+          worldHeight,
+          zoneRadius
+        );
+
+        const predicted = predictedYouRef.current;
+
+        // Server-side collection uses the exact swept path and emits a reliable
+        // collect event. Avoid client-only removal: a cached item can otherwise
+        // vanish visually even when the server has not yet validated the pickup.
+        worldRef.current.you = predictedYouRef.current || worldRef.current.you;
+
+        const wantsToAttack = Boolean(keysRef.current.mouseDown);
+        const localCooldown = getLocalFireCooldown(predicted, now);
+
+        if (
+          data.status === "playing" &&
+          !isBattlePrepareLocked(data) &&
+          wantsToAttack &&
+          predicted?.alive !== false &&
+          (predicted?.drones || 0) > 0 &&
+          now - lastLocalProjectileAtRef.current >= localCooldown
+        ) {
+          const mouseWorldX = predicted.x + (mouseRef.current.x - window.innerWidth / 2);
+          const mouseWorldY = predicted.y + (mouseRef.current.y - window.innerHeight / 2);
+          const localProjectile = createLocalProjectile(
+            predicted,
+            mouseWorldX,
+            mouseWorldY,
+            now,
+            getSelectedSkin(user),
+          );
+
+          if (localProjectile) {
+            projectilesRef.current.set(localProjectile.id, localProjectile);
+            lastLocalProjectileAtRef.current = now;
+          }
+        }
+      }
+
+      const me = predictedYouRef.current || data.you;
+      const remoteMap = remotePlayersRef.current;
+
+      const isSpectating = Boolean(me && me.alive === false);
+      const serverSpectatorTarget = data.spectatingPlayer?.alive !== false ? data.spectatingPlayer : null;
+
+      const currentSpectatorTarget = isSpectating
+        ? (
+            serverSpectatorTarget ||
+            (data.spectatorTargetId
+              ? (data.players || []).find((p) => p?.id === data.spectatorTargetId && p?.alive !== false)
+              : null) ||
+            (spectatorTargetRef.current?.alive !== false ? spectatorTargetRef.current : null) ||
+            (data.players || []).find((p) => p?.alive !== false) ||
+            null
+          )
+        : null;
+
+      if (currentSpectatorTarget) {
+        spectatorTargetRef.current = currentSpectatorTarget;
+      }
+
+      const motions = remoteMotionRef.current;
+      const activeRemoteIds = new Set();
 
       for (const [id, motion] of motions.entries()) {
         if (id === me?.id) continue;
@@ -2171,10 +2492,12 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         const resolved = resolveRemoteMotion(motion, now, dt);
         if (!resolved) continue;
         activeRemoteIds.add(id);
-        resolved.skin = normalizeSkin(resolved.skin || "cyan");
-        resolved.attacking = Boolean(resolved.attacking);
-        resolved.shieldActive = Boolean(resolved.shieldActive);
-        remoteMap.set(id, resolved);
+        remoteMap.set(id, {
+          ...resolved,
+          skin: normalizeSkin(resolved.skin || "cyan"),
+          attacking: Boolean(resolved.attacking),
+          shieldActive: Boolean(resolved.shieldActive),
+        });
       }
 
       for (const id of remoteMap.keys()) {
@@ -2184,45 +2507,90 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const projectileMap = projectilesRef.current;
       const movementProjectiles = projectileMovementRef.current;
 
-      // Local attack drone stays instant. Enemy attack drones follow a mutable
-      // authoritative motion record, so there is no 25-40 Hz stair-step or
-      // stale-packet pullback.
-      for (const [id, projectile] of projectileMap.entries()) {
-        if (projectile.localOnly) advanceProjectile(projectile, dt);
+      // Full state is slow by design; merge it with the 60 Hz projectile
+      // transform stream. The stream wins because it is always newer.
+      const incomingProjectiles = new Map(
+        (data.projectiles || [])
+          .filter((p) => p?.id || p?.netId)
+          .map((p) => [p.id || zoneNetKey(p.netId), p])
+      );
+      for (const [id, movementProjectile] of movementProjectiles.entries()) {
+        incomingProjectiles.set(id, {
+          ...(incomingProjectiles.get(id) || {}),
+          ...movementProjectile,
+        });
       }
 
-      for (const [id, motion] of movementProjectiles.entries()) {
-        if (now - Number(motion?.lastSeenAt || now) > PROJECTILE_MOVEMENT_STALE_MS) {
-          movementProjectiles.delete(id);
-          continue;
-        }
-        const resolved = resolveZoneProjectileMotion(motion, now, dt);
-        if (!resolved) continue;
+      for (const [id, current] of projectileMap.entries()) {
+        projectileMap.set(id, advanceProjectile(current, dt));
+      }
+
+      for (const [id, target] of incomingProjectiles.entries()) {
+        const current = projectileMap.get(id) || target;
+
         const belongsToLocalPlayer =
           Boolean(me?.id) &&
           (
-            String(resolved.ownerId || "") === String(me.id) ||
-            Number(resolved.ownerNetId || 0) === Number(me.netId || -1) ||
-            String(resolved.ownerId || "") === zoneNetKey(me.netId)
+            String(target.ownerId || "") === String(me.id) ||
+            Number(target.ownerNetId || 0) === Number(me.netId || -1) ||
+            String(target.ownerId || "") === zoneNetKey(me.netId)
           );
+
+        // Keep the Normal PvP behavior: the shooter sees its one locally
+        // predicted mini-drone, while every other viewer sees the authoritative
+        // server copy. Do not add a second copy during Zone net-id migration.
         if (belongsToLocalPlayer) {
-          // Own projectile is predicted once locally. Remove only the server
-          // alias, never the local visual.
+          // The locally predicted projectile is already in the map. Remove any
+          // authoritative alias immediately; otherwise a net-id/UUID race can
+          // briefly render two mini drones for the same launch.
           if (!String(id).startsWith("local-")) projectileMap.delete(id);
           continue;
         }
-        projectileMap.set(id, resolved);
+
+        const error = Math.hypot(
+          Number(target.x || 0) - Number(current.x ?? target.x ?? 0),
+          Number(target.y || 0) - Number(current.y ?? target.y ?? 0),
+        );
+        const correction = error > 180 ? 1 : error > 42 ? 0.64 : 0.34;
+
+        projectileMap.set(id, {
+          ...current,
+          ...target,
+          localOnly: false,
+          __seenAt: now,
+          x: Number(current.x ?? target.x ?? 0) + (Number(target.x ?? current.x ?? 0) - Number(current.x ?? target.x ?? 0)) * correction,
+          y: Number(current.y ?? target.y ?? 0) + (Number(target.y ?? current.y ?? 0) - Number(current.y ?? target.y ?? 0)) * correction,
+        });
       }
 
+      const projectileTargets = [me, ...remoteMap.values()].filter(Boolean);
+
       for (const [id, projectile] of projectileMap.entries()) {
-        const age = now - Number(projectile.createdAt || projectile.__seenAt || now);
+        const isIncoming = incomingProjectiles.has(id);
+        const age = now - (projectile.createdAt || projectile.__seenAt || now);
+        const missingAge = now - (projectile.__seenAt || now);
+        const traveled = getProjectileTravelDistance(projectile);
+
+        const visuallyHitTarget = projectileHitsAnyTarget(projectile, projectileTargets);
+
         if (projectile.localOnly) {
-          if (age > PROJECTILE_VISUAL_TTL || getProjectileTravelDistance(projectile) > LOCAL_PROJECTILE_MAX_DISTANCE) {
+          if (
+            age > PROJECTILE_VISUAL_TTL ||
+            traveled > LOCAL_PROJECTILE_MAX_DISTANCE ||
+            (visuallyHitTarget && age > LOCAL_PROJECTILE_MIN_VISUAL_MS)
+          ) {
             projectileMap.delete(id);
           }
+
           continue;
         }
-        if (age > PROJECTILE_VISUAL_TTL || now - Number(projectile.lastSeenAt || projectile.__seenAt || now) > PROJECTILE_MOVEMENT_STALE_MS) {
+
+        if (
+          visuallyHitTarget ||
+          age > PROJECTILE_VISUAL_TTL ||
+          traveled > LOCAL_PROJECTILE_MAX_DISTANCE ||
+          (!isIncoming && missingAge > SERVER_PROJECTILE_FADE_TTL)
+        ) {
           projectileMap.delete(id);
         }
       }
@@ -2232,16 +2600,22 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         : null;
 
       const liveCameraSubject = isSpectating ? (spectatedFromRemote || currentSpectatorTarget || me) : me;
-      const liveYou = isSpectating
-        ? (liveCameraSubject && liveCameraSubject.id !== me?.id ? liveCameraSubject : null)
-        : me?.alive !== false ? me : null;
 
-      if (liveYou) liveYou.skin = normalizeSkin(liveYou.skin || getSelectedSkin(user));
+      const liveYou = isSpectating
+        ? (
+            liveCameraSubject && liveCameraSubject.id !== me?.id
+              ? { ...liveCameraSubject, skin: normalizeSkin(liveCameraSubject.skin || getSelectedSkin(user)) }
+              : null
+          )
+        : me?.alive !== false
+          ? { ...me, skin: normalizeSkin(me?.skin || getSelectedSkin(user)) }
+          : null;
 
       const liveIsMobileLike = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(hover: none)").matches;
       const liveCameraScale = liveIsMobileLike ? PVP_MOBILE_CAMERA_SCALE : PVP_DESKTOP_CAMERA_SCALE;
       const liveCameraX = liveCameraSubject ? viewport.width / 2 - liveCameraSubject.x * liveCameraScale : 0;
       const liveCameraY = liveCameraSubject ? viewport.height / 2 - liveCameraSubject.y * liveCameraScale : 0;
+
       const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 980, liveCameraScale);
       const renderLimits = mobilePerformanceRef.current
         ? { detailed: 6, total: 60, orbs: 42, energy: 14, cores: 4, projectiles: 5, simpleProjectiles: 30 }
@@ -2249,111 +2623,93 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           ? { detailed: 7, total: 60, orbs: 72, energy: 26, cores: 6, projectiles: 10, simpleProjectiles: 34 }
           : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
-      // Entity membership is refreshed at 12.5 Hz, while the referenced objects
-      // above continue to receive display-rate x/y updates. This removes sort /
-      // allocation spikes without reducing what is visible.
-      const selection = renderSelectionRef.current;
-      if (now >= selection.nextAt) {
-        selection.nextAt = now + 80;
-        selection.remote.length = 0;
-        selection.detailed.length = 0;
-        selection.simple.length = 0;
-        selection.players.length = 0;
-        selection.bots.length = 0;
-        selection.orbs.length = 0;
-        selection.energy.length = 0;
-        selection.cores.length = 0;
-        selection.projectiles.length = 0;
-        selection.simpleProjectiles.length = 0;
-        selection.combatEvents.length = 0;
+      // Map insertion order is not distance order. Sort by the camera subject
+      // so the nearest threats keep detailed shells and every other visible
+      // drone stays on a very cheap marker pool instead of vanishing.
+      const visibleRemoteUnits = [...remoteMap.values()]
+        .filter((player) => player?.id !== liveYou?.id && player?.alive !== false && isVisible(player, liveBounds, 460))
+        .map((player) => ({ ...player, skin: normalizeSkin(player.skin), isBot: Boolean(player.isBot) }))
+        .sort((a, b) => {
+          const ax = Number(a.x || 0) - Number(liveCameraSubject?.x || 0);
+          const ay = Number(a.y || 0) - Number(liveCameraSubject?.y || 0);
+          const bx = Number(b.x || 0) - Number(liveCameraSubject?.x || 0);
+          const by = Number(b.y || 0) - Number(liveCameraSubject?.y || 0);
+          return ax * ax + ay * ay - (bx * bx + by * by);
+        })
+        .slice(0, renderLimits.total);
 
-        // Keep the nearest detailed subset without Array#sort / object clones.
-        for (const player of remoteMap.values()) {
-          if (!player || player.id === liveYou?.id || player.alive === false || !isVisible(player, liveBounds, 460)) continue;
-          const dx = Number(player.x || 0) - Number(liveCameraSubject?.x || 0);
-          const dy = Number(player.y || 0) - Number(liveCameraSubject?.y || 0);
-          const distanceSq = dx * dx + dy * dy;
-          let insertAt = selection.detailed.length;
-          while (insertAt > 0 && Number(selection.detailed[insertAt - 1].__renderDistanceSq || 0) > distanceSq) insertAt -= 1;
-          player.__renderDistanceSq = distanceSq;
-          if (insertAt < renderLimits.detailed) {
-            selection.detailed.splice(insertAt, 0, player);
-            if (selection.detailed.length > renderLimits.detailed) selection.detailed.pop();
-          }
-          selection.remote.push(player);
-          if (selection.remote.length >= renderLimits.total) break;
-        }
-        for (const player of selection.remote) {
-          if (selection.detailed.includes(player)) continue;
-          selection.simple.push(player);
-        }
-        for (const player of selection.detailed) {
-          if (player.isBot) selection.bots.push(player);
-          else selection.players.push(player);
-        }
+      const detailedRemoteUnits = visibleRemoteUnits.slice(0, renderLimits.detailed);
+      const simpleRemoteUnits = visibleRemoteUnits.slice(renderLimits.detailed);
+      const livePlayers = detailedRemoteUnits.filter((player) => !player.isBot);
+      const liveBots = detailedRemoteUnits.filter((player) => player.isBot);
 
-        for (const orb of stableOrbMapRef.current.values()) {
-          if (!isHiddenCollected(hiddenOrbIdsRef.current, orb.id) && isVisible(orb, liveBounds, 45)) {
-            selection.orbs.push(orb);
-            if (selection.orbs.length >= renderLimits.orbs) break;
-          }
-        }
-        for (const cell of stableEnergyMapRef.current.values()) {
-          if (!isHiddenCollected(hiddenEnergyIdsRef.current, cell.id) && isVisible(cell, liveBounds, 70)) {
-            selection.energy.push(cell);
-            if (selection.energy.length >= renderLimits.energy) break;
-          }
-        }
-        for (const core of data.cores || []) {
-          if (!isHiddenCollected(hiddenCoreIdsRef.current, core.id) && isVisible(core, liveBounds, 130)) {
-            selection.cores.push(core);
-            if (selection.cores.length >= renderLimits.cores) break;
-          }
-        }
-        for (const projectile of projectileMap.values()) {
-          if (!isVisible(projectile, liveBounds, 220)) continue;
-          if (selection.projectiles.length < renderLimits.projectiles) selection.projectiles.push(projectile);
-          else if (selection.simpleProjectiles.length < renderLimits.simpleProjectiles) selection.simpleProjectiles.push(projectile);
-          else break;
-        }
-        const viewerId = data.you?.id || worldRef.current.you?.id || "";
-        for (const event of data.combatEvents || []) {
-          if (viewerId && String(event?.viewerId || "") === String(viewerId)) selection.combatEvents.push(event);
-        }
-      }
+      const liveOrbs = collectVisible(
+        stableOrbMapRef.current.values(),
+        (orb) => !isHiddenCollected(hiddenOrbIdsRef.current, orb.id) && isVisible(orb, liveBounds, 45),
+        renderLimits?.orbs || 140
+      );
+      const liveEnergyCells = collectVisible(
+        stableEnergyMapRef.current.values(),
+        (cell) => !isHiddenCollected(hiddenEnergyIdsRef.current, cell.id) && isVisible(cell, liveBounds, 70),
+        renderLimits?.energy || 50
+      );
+      const liveCores = collectVisible(
+        data.cores || [],
+        (core) => !isHiddenCollected(hiddenCoreIdsRef.current, core.id) && isVisible(core, liveBounds, 130),
+        renderLimits?.cores || 9
+      );
+      const sortedVisibleProjectiles = [...projectileMap.values()]
+        .filter((projectile) => isVisible(projectile, liveBounds, 220))
+        .sort((a, b) => {
+          const ax = Number(a.x || 0) - Number(liveCameraSubject?.x || 0);
+          const ay = Number(a.y || 0) - Number(liveCameraSubject?.y || 0);
+          const bx = Number(b.x || 0) - Number(liveCameraSubject?.x || 0);
+          const by = Number(b.y || 0) - Number(liveCameraSubject?.y || 0);
+          return ax * ax + ay * ay - (bx * bx + by * by);
+        });
+      const liveProjectiles = sortedVisibleProjectiles.slice(0, renderLimits.projectiles);
+      const liveSimpleProjectiles = sortedVisibleProjectiles.slice(
+        renderLimits.projectiles,
+        renderLimits.projectiles + renderLimits.simpleProjectiles,
+      );
 
-      const live = pixiFrameRef.current;
-      live.player = liveYou;
-      live.players = selection.players;
-      live.bots = selection.bots;
-      live.simpleBots = selection.simple;
-      live.orbs = selection.orbs;
-      live.energyCells = selection.energy;
-      live.cores = selection.cores;
-      live.projectiles = selection.projectiles;
-      live.simpleProjectiles = selection.simpleProjectiles;
-      live.combatEvents = selection.combatEvents;
-      live.combatViewerId = data.you?.id || worldRef.current.you?.id || null;
-      live.combatEventsPrivate = true;
-      live.cameraX = liveCameraX;
-      live.cameraY = liveCameraY;
-      live.scale = liveCameraScale;
-      live.viewportWidth = viewport.width;
-      live.viewportHeight = viewport.height;
-      live.worldWidth = worldWidth;
-      live.worldHeight = worldHeight;
-      live.worldTheme = "premium-space-battle";
-      live.staticItemBudget = mobilePerformanceRef.current ? 52 : 110;
-      live.safeZoneRadius = zoneRadius;
-      live.showZone = true;
-      live.coreColorMap = coreColorMapRef.current;
-      live.otherPlayerSize = 112;
-      live.otherPlayerQuality = 0;
-      // Preserve the exact presentation; Pixi should optimize work, not remove
-      // background/drone detail merely because this is a Zone match.
-      live.preserveVisualQuality = true;
-      live.zonePreCulled = true;
-      pixiLiveRef.current = live;
+      pixiLiveRef.current = {
+        player: liveYou,
+        players: livePlayers,
+        bots: liveBots,
+        simpleBots: simpleRemoteUnits,
+        orbs: liveOrbs,
+        energyCells: liveEnergyCells,
+        cores: liveCores,
+        projectiles: liveProjectiles,
+        simpleProjectiles: liveSimpleProjectiles,
+        // Keep combat text private even on the render hot path.
+        combatEvents: (data.combatEvents || []).filter(
+          (event) =>
+            Boolean(data.you?.id || worldRef.current.you?.id) &&
+            String(event?.viewerId || "") === String(data.you?.id || worldRef.current.you?.id || ""),
+        ),
+        combatViewerId: data.you?.id || worldRef.current.you?.id || null,
+        combatEventsPrivate: true,
+        cameraX: liveCameraX,
+        cameraY: liveCameraY,
+        scale: liveCameraScale,
+        viewportWidth: viewport.width,
+        viewportHeight: viewport.height,
+        worldWidth,
+        worldHeight,
+        // Zone PvP is the 60-seat competitive mode: keep the world layer plain
+        // so every GPU budget goes to drone/projectile transforms.
+        // Zone PvP shares the same premium space background as the good-desktop
+        // profile. Pixi hides it only temporarily if emergency frame pressure is measured.
+        worldTheme: "premium-space-battle",
+        staticItemBudget: mobilePerformanceRef.current ? 52 : 110,
+        safeZoneRadius: zoneRadius,
+        showZone: true,
+        coreColorMap: coreColorMapRef.current,
+        otherPlayerSize: 112,
+        otherPlayerQuality: 0,
+      };
 
       if (now - lastRenderSyncRef.current >= ((mobilePerformanceRef.current || constrainedDesktopRef.current) ? 260 : 125)) {
         lastRenderSyncRef.current = now;
@@ -2891,7 +3247,6 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     intentionalExitRef.current = true;
     zoneJoinAcceptedRef.current = true;
     clearZonePvpResumeToken();
-    zoneResumeIdentityRef.current = { roomId: null, playerId: null };
     resumeTokenRef.current = createZonePvpResumeToken();
 
     const socket = socketRef.current;
