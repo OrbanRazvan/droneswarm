@@ -109,13 +109,6 @@ const ZONE_TRANSFORM_INTERVAL_MS = 25;
 const ZONE_TRANSFORM_PLAYER_LIMIT = 60;
 const ZONE_TRANSFORM_PROJECTILE_LIMIT = 36;
 const ZONE_TRANSFORM_RANGE_PADDING = 820;
-const ZONE_WEAK_DESKTOP_PROFILE = "weak-desktop";
-const ZONE_WEAK_DESKTOP_TRANSFORM_PLAYER_LIMIT = 42;
-const ZONE_WEAK_DESKTOP_TRANSFORM_PROJECTILE_LIMIT = 24;
-const ZONE_WEAK_DESKTOP_TRANSFORM_RANGE_PADDING = 460;
-const ZONE_WEAK_DESKTOP_VIEWPORT_ORB_LIMIT = 86;
-const ZONE_WEAK_DESKTOP_VIEWPORT_ENERGY_LIMIT = 20;
-const ZONE_WEAK_DESKTOP_VIEWPORT_CORE_LIMIT = 5;
 const ZONE_WORLD_DELTA_INTERVAL_MS = 250;
 const ZONE_LOOT_TICK_INTERVAL_MS = 50;
 const ZONE_COLLISION_TICK_INTERVAL_MS = 34;
@@ -279,11 +272,10 @@ let GameGateway = class GameGateway {
     getZoneConnectedHumanPlayerCount(room) {
         let count = 0;
         for (const player of room?.players?.values?.() || []) {
-            if (!player || player.isBot)
+            if (player?.isBot || Number(player?.disconnectedAt || 0) > 0)
                 continue;
-            if (Number(player.disconnectedAt || 0) > 0)
-                continue;
-            count += 1;
+            if (this.server?.sockets?.sockets?.has(String(player.id)))
+                count += 1;
         }
         return count;
     }
@@ -348,14 +340,6 @@ let GameGateway = class GameGateway {
     }
     normalizeZonePvpParticipantId(value) {
         return this.normalizeZonePvpResumeToken(value);
-    }
-    normalizeZonePvpRenderProfile(value) {
-        return String(value || "").trim() === ZONE_WEAK_DESKTOP_PROFILE
-            ? ZONE_WEAK_DESKTOP_PROFILE
-            : "standard";
-    }
-    isZoneWeakDesktopViewer(player) {
-        return String(player?.zoneRenderProfile || "") === ZONE_WEAK_DESKTOP_PROFILE;
     }
     rememberZonePvpResumeSeat(room, player, token) {
         if (!room || !player || !token || player?.isBot)
@@ -1731,7 +1715,6 @@ let GameGateway = class GameGateway {
         const applicantUserId = data?.isGuest ? null : String(data?.userId || "").trim() || null;
         const departedRoomId = String(data?.departedRoomId || "").trim();
         const departedResumeToken = this.normalizeZonePvpResumeToken(data?.departedResumeToken);
-        const zoneRenderProfile = this.normalizeZonePvpRenderProfile(data?.renderProfile);
         if (departedRoomId) {
             this.enforceZonePvpDeparture(departedRoomId, participantId, applicantUserId, departedResumeToken);
         }
@@ -1739,7 +1722,6 @@ let GameGateway = class GameGateway {
         if (resumeSeat && resumeToken) {
             const { room, player } = resumeSeat;
             if (!room.closedAt) {
-                player.zoneRenderProfile = zoneRenderProfile;
                 this.rebindZonePvpResumeSeat(room, player, client, resumeToken);
                 this.emitZonePvpJoined(client, room, player, true);
                 this.broadcastZonePvpRoomState(room, now, true);
@@ -1766,7 +1748,6 @@ let GameGateway = class GameGateway {
             existingZonePlayer.isGuest = Boolean(data?.isGuest);
             existingZonePlayer.username = String(data?.username || (data?.isGuest ? "Guest" : "Player")).slice(0, 18);
             existingZonePlayer.skin = normalizeSkin(data?.isGuest ? "cyan" : data?.skin);
-            existingZonePlayer.zoneRenderProfile = zoneRenderProfile;
             existingZonePlayer.disconnectedAt = 0;
             existingZonePlayer.lastSeenAt = now;
             existingZonePlayer.lastInputReceivedAt = now;
@@ -1793,7 +1774,6 @@ let GameGateway = class GameGateway {
             isGuest: Boolean(data?.isGuest),
             username: String(data?.username || (data?.isGuest ? "Guest" : "Player")).slice(0, 18),
             skin: normalizeSkin(data?.isGuest ? "cyan" : data?.skin),
-            zoneRenderProfile,
             x: spawn.x,
             y: spawn.y,
             prevX: spawn.x,
@@ -4147,22 +4127,12 @@ let GameGateway = class GameGateway {
                 ? this.getStableSpectatorTarget(room, viewer)
                 : null;
             const viewAnchor = spectatorTarget || viewer;
-            const weakDesktopViewer = this.isZoneWeakDesktopViewer(viewer);
-            const transformRangePadding = weakDesktopViewer
-                ? ZONE_WEAK_DESKTOP_TRANSFORM_RANGE_PADDING
-                : ZONE_TRANSFORM_RANGE_PADDING;
-            const transformPlayerLimit = weakDesktopViewer
-                ? ZONE_WEAK_DESKTOP_TRANSFORM_PLAYER_LIMIT
-                : ZONE_TRANSFORM_PLAYER_LIMIT;
-            const transformProjectileLimit = weakDesktopViewer
-                ? ZONE_WEAK_DESKTOP_TRANSFORM_PROJECTILE_LIMIT
-                : ZONE_TRANSFORM_PROJECTILE_LIMIT;
             const range = viewer.alive === false
                 ? VIEW_DISTANCE + 1700
-                : VIEW_DISTANCE + transformRangePadding;
+                : VIEW_DISTANCE + ZONE_TRANSFORM_RANGE_PADDING;
             const nearbyUnits = this.querySpatialIndex(unitSpatialIndex, viewAnchor.x, viewAnchor.y, range).filter((other) => other.id !== viewer.id &&
                 (viewer.alive !== false || other.alive !== false));
-            const playerRows = this.filterNear(viewAnchor, nearbyUnits, range, transformPlayerLimit).map((unit) => {
+            const playerRows = this.filterNear(viewAnchor, nearbyUnits, range, ZONE_TRANSFORM_PLAYER_LIMIT).map((unit) => {
                 const flags = (unit.isMoving ? 1 : 0) |
                     (unit.input?.attacking ? 2 : 0) |
                     (unit.shieldActive ? 4 : 0) |
@@ -4179,7 +4149,7 @@ let GameGateway = class GameGateway {
                     Math.max(0, Math.min(MAX_DRONES, Number(unit.drones || 0))),
                 ];
             });
-            const projectileRows = this.filterNear(viewAnchor, room.projectiles || [], range + 460, transformProjectileLimit).map((projectile) => {
+            const projectileRows = this.filterNear(viewAnchor, room.projectiles || [], range + 460, ZONE_TRANSFORM_PROJECTILE_LIMIT).map((projectile) => {
                 const flags = (Number(projectile.pierceLeft || 1) > 1 ? 1 : 0) |
                     (projectile.shieldBreaker ? 2 : 0) |
                     (projectile.piercesShield ? 4 : 0);
@@ -4282,25 +4252,6 @@ let GameGateway = class GameGateway {
                 player.killedById = null;
             }
             const viewAnchor = spectatorTarget || player;
-            const weakDesktopViewer = this.isZoneWeakDesktopViewer(player);
-            const transformRangePadding = weakDesktopViewer
-                ? ZONE_WEAK_DESKTOP_TRANSFORM_RANGE_PADDING
-                : ZONE_TRANSFORM_RANGE_PADDING;
-            const transformPlayerLimit = weakDesktopViewer
-                ? ZONE_WEAK_DESKTOP_TRANSFORM_PLAYER_LIMIT
-                : ZONE_TRANSFORM_PLAYER_LIMIT;
-            const transformProjectileLimit = weakDesktopViewer
-                ? ZONE_WEAK_DESKTOP_TRANSFORM_PROJECTILE_LIMIT
-                : ZONE_TRANSFORM_PROJECTILE_LIMIT;
-            const viewportOrbLimit = weakDesktopViewer
-                ? ZONE_WEAK_DESKTOP_VIEWPORT_ORB_LIMIT
-                : 140;
-            const viewportEnergyLimit = weakDesktopViewer
-                ? ZONE_WEAK_DESKTOP_VIEWPORT_ENERGY_LIMIT
-                : 30;
-            const viewportCoreLimit = weakDesktopViewer
-                ? ZONE_WEAK_DESKTOP_VIEWPORT_CORE_LIMIT
-                : 8;
             const includeViewportItems = !player.lastViewportItemStateAt ||
                 now - player.lastViewportItemStateAt >= VIEWPORT_ITEM_STATE_INTERVAL_MS;
             if (includeViewportItems)
@@ -4315,9 +4266,9 @@ let GameGateway = class GameGateway {
                 now - player.lastZoneProjectileDefinitionAt >= ZONE_PROJECTILE_DEFINITION_INTERVAL_MS;
             if (includeProjectileDefinitions)
                 player.lastZoneProjectileDefinitionAt = now;
-            const playerCandidates = this.querySpatialIndex(playerIndex, viewAnchor.x, viewAnchor.y, player.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + transformRangePadding);
+            const playerCandidates = this.querySpatialIndex(playerIndex, viewAnchor.x, viewAnchor.y, player.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + ZONE_TRANSFORM_RANGE_PADDING);
             const visiblePlayers = includeEntityDefinitions
-                ? this.filterNear(viewAnchor, playerCandidates.filter((other) => other.id !== player.id && (player.alive !== false || other.alive !== false)), player.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + transformRangePadding, transformPlayerLimit).map((other) => this.serializeZonePvpStatePlayer(room, other))
+                ? this.filterNear(viewAnchor, playerCandidates.filter((other) => other.id !== player.id && (player.alive !== false || other.alive !== false)), player.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + ZONE_TRANSFORM_RANGE_PADDING, ZONE_TRANSFORM_PLAYER_LIMIT).map((other) => this.serializeZonePvpStatePlayer(room, other))
                 : undefined;
             const payload = {
                 serverNow: now,
@@ -4353,8 +4304,8 @@ let GameGateway = class GameGateway {
                     : null,
                 projectiles: includeProjectileDefinitions
                     ? (room.projectileSpatialIndex
-                        ? this.filterNearIndexed(viewAnchor, room.projectileSpatialIndex, VIEW_DISTANCE + transformRangePadding, transformProjectileLimit)
-                        : this.filterNear(viewAnchor, room.projectiles, VIEW_DISTANCE + transformRangePadding, transformProjectileLimit)).map((projectile) => this.serializeZonePvpStateProjectile(room, projectile))
+                        ? this.filterNearIndexed(viewAnchor, room.projectileSpatialIndex, VIEW_DISTANCE + ZONE_TRANSFORM_RANGE_PADDING, ZONE_TRANSFORM_PROJECTILE_LIMIT)
+                        : this.filterNear(viewAnchor, room.projectiles, VIEW_DISTANCE + ZONE_TRANSFORM_RANGE_PADDING, ZONE_TRANSFORM_PROJECTILE_LIMIT)).map((projectile) => this.serializeZonePvpStateProjectile(room, projectile))
                     : undefined,
                 combatEvents: (room.combatEvents || [])
                     .filter((event) => {
@@ -4369,14 +4320,14 @@ let GameGateway = class GameGateway {
             };
             if (includeViewportItems) {
                 payload.orbs = room.orbSpatialIndex
-                    ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, viewportOrbLimit)
-                    : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, viewportOrbLimit);
+                    ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, 140)
+                    : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, 140);
                 payload.energyCells = room.energySpatialIndex
-                    ? this.filterNearIndexed(viewAnchor, room.energySpatialIndex, VIEW_DISTANCE, viewportEnergyLimit)
-                    : this.filterNear(viewAnchor, room.energyCells, VIEW_DISTANCE, viewportEnergyLimit);
+                    ? this.filterNearIndexed(viewAnchor, room.energySpatialIndex, VIEW_DISTANCE, 30)
+                    : this.filterNear(viewAnchor, room.energyCells, VIEW_DISTANCE, 30);
                 payload.cores = room.coreSpatialIndex
-                    ? this.filterNearIndexed(viewAnchor, room.coreSpatialIndex, VIEW_DISTANCE + 600, viewportCoreLimit)
-                    : this.filterNear(viewAnchor, room.cores, VIEW_DISTANCE + 600, viewportCoreLimit);
+                    ? this.filterNearIndexed(viewAnchor, room.coreSpatialIndex, VIEW_DISTANCE + 600, 8)
+                    : this.filterNear(viewAnchor, room.cores, VIEW_DISTANCE + 600, 8);
             }
             if (includeStaticState) {
                 payload.minimapOrbs = minimapOrbs;

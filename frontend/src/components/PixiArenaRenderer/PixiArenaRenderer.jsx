@@ -199,51 +199,39 @@ function getRendererDeviceProfile(forceLowQuality = false) {
 
 function getRendererConfig(forceLowQuality) {
   const device = getRendererDeviceProfile(forceLowQuality);
-  const lowSpec = device.weakMobile || device.lowSpecDesktop;
-  const lightMobile = device.forcedMobileQuality && !device.weakMobile;
-  const visualFirstDesktop = device.visualFirstWeakDesktop;
 
-  // Weak integrated GPUs are normally fill-rate limited. Keep the same drone
-  // artwork and terrain, but render them in a slightly smaller internal
-  // framebuffer and disable MSAA (the premium outlines already provide their
-  // own anti-aliased vector edges). This is much cheaper than removing models,
-  // props or the world background.
-  const resolution = device.lowSpecDesktop
-    ? 0.68
-    : device.weakMobile
-      ? 0.66
-      : visualFirstDesktop
-        ? Math.min(0.68, device.dpr)
-        : lightMobile
-          ? 0.80
-          : Math.min(1.35, device.dpr);
+  // Laptop/PC slab: păstrează toate modelele, terrain-ul, rezoluția și
+  // anti-aliasing-ul premium. Diferența este exclusiv în animații, care sunt
+  // oprite mai jos pentru a elibera CPU/GPU.
+  const weakDesktopNoAnimations = Boolean(
+    !device.mobile && (device.weakDesktop || forceLowQuality),
+  );
 
   return {
     ...device,
-    resolution,
-    // MSAA is especially expensive on Intel/older Radeon iGPUs. The weak
-    // desktop profile keeps all geometry but avoids paying the extra render
-    // target resolve every frame.
-    antialias: !lowSpec && !lightMobile && !visualFirstDesktop,
-    // Nearby drones remain premium. Distant drones retain their full bodies,
-    // rotors, propulsion and escort count; only the amount of static loot and
-    // decoration work is budgeted for older desktop GPUs.
-    maxStaticItems: device.lowSpecDesktop ? 38 : device.weakMobile ? 38 : visualFirstDesktop ? 58 : lightMobile ? 46 : 120,
-    maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : visualFirstDesktop ? 5 : lightMobile ? 5 : MAX_RENDERED_PLAYERS,
+
+    // Mobile rămâne premium complet, ca înainte.
+    premiumMobile: Boolean(device.mobile),
+    weakMobile: false,
+    forcedMobileQuality: false,
+
+    // Nu mai lăsa profilul weak-desktop să reducă rezoluția/pool-urile/terrain-ul.
+    // Flag-ul dedicat de mai sus oprește doar animațiile, nu grafica.
+    lowSpecDesktop: false,
+    visualFirstWeakDesktop: false,
+    weakDesktopNoAnimations,
+
+    // Grafică premium identică pe laptop/PC bun, laptop/PC slab și mobil.
+    resolution: Math.min(1.35, device.dpr),
+    antialias: true,
+    maxStaticItems: 120,
+    maxPlayers: MAX_RENDERED_PLAYERS,
     maxSimplePlayers: 60,
-    maxProjectiles: device.lowSpecDesktop ? 6 : device.weakMobile ? 5 : visualFirstDesktop ? 9 : lightMobile ? 6 : MAX_RENDERED_PROJECTILES,
-    maxSimpleProjectiles: device.lowSpecDesktop ? 30 : device.weakMobile ? 26 : visualFirstDesktop ? 32 : lightMobile ? 26 : 48,
-    staticSyncInterval: device.lowSpecDesktop ? 620 : device.weakMobile ? 620 : visualFirstDesktop ? 560 : lightMobile ? 480 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: device.lowSpecDesktop ? 10 : device.weakMobile ? 10 : visualFirstDesktop ? 7 : lightMobile ? 6 : 1,
-    // The large terrain texture is fill-rate expensive on Intel/older Radeon
-    // iGPUs. Weak desktops keep every gameplay model/projectile, but start
-    // without that purely decorative layer to preserve a stable 60 FPS.
-    disableExpensiveTerrain: Boolean(
-      device.weakMobile ||
-      device.lowSpecDesktop ||
-      visualFirstDesktop ||
-      lightMobile,
-    ),
+    maxProjectiles: MAX_RENDERED_PROJECTILES,
+    maxSimpleProjectiles: 48,
+    staticSyncInterval: STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: 1,
+    disableExpensiveTerrain: false,
   };
 }
 
@@ -1303,6 +1291,7 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
 
   const deltaSeconds = clamp((now - (visual.lastFrameAt || now)) / 1000, 1 / 240, 0.05);
   visual.lastFrameAt = now;
+  const disableAnimations = Boolean(resources.disableAnimations);
 
   visual.root.visible = true;
   visual.root.position.set(Number(unit.x || 0), Number(unit.y || 0));
@@ -1334,12 +1323,14 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
   if (!visual.facingReady) {
     visual.facing = targetFacing;
     visual.facingReady = true;
+  } else if (disableAnimations) {
+    // State rotation is not decorative animation: it keeps the drone facing
+    // its real movement direction instantly, without bank/smoothing.
+    if (hasMovement) visual.facing = targetFacing;
   } else if (hasMovement) {
     const turnDelta = shortestAngleDelta(visual.facing, targetFacing);
     visual.facing = dampAngle(visual.facing, targetFacing, TURN_RESPONSE, deltaSeconds);
 
-    // Gentle banking gives direction changes weight/inertia rather than a
-    // mechanical instant pivot. It is intentionally tiny for readability.
     const angularVelocity = turnDelta / Math.max(deltaSeconds, 0.001);
     const targetBank = clamp(-angularVelocity * 0.024, -0.22, 0.22);
     visual.bank = damp(visual.bank, targetBank, BANK_RESPONSE, deltaSeconds);
@@ -1347,8 +1338,73 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
     visual.bank = damp(visual.bank, 0, BANK_RESPONSE * 0.7, deltaSeconds);
   }
 
-  const hoverTime = now * 0.0019 + visual.hoverSeed;
   const throttle = hasMovement ? 1 : 0;
+
+  if (disableAnimations) {
+    // Weak desktop still renders the full premium drone artwork. The craft only
+    // receives authoritative position/facing updates; hover, bank, motor,
+    // glow, rotor, shield pulse and beacon animations are removed.
+    visual.bank = 0;
+    visual.vehicle.rotation = visual.facing;
+    visual.vehicle.position.set(0, 0);
+    visual.vehicle.skew.set(0, 0);
+    visual.vehicle.scale.set(1);
+    visual.aura.visible = false;
+    visual.engineGlow.visible = false;
+    visual.engineVector.visible = false;
+    visual.rotorSpins.forEach((rotor) => {
+      rotor.visible = false;
+    });
+
+    const shieldActive = Boolean(unit.shieldActive || unit.isShieldActive || Number(unit.shieldUntil || 0) > Date.now());
+    visual.shieldMix = shieldActive ? 1 : 0;
+    [visual.shieldShell, visual.shieldRing, visual.shieldGlyphs, visual.shieldPulse].forEach((part) => {
+      part.visible = shieldActive;
+    });
+    if (shieldActive) {
+      const shieldSize = 137;
+      visual.shieldShell.scale.set(shieldSize);
+      visual.shieldShell.alpha = 0.68;
+      visual.shieldRing.scale.set(shieldSize);
+      visual.shieldRing.rotation = 0;
+      visual.shieldRing.alpha = 0.64;
+      visual.shieldGlyphs.scale.set(shieldSize * 0.98);
+      visual.shieldGlyphs.rotation = 0;
+      visual.shieldGlyphs.alpha = 0.78;
+      visual.shieldPulse.visible = false;
+    }
+
+    // The only allowed animation on weak desktop: escort drones orbit the
+    // main drone. They do not bob, pulse, spin, glow or animate their beacons.
+    const count = Math.min(MAX_MINI_DRONES, Math.max(0, Number(unit.drones || 0)));
+    visual.orbit.visible = count > 0;
+    const attacking = Boolean(unit.attacking);
+    const orbitRadius = attacking && isPlayer ? 175 : 145;
+    visual.orbit.scale.set(orbitRadius);
+    visual.orbit.alpha = isPlayer ? 0.64 : 0.36;
+    const baseAngle = attacking && isPlayer
+      ? Math.atan2(Number(unit.mouseY || unit.y) - Number(unit.y || 0), Number(unit.mouseX || unit.x) - Number(unit.x || 0))
+      : 0;
+    const spin = isPlayer ? now * (attacking ? 0.003 : 0.00135) : now * 0.0006;
+    const aimX = attacking && isPlayer ? Math.cos(baseAngle) * 55 : 0;
+    const aimY = attacking && isPlayer ? Math.sin(baseAngle) * 55 : 0;
+    visual.minis.forEach((mini, index) => {
+      const visible = index < count;
+      mini.visible = visible;
+      const miniBeacon = visual.miniBeacons[index];
+      miniBeacon.visible = false;
+      if (!visible) return;
+      const angle = (index / Math.max(1, count)) * Math.PI * 2 + spin;
+      mini.position.set(Math.cos(angle) * orbitRadius + aimX, Math.sin(angle) * orbitRadius + aimY);
+      mini.rotation = visual.facing;
+      mini.scale.set(1);
+      mini.alpha = 1;
+    });
+    visual.lastSeenAt = now;
+    return;
+  }
+
+  const hoverTime = now * 0.0019 + visual.hoverSeed;
   const hoverLift = Math.sin(hoverTime) * (1.45 + throttle * 0.4);
   const subtleStretch = 1 + Math.sin(hoverTime * 1.45) * 0.012 + throttle * 0.016;
   const bankAmount = Math.abs(visual.bank);
@@ -1361,10 +1417,6 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
     subtleStretch * (1 - bankAmount * 0.022),
   );
 
-  // The drone body, position, turn and bank stay at the display refresh rate.
-  // On a weak desktop only the decorative children below update at a lower
-  // cadence. This preserves full visual identity while removing hundreds of
-  // tiny property writes from the hot render path.
   const shouldAnimateDecor = Boolean(isPlayer || animateDecor || unitChanged);
   if (!shouldAnimateDecor) {
     visual.lastSeenAt = now;
@@ -1527,6 +1579,7 @@ function updateSimpleVisual(visual, unit, resources, now, animateDecor = true) {
 
   const deltaSeconds = clamp((now - (visual.lastFrameAt || now)) / 1000, 1 / 240, 0.05);
   visual.lastFrameAt = now;
+  const disableAnimations = Boolean(resources.disableAnimations);
   const moveX = Number(unit.moveX || unit.velocityX || 0);
   const moveY = Number(unit.moveY || unit.velocityY || 0);
   const moving = Boolean(unit.isMoving) || Math.hypot(moveX, moveY) > 0.012;
@@ -1539,7 +1592,9 @@ function updateSimpleVisual(visual, unit, resources, now, animateDecor = true) {
     visual.facing = targetFacing;
     visual.facingReady = true;
   } else if (moving) {
-    visual.facing = dampAngle(visual.facing, targetFacing, 15, deltaSeconds);
+    visual.facing = disableAnimations
+      ? targetFacing
+      : dampAngle(visual.facing, targetFacing, 15, deltaSeconds);
   }
 
   const phase = now * 0.0052 + visual.hoverSeed;
@@ -1549,6 +1604,29 @@ function updateSimpleVisual(visual, unit, resources, now, animateDecor = true) {
   visual.root.rotation = visual.facing;
   visual.root.scale.set(0.96);
   visual.root.alpha = unit.alive === false ? 0.32 : 0.98;
+
+  if (disableAnimations) {
+    visual.body.position.set(0, 0);
+    visual.engine.visible = false;
+    visual.rotors.forEach((rotor) => {
+      rotor.visible = false;
+    });
+    const escortCount = Math.min(MAX_MINI_DRONES, Math.max(0, Number(unit.drones || 0)));
+    const escortRadius = 56;
+    const escortSpin = now * (moving ? 0.00185 : 0.00125) + visual.hoverSeed;
+    visual.minis.forEach((mini, index) => {
+      const visible = index < escortCount;
+      mini.visible = visible;
+      if (!visible) return;
+      const angle = (index / Math.max(1, escortCount)) * Math.PI * 2 + escortSpin;
+      mini.position.set(Math.cos(angle) * escortRadius, Math.sin(angle) * escortRadius);
+      mini.rotation = 0;
+      mini.scale.set(0.50);
+      mini.alpha = 0.93;
+    });
+    visual.lastSeenAt = now;
+    return;
+  }
 
   // Keep root transform/facing at 60 Hz. Rotor, engine and escort transforms
   // may be stepped on weak desktop hardware, without hiding a single model.
@@ -1614,15 +1692,21 @@ function updateSimpleProjectileVisual(visual, projectile, resources, now) {
       Math.atan2(Number(projectile.vy || 0), Number(projectile.vx || 1)),
   );
   const phase = now * 0.017 + visual.flightSeed;
+  const disableAnimations = Boolean(resources.disableAnimations);
 
   visual.root.visible = true;
   visual.root.position.set(Number(projectile.x || 0), Number(projectile.y || 0));
   visual.root.rotation = heading + Math.PI * 0.5;
   visual.root.scale.set(1.02);
   visual.root.alpha = 0.96;
-  visual.body.position.set(0, Math.sin(phase) * 0.42);
+  visual.body.position.set(0, disableAnimations ? 0 : Math.sin(phase) * 0.42);
   visual.rotors.forEach((rotor, index) => {
+    if (disableAnimations) {
+      rotor.visible = false;
+      return;
+    }
     const direction = index % 2 === 0 ? 1 : -1;
+    rotor.visible = true;
     rotor.rotation = direction * now * 0.036 + index * Math.PI * 0.5;
     rotor.alpha = 0.68;
   });
@@ -1650,8 +1734,8 @@ function updateProjectileVisual(visual, projectile, resources, now, compact = fa
   // precisely along its real flight vector (angle 0 = moving right).
   const flightScale = projectile.pierceLeft > 1 ? 1.24 : 1.12;
   const phase = now * 0.016 + visual.flightSeed;
-  const hover = Math.sin(phase * 1.12) * 0.72;
-  const pulse = 1 + Math.sin(phase * 1.45) * 0.08;
+  const disableAnimations = Boolean(resources.disableAnimations);
+  const hover = disableAnimations ? 0 : Math.sin(phase * 1.12) * 0.72;
 
   visual.root.visible = true;
   visual.root.position.set(Number(projectile.x || 0), Number(projectile.y || 0));
@@ -1670,6 +1754,10 @@ function updateProjectileVisual(visual, projectile, resources, now, compact = fa
   // are downgraded by the adaptive profile.
   visual.body.position.set(0, hover);
   visual.rotorSpins.forEach((rotor, index) => {
+    if (disableAnimations) {
+      rotor.visible = false;
+      return;
+    }
     const direction = index % 2 === 0 ? 1 : -1;
     rotor.visible = true;
     rotor.rotation = direction * now * (compact ? 0.026 : 0.032) + index * Math.PI * 0.5;
@@ -2388,6 +2476,9 @@ function PixiArenaRenderer({
       app.stage.sortableChildren = false;
 
       const resources = createResources(coreTypes);
+      // Only weak desktop disables animation. It still uses every premium
+      // context, terrain texture, drone model and projectile model.
+      resources.disableAnimations = Boolean(config.weakDesktopNoAnimations);
       const background = new PIXI.Graphics();
       background.eventMode = "none";
       background.zIndex = 0;
@@ -2551,7 +2642,10 @@ function PixiArenaRenderer({
         const tickMs = Math.min(80, Math.max(1, Number(app.ticker.deltaMS || 16.7)));
         frameTimeEma = frameTimeEma * 0.92 + tickMs * 0.08;
 
-        const desiredTier = getStableAdaptiveTier();
+        // Mobile rămâne pe premium permanent: fără downgrade de efecte,
+        // drone, proiectile, terrain sau animații în timpul rundei.
+        // Desktopul păstrează exact algoritmul adaptiv existent.
+        const desiredTier = (config.premiumMobile || config.weakDesktopNoAnimations) ? 0 : getStableAdaptiveTier();
         if (desiredTier === adaptiveTier) {
           adaptiveCandidateTier = adaptiveTier;
           adaptiveCandidateSince = now;
@@ -2609,7 +2703,7 @@ function PixiArenaRenderer({
         // rendered frame, which keeps the look but removes dozens of needless
         // property writes per second.
         staticAnimationFrame += 1;
-        if (staticAnimationFrame % config.animateStaticEvery === 0) {
+        if (!config.weakDesktopNoAnimations && staticAnimationFrame % config.animateStaticEvery === 0) {
           animateStaticPickups(staticMap, now);
         }
 
@@ -2649,13 +2743,11 @@ function PixiArenaRenderer({
           // integrated GPUs before the static layer is built; models/background
           // stay identical while off-screen/decorative pickups stop consuming
           // the frame budget.
-          const staticBudgetCeiling = config.mobile
-            ? 190
-            : config.visualFirstWeakDesktop
-              ? 58
-              : config.lowSpecDesktop
-                ? 42
-                : 300;
+          const staticBudgetCeiling = config.visualFirstWeakDesktop
+            ? 58
+            : config.lowSpecDesktop
+              ? 42
+              : 300;
           const baseItemBudget = hasRequestedStaticBudget
             ? clamp(Math.round(requestedStaticBudget), 0, staticBudgetCeiling)
             : config.maxStaticItems;
@@ -2833,15 +2925,22 @@ function PixiArenaRenderer({
                 !resolvedCombatViewerKey ||
                 String(event.viewerId) === resolvedCombatViewerKey,
             );
-        syncCombatTextLayer({
-          map: combatTextMap,
-          source: visibleCombatEvents,
-          resources,
-          parent: combatLayer,
-          bounds,
-          now,
-          forceVisible: Boolean(data?.combatEventsPrivate),
-        });
+        if (config.weakDesktopNoAnimations) {
+          // Combat text is a rise/fade animation. Weak desktop removes it
+          // completely; combat state remains available in the DOM HUD.
+          combatLayer.visible = false;
+        } else {
+          combatLayer.visible = true;
+          syncCombatTextLayer({
+            map: combatTextMap,
+            source: visibleCombatEvents,
+            resources,
+            parent: combatLayer,
+            bounds,
+            now,
+            forceVisible: Boolean(data?.combatEventsPrivate),
+          });
+        }
       });
     };
 
