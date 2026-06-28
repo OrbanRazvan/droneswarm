@@ -154,14 +154,12 @@ const ZONE_STATE_INTERVAL_HEAVY_MS = 760;
 const ZONE_ENTITY_DEFINITION_INTERVAL_MS = 900;
 const ZONE_PROJECTILE_DEFINITION_INTERVAL_MS = 800;
 
-// Fifty compact latest-wins updates/second keep fast attack drones visually
-// attached to their authoritative path while still avoiding a reliable-packet
-// backlog on mobile or older laptops.
-const ZONE_TRANSFORM_INTERVAL_MS = 20; // 50 Hz latest-wins transforms: low latency without transport backlog.
+// Forty transform updates/second plus local display-rate interpolation is a
+// better mobile trade-off than 60 large JSON payloads.  The server always sends
+// the newest transform and clients discard an obsolete packet before processing.
+const ZONE_TRANSFORM_INTERVAL_MS = 25; // 40 Hz compact latest-wins transforms for smoother attack drones.
 const ZONE_TRANSFORM_PLAYER_LIMIT = 60;
-// Projectiles are brief and very fast. Keep more of them in the hot lane so
-// an attack drone never waits for the slower definition/state packet.
-const ZONE_TRANSFORM_PROJECTILE_LIMIT = 48;
+const ZONE_TRANSFORM_PROJECTILE_LIMIT = 36;
 const ZONE_TRANSFORM_RANGE_PADDING = 820;
 const ZONE_WORLD_DELTA_INTERVAL_MS = 250;
 const ZONE_LOOT_TICK_INTERVAL_MS = 50;
