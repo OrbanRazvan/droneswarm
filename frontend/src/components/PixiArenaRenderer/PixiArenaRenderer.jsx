@@ -198,37 +198,55 @@ function getRendererDeviceProfile(forceLowQuality = false) {
 }
 
 function getRendererConfig(forceLowQuality) {
-  const device = getRendererDeviceProfile(false);
+  const device = getRendererDeviceProfile(forceLowQuality);
+
+  // Doar laptopurile / PC-urile slabe intră în profilul performant.
+  // Telefoanele primesc mereu grafica premium, exact ca device-urile bune.
+  const weakLaptop =
+    !device.mobile &&
+    (device.weakDesktop || Boolean(forceLowQuality));
 
   return {
     ...device,
 
-    // Calitate maximă pe toate device-urile.
-    resolution: Math.min(1.35, device.dpr),
-    antialias: true,
+    // IMPORTANT:
+    // Telefonul nu mai este niciodată redus automat, indiferent de RAM / core-uri.
+    weakMobile: false,
+    forcedMobileQuality: false,
 
-    // Toate dronele apropiate sunt randate complet.
-    maxStaticItems: 120,
-    maxPlayers: MAX_RENDERED_PLAYERS,
+    // Doar desktop/laptop slab primește optimizare.
+    weakDesktop: weakLaptop,
+    lowSpecDesktop: weakLaptop,
+    visualFirstWeakDesktop: false,
+
+    // Telefon / PC bun: calitate premium.
+    // Laptop slab: rezoluție mai mică pentru FPS stabil.
+    resolution: weakLaptop
+      ? 0.72
+      : Math.min(1.35, device.dpr),
+
+    // Laptop slab: fără MSAA, pentru a nu consuma GPU inutil.
+    // Telefon și PC bun: anti-alias activ.
+    antialias: !weakLaptop,
+
+    // Telefon și PC bun: toate obiectele premium.
+    // Laptop slab: limite mai mici, dar dronele apropiate rămân complete.
+    maxStaticItems: weakLaptop ? 48 : 120,
+    maxPlayers: weakLaptop ? 6 : MAX_RENDERED_PLAYERS,
     maxSimplePlayers: 60,
 
-    // Attack drone-urile sunt randate complet.
-    maxProjectiles: MAX_RENDERED_PROJECTILES,
-    maxSimpleProjectiles: 48,
+    // Attack drone-urile apropiate rămân prioritate și pe laptop slab.
+    maxProjectiles: weakLaptop ? 10 : MAX_RENDERED_PROJECTILES,
+    maxSimpleProjectiles: weakLaptop ? 32 : 48,
 
-    // Orbs / energy / cores se actualizează la frecvența maximă.
-    staticSyncInterval: STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: 1,
+    // Telefon și PC bun: animații complete.
+    // Laptop slab: mai rar pentru orbs/energy, ca dronele să rămână la 60 FPS.
+    staticSyncInterval: weakLaptop ? 520 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: weakLaptop ? 7 : 1,
 
-    // Activează harta/terrain-ul premium pe orice device.
-    disableExpensiveTerrain: false,
-
-    // Dezactivează toate profilele low-spec folosite mai jos în renderer.
-    weakMobile: false,
-    weakDesktop: false,
-    lowSpecDesktop: false,
-    visualFirstWeakDesktop: false,
-    forcedMobileQuality: false,
+    // Telefonul păstrează terrain-ul premium.
+    // Laptop slab îl oprește, fiind doar decor și cel mai costisitor vizual.
+    disableExpensiveTerrain: weakLaptop,
   };
 }
 
