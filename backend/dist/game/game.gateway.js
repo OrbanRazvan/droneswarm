@@ -2094,6 +2094,11 @@ let GameGateway = class GameGateway {
         if (resumeSeat && resumeToken) {
             const { room, player } = resumeSeat;
             if (String(player.id) === String(client.id)) {
+                player.isGuest = Boolean(data?.isGuest);
+                player.guestStatsKey = data?.isGuest
+                    ? this.normalizeGameStatsGuestKey(data?.guestStatsKey)
+                    : null;
+                player.username = String(data?.username || (data?.isGuest ? "Guest" : "Player")).slice(0, 18);
                 player.lastSeenAt = now;
                 player.lastInputReceivedAt = now;
                 player.disconnectedAt = 0;
@@ -2164,6 +2169,9 @@ let GameGateway = class GameGateway {
             participantId,
             userId: data?.isGuest ? null : data?.userId,
             isGuest: Boolean(data?.isGuest),
+            guestStatsKey: data?.isGuest
+                ? this.normalizeGameStatsGuestKey(data?.guestStatsKey)
+                : null,
             username: String(data?.username || (data?.isGuest ? "Guest" : "Player")).slice(0, 18),
             skin: normalizeSkin(data?.isGuest ? "cyan" : data?.skin),
             x: spawn.x,

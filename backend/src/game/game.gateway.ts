@@ -2743,6 +2743,12 @@ export class GameGateway {
       const { room, player } = resumeSeat;
 
       if (String(player.id) === String(client.id)) {
+        // Keep guest leaderboard metadata on retry/reconnect joins as well.
+        player.isGuest = Boolean(data?.isGuest);
+        player.guestStatsKey = data?.isGuest
+          ? this.normalizeGameStatsGuestKey(data?.guestStatsKey)
+          : null;
+        player.username = String(data?.username || (data?.isGuest ? "Guest" : "Player")).slice(0, 18);
         player.lastSeenAt = now;
         player.lastInputReceivedAt = now;
         player.disconnectedAt = 0;
@@ -2824,6 +2830,12 @@ export class GameGateway {
       participantId,
       userId: data?.isGuest ? null : data?.userId,
       isGuest: Boolean(data?.isGuest),
+      // The original bug was here: Zone received guestStatsKey in the join
+      // request but discarded it when creating the authoritative player.
+      // Keep only this anonymous leaderboard key; it is never a GameUser/Player.
+      guestStatsKey: data?.isGuest
+        ? this.normalizeGameStatsGuestKey(data?.guestStatsKey)
+        : null,
       username: String(data?.username || (data?.isGuest ? "Guest" : "Player")).slice(0, 18),
       skin: normalizeSkin(data?.isGuest ? "cyan" : data?.skin),
       x: spawn.x,
