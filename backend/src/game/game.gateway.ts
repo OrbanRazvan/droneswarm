@@ -161,6 +161,17 @@ const ZONE_TRANSFORM_INTERVAL_MS = 25; // 40 Hz compact latest-wins transforms f
 const ZONE_TRANSFORM_PLAYER_LIMIT = 60;
 const ZONE_TRANSFORM_PROJECTILE_LIMIT = 36;
 const ZONE_TRANSFORM_RANGE_PADDING = 820;
+
+// Per-viewer replication caps for detected weak laptops. These are visual
+// streaming limits only: server simulation, collisions, AI and hit validation
+// remain identical for every participant.
+const ZONE_WEAK_DESKTOP_PROFILE = "weak-desktop";
+const ZONE_WEAK_DESKTOP_TRANSFORM_PLAYER_LIMIT = 42;
+const ZONE_WEAK_DESKTOP_TRANSFORM_PROJECTILE_LIMIT = 24;
+const ZONE_WEAK_DESKTOP_TRANSFORM_RANGE_PADDING = 460;
+const ZONE_WEAK_DESKTOP_VIEWPORT_ORB_LIMIT = 86;
+const ZONE_WEAK_DESKTOP_VIEWPORT_ENERGY_LIMIT = 20;
+const ZONE_WEAK_DESKTOP_VIEWPORT_CORE_LIMIT = 5;
 const ZONE_WORLD_DELTA_INTERVAL_MS = 250;
 const ZONE_LOOT_TICK_INTERVAL_MS = 50;
 const ZONE_COLLISION_TICK_INTERVAL_MS = 34;
@@ -487,6 +498,16 @@ export class GameGateway {
   // from the same pre-match room even after their resumable seat was deleted.
   private normalizeZonePvpParticipantId(value: any) {
     return this.normalizeZonePvpResumeToken(value);
+  }
+
+  private normalizeZonePvpRenderProfile(value: any) {
+    return String(value || "").trim() === ZONE_WEAK_DESKTOP_PROFILE
+      ? ZONE_WEAK_DESKTOP_PROFILE
+      : "standard";
+  }
+
+  private isZoneWeakDesktopViewer(player: any) {
+    return String(player?.zoneRenderProfile || "") === ZONE_WEAK_DESKTOP_PROFILE;
   }
 
   private rememberZonePvpResumeSeat(room: any, player: any, token: string | null) {
@@ -2256,6 +2277,7 @@ export class GameGateway {
     const applicantUserId = data?.isGuest ? null : String(data?.userId || "").trim() || null;
     const departedRoomId = String(data?.departedRoomId || "").trim();
     const departedResumeToken = this.normalizeZonePvpResumeToken(data?.departedResumeToken);
+    const zoneRenderProfile = this.normalizeZonePvpRenderProfile(data?.renderProfile);
 
     // The browser persists this marker before EXIT TO MENU. Apply it before any
     // matchmaking selection, so a leave packet lost during a network drop can
@@ -2278,6 +2300,7 @@ export class GameGateway {
       const { room, player } = resumeSeat;
 
       if (!room.closedAt) {
+        player.zoneRenderProfile = zoneRenderProfile;
         this.rebindZonePvpResumeSeat(room, player, client, resumeToken);
         this.emitZonePvpJoined(client, room, player, true);
         this.broadcastZonePvpRoomState(room, now, true);
@@ -2311,6 +2334,7 @@ export class GameGateway {
       existingZonePlayer.isGuest = Boolean(data?.isGuest);
       existingZonePlayer.username = String(data?.username || (data?.isGuest ? "Guest" : "Player")).slice(0, 18);
       existingZonePlayer.skin = normalizeSkin(data?.isGuest ? "cyan" : data?.skin);
+      existingZonePlayer.zoneRenderProfile = zoneRenderProfile;
       existingZonePlayer.disconnectedAt = 0;
       existingZonePlayer.lastSeenAt = now;
       existingZonePlayer.lastInputReceivedAt = now;
@@ -2339,6 +2363,7 @@ export class GameGateway {
       isGuest: Boolean(data?.isGuest),
       username: String(data?.username || (data?.isGuest ? "Guest" : "Player")).slice(0, 18),
       skin: normalizeSkin(data?.isGuest ? "cyan" : data?.skin),
+      zoneRenderProfile,
       x: spawn.x,
       y: spawn.y,
       prevX: spawn.x,
@@ -5464,9 +5489,19 @@ export class GameGateway {
         ? this.getStableSpectatorTarget(room, viewer)
         : null;
       const viewAnchor = spectatorTarget || viewer;
+      const weakDesktopViewer = this.isZoneWeakDesktopViewer(viewer);
+      const transformRangePadding = weakDesktopViewer
+        ? ZONE_WEAK_DESKTOP_TRANSFORM_RANGE_PADDING
+        : ZONE_TRANSFORM_RANGE_PADDING;
+      const transformPlayerLimit = weakDesktopViewer
+        ? ZONE_WEAK_DESKTOP_TRANSFORM_PLAYER_LIMIT
+        : ZONE_TRANSFORM_PLAYER_LIMIT;
+      const transformProjectileLimit = weakDesktopViewer
+        ? ZONE_WEAK_DESKTOP_TRANSFORM_PROJECTILE_LIMIT
+        : ZONE_TRANSFORM_PROJECTILE_LIMIT;
       const range = viewer.alive === false
         ? VIEW_DISTANCE + 1700
-        : VIEW_DISTANCE + ZONE_TRANSFORM_RANGE_PADDING;
+        : VIEW_DISTANCE + transformRangePadding;
 
       const nearbyUnits = this.querySpatialIndex(
         unitSpatialIndex,
@@ -5483,7 +5518,7 @@ export class GameGateway {
         viewAnchor,
         nearbyUnits,
         range,
-        ZONE_TRANSFORM_PLAYER_LIMIT,
+        transformPlayerLimit,
       ).map((unit: any) => {
         const flags =
           (unit.isMoving ? 1 : 0) |
@@ -5507,7 +5542,7 @@ export class GameGateway {
         viewAnchor,
         room.projectiles || [],
         range + 460,
-        ZONE_TRANSFORM_PROJECTILE_LIMIT,
+        transformProjectileLimit,
       ).map((projectile: any) => {
         const flags =
           (Number(projectile.pierceLeft || 1) > 1 ? 1 : 0) |
@@ -5646,6 +5681,25 @@ export class GameGateway {
       }
 
       const viewAnchor = spectatorTarget || player;
+      const weakDesktopViewer = this.isZoneWeakDesktopViewer(player);
+      const transformRangePadding = weakDesktopViewer
+        ? ZONE_WEAK_DESKTOP_TRANSFORM_RANGE_PADDING
+        : ZONE_TRANSFORM_RANGE_PADDING;
+      const transformPlayerLimit = weakDesktopViewer
+        ? ZONE_WEAK_DESKTOP_TRANSFORM_PLAYER_LIMIT
+        : ZONE_TRANSFORM_PLAYER_LIMIT;
+      const transformProjectileLimit = weakDesktopViewer
+        ? ZONE_WEAK_DESKTOP_TRANSFORM_PROJECTILE_LIMIT
+        : ZONE_TRANSFORM_PROJECTILE_LIMIT;
+      const viewportOrbLimit = weakDesktopViewer
+        ? ZONE_WEAK_DESKTOP_VIEWPORT_ORB_LIMIT
+        : 140;
+      const viewportEnergyLimit = weakDesktopViewer
+        ? ZONE_WEAK_DESKTOP_VIEWPORT_ENERGY_LIMIT
+        : 30;
+      const viewportCoreLimit = weakDesktopViewer
+        ? ZONE_WEAK_DESKTOP_VIEWPORT_CORE_LIMIT
+        : 8;
       const includeViewportItems =
         !player.lastViewportItemStateAt ||
         now - player.lastViewportItemStateAt >= VIEWPORT_ITEM_STATE_INTERVAL_MS;
@@ -5669,7 +5723,7 @@ export class GameGateway {
         playerIndex,
         viewAnchor.x,
         viewAnchor.y,
-        player.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + ZONE_TRANSFORM_RANGE_PADDING,
+        player.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + transformRangePadding,
       );
 
       const visiblePlayers = includeEntityDefinitions
@@ -5678,8 +5732,8 @@ export class GameGateway {
             playerCandidates.filter((other) =>
               other.id !== player.id && (player.alive !== false || other.alive !== false),
             ),
-            player.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + ZONE_TRANSFORM_RANGE_PADDING,
-            ZONE_TRANSFORM_PLAYER_LIMIT,
+            player.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + transformRangePadding,
+            transformPlayerLimit,
           ).map((other) => this.serializeZonePvpStatePlayer(room, other))
         : undefined;
 
@@ -5722,14 +5776,14 @@ export class GameGateway {
               ? this.filterNearIndexed(
                   viewAnchor,
                   room.projectileSpatialIndex,
-                  VIEW_DISTANCE + ZONE_TRANSFORM_RANGE_PADDING,
-                  ZONE_TRANSFORM_PROJECTILE_LIMIT,
+                  VIEW_DISTANCE + transformRangePadding,
+                  transformProjectileLimit,
                 )
               : this.filterNear(
                   viewAnchor,
                   room.projectiles,
-                  VIEW_DISTANCE + ZONE_TRANSFORM_RANGE_PADDING,
-                  ZONE_TRANSFORM_PROJECTILE_LIMIT,
+                  VIEW_DISTANCE + transformRangePadding,
+                  transformProjectileLimit,
                 )
             ).map((projectile: any) => this.serializeZonePvpStateProjectile(room, projectile))
           : undefined,
@@ -5751,14 +5805,14 @@ export class GameGateway {
 
       if (includeViewportItems) {
         payload.orbs = room.orbSpatialIndex
-          ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, 140)
-          : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, 140);
+          ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, viewportOrbLimit)
+          : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, viewportOrbLimit);
         payload.energyCells = room.energySpatialIndex
-          ? this.filterNearIndexed(viewAnchor, room.energySpatialIndex, VIEW_DISTANCE, 30)
-          : this.filterNear(viewAnchor, room.energyCells, VIEW_DISTANCE, 30);
+          ? this.filterNearIndexed(viewAnchor, room.energySpatialIndex, VIEW_DISTANCE, viewportEnergyLimit)
+          : this.filterNear(viewAnchor, room.energyCells, VIEW_DISTANCE, viewportEnergyLimit);
         payload.cores = room.coreSpatialIndex
-          ? this.filterNearIndexed(viewAnchor, room.coreSpatialIndex, VIEW_DISTANCE + 600, 8)
-          : this.filterNear(viewAnchor, room.cores, VIEW_DISTANCE + 600, 8);
+          ? this.filterNearIndexed(viewAnchor, room.coreSpatialIndex, VIEW_DISTANCE + 600, viewportCoreLimit)
+          : this.filterNear(viewAnchor, room.cores, VIEW_DISTANCE + 600, viewportCoreLimit);
       }
 
       if (includeStaticState) {

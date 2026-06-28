@@ -199,79 +199,50 @@ function getRendererDeviceProfile(forceLowQuality = false) {
 
 function getRendererConfig(forceLowQuality) {
   const device = getRendererDeviceProfile(forceLowQuality);
+  const lowSpec = device.weakMobile || device.lowSpecDesktop;
+  const lightMobile = device.forcedMobileQuality && !device.weakMobile;
+  const visualFirstDesktop = device.visualFirstWeakDesktop;
 
-  // CERINȚĂ: toate telefoanele folosesc exact profilul premium complet.
-  // Detectarea weakMobile rămâne disponibilă doar ca informație de device,
-  // însă nu mai reduce rezoluția, dronele, proiectilele, animațiile sau terrain-ul.
-  const premiumMobile = Boolean(device.mobile);
-  const lowSpec = Boolean(device.lowSpecDesktop);
-  const visualFirstDesktop = Boolean(device.visualFirstWeakDesktop);
-
-  // Laptop / PC slab: păstrează exact profilul performant existent.
-  // Telefon: aceeași calitate ca un laptop/PC bun.
+  // Weak integrated GPUs are normally fill-rate limited. Keep the same drone
+  // artwork and terrain, but render them in a slightly smaller internal
+  // framebuffer and disable MSAA (the premium outlines already provide their
+  // own anti-aliased vector edges). This is much cheaper than removing models,
+  // props or the world background.
   const resolution = device.lowSpecDesktop
     ? 0.68
-    : visualFirstDesktop
-      ? Math.min(0.68, device.dpr)
-      : Math.min(1.35, device.dpr);
+    : device.weakMobile
+      ? 0.66
+      : visualFirstDesktop
+        ? Math.min(0.68, device.dpr)
+        : lightMobile
+          ? 0.80
+          : Math.min(1.35, device.dpr);
 
   return {
     ...device,
-
-    // Mobile este premium indiferent de RAM / număr de core-uri.
-    premiumMobile,
-    weakMobile: false,
-    forcedMobileQuality: false,
-
     resolution,
-
-    // Anti-aliasing și terrain premium pe telefoane + desktop bun.
-    // Ramurile existente de laptop slab rămân neschimbate.
-    antialias: premiumMobile || (!lowSpec && !visualFirstDesktop),
-
-    maxStaticItems: device.lowSpecDesktop
-      ? 38
-      : visualFirstDesktop
-        ? 58
-        : 120,
-
-    maxPlayers: device.lowSpecDesktop
-      ? 4
-      : visualFirstDesktop
-        ? 5
-        : MAX_RENDERED_PLAYERS,
-
+    // MSAA is especially expensive on Intel/older Radeon iGPUs. The weak
+    // desktop profile keeps all geometry but avoids paying the extra render
+    // target resolve every frame.
+    antialias: !lowSpec && !lightMobile && !visualFirstDesktop,
+    // Nearby drones remain premium. Distant drones retain their full bodies,
+    // rotors, propulsion and escort count; only the amount of static loot and
+    // decoration work is budgeted for older desktop GPUs.
+    maxStaticItems: device.lowSpecDesktop ? 38 : device.weakMobile ? 38 : visualFirstDesktop ? 58 : lightMobile ? 46 : 120,
+    maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : visualFirstDesktop ? 5 : lightMobile ? 5 : MAX_RENDERED_PLAYERS,
     maxSimplePlayers: 60,
-
-    maxProjectiles: device.lowSpecDesktop
-      ? 6
-      : visualFirstDesktop
-        ? 9
-        : MAX_RENDERED_PROJECTILES,
-
-    maxSimpleProjectiles: device.lowSpecDesktop
-      ? 30
-      : visualFirstDesktop
-        ? 32
-        : 48,
-
-    staticSyncInterval: device.lowSpecDesktop
-      ? 620
-      : visualFirstDesktop
-        ? 560
-        : STATIC_SYNC_INTERVAL_MS,
-
-    animateStaticEvery: device.lowSpecDesktop
-      ? 10
-      : visualFirstDesktop
-        ? 7
-        : 1,
-
-    // Pe telefon și desktop bun rămâne fundalul premium.
-    // Doar ramurile de desktop slab îl păstrează oprit pentru 60 FPS.
+    maxProjectiles: device.lowSpecDesktop ? 6 : device.weakMobile ? 5 : visualFirstDesktop ? 9 : lightMobile ? 6 : MAX_RENDERED_PROJECTILES,
+    maxSimpleProjectiles: device.lowSpecDesktop ? 30 : device.weakMobile ? 26 : visualFirstDesktop ? 32 : lightMobile ? 26 : 48,
+    staticSyncInterval: device.lowSpecDesktop ? 620 : device.weakMobile ? 620 : visualFirstDesktop ? 560 : lightMobile ? 480 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: device.lowSpecDesktop ? 10 : device.weakMobile ? 10 : visualFirstDesktop ? 7 : lightMobile ? 6 : 1,
+    // The large terrain texture is fill-rate expensive on Intel/older Radeon
+    // iGPUs. Weak desktops keep every gameplay model/projectile, but start
+    // without that purely decorative layer to preserve a stable 60 FPS.
     disableExpensiveTerrain: Boolean(
+      device.weakMobile ||
       device.lowSpecDesktop ||
-      visualFirstDesktop,
+      visualFirstDesktop ||
+      lightMobile,
     ),
   };
 }
@@ -2580,10 +2551,7 @@ function PixiArenaRenderer({
         const tickMs = Math.min(80, Math.max(1, Number(app.ticker.deltaMS || 16.7)));
         frameTimeEma = frameTimeEma * 0.92 + tickMs * 0.08;
 
-        // Mobile rămâne pe premium permanent: fără downgrade de efecte,
-        // drone, proiectile, terrain sau animații în timpul rundei.
-        // Desktopul păstrează exact algoritmul adaptiv existent.
-        const desiredTier = config.premiumMobile ? 0 : getStableAdaptiveTier();
+        const desiredTier = getStableAdaptiveTier();
         if (desiredTier === adaptiveTier) {
           adaptiveCandidateTier = adaptiveTier;
           adaptiveCandidateSince = now;
@@ -2681,11 +2649,13 @@ function PixiArenaRenderer({
           // integrated GPUs before the static layer is built; models/background
           // stay identical while off-screen/decorative pickups stop consuming
           // the frame budget.
-          const staticBudgetCeiling = config.visualFirstWeakDesktop
-            ? 58
-            : config.lowSpecDesktop
-              ? 42
-              : 300;
+          const staticBudgetCeiling = config.mobile
+            ? 190
+            : config.visualFirstWeakDesktop
+              ? 58
+              : config.lowSpecDesktop
+                ? 42
+                : 300;
           const baseItemBudget = hasRequestedStaticBudget
             ? clamp(Math.round(requestedStaticBudget), 0, staticBudgetCeiling)
             : config.maxStaticItems;

@@ -28,6 +28,8 @@ export declare class GameGateway {
     private serializeZonePvpStateProjectile;
     private normalizeZonePvpResumeToken;
     private normalizeZonePvpParticipantId;
+    private normalizeZonePvpRenderProfile;
+    private isZoneWeakDesktopViewer;
     private rememberZonePvpResumeSeat;
     private findZonePvpResumeSeat;
     private enforceZonePvpDeparture;
