@@ -2213,68 +2213,85 @@ export class GameGateway {
       }
 
       for (const room of this.zonePvpRooms.values()) {
-        this.updateZonePvpRoomStatus(room, now);
+        // Never allow one malformed room/entity to escape the interval callback.
+        // An uncaught exception inside setInterval can terminate the Node process
+        // on Render, which looks to every browser like a sudden "Connection lost"
+        // followed by all bots disappearing.
+        try {
+          this.updateZonePvpRoomStatus(room, now);
 
-        if (room.status === "playing") {
-          const zoneRadius = this.getZonePvpZoneRadius(room);
-          // Core movement/projectiles remain 60 Hz.  Expensive collision, loot
-          // and respawn work is sampled at a lower fixed cadence; this removes
-          // Node event-loop spikes without changing how a drone visually moves.
-          this.updateZonePvpBots(room, now, zoneRadius);
-          this.updatePlayers(room, now, zoneRadius, deltaFrames);
-          this.applyZonePvpZoneDamage(room, now, zoneRadius);
-          this.updateProjectiles(room, deltaFrames, now);
+          if (room.status === "playing") {
+            const zoneRadius = this.getZonePvpZoneRadius(room);
+            // Core movement/projectiles remain 60 Hz.  Expensive collision, loot
+            // and respawn work is sampled at a lower fixed cadence; this removes
+            // Node event-loop spikes without changing how a drone visually moves.
+            this.updateZonePvpBots(room, now, zoneRadius);
+            this.updatePlayers(room, now, zoneRadius, deltaFrames);
+            this.applyZonePvpZoneDamage(room, now, zoneRadius);
+            this.updateProjectiles(room, deltaFrames, now);
 
-          if (!room.lastZoneCollisionAt || now - room.lastZoneCollisionAt >= ZONE_COLLISION_TICK_INTERVAL_MS) {
-            room.lastZoneCollisionAt = now;
-            this.handleBodyCollisions(room, now, zoneRadius);
+            if (!room.lastZoneCollisionAt || now - room.lastZoneCollisionAt >= ZONE_COLLISION_TICK_INTERVAL_MS) {
+              room.lastZoneCollisionAt = now;
+              this.handleBodyCollisions(room, now, zoneRadius);
+            }
+
+            if (!room.lastZoneLootAt || now - room.lastZoneLootAt >= ZONE_LOOT_TICK_INTERVAL_MS) {
+              room.lastZoneLootAt = now;
+              this.collectOrbs(room, zoneRadius);
+              this.collectEnergy(room, zoneRadius);
+              this.collectCores(room, zoneRadius);
+            }
+
+            if (!room.lastZoneItemMaintenanceAt || now - room.lastZoneItemMaintenanceAt >= ZONE_ITEM_MAINTENANCE_INTERVAL_MS) {
+              room.lastZoneItemMaintenanceAt = now;
+              this.maintainWorldItems(room, zoneRadius, now);
+              this.cleanupCombatEvents(room, now);
+            }
+
+            this.updateZonePvpWinCondition(room, now);
           }
 
-          if (!room.lastZoneLootAt || now - room.lastZoneLootAt >= ZONE_LOOT_TICK_INTERVAL_MS) {
-            room.lastZoneLootAt = now;
-            this.collectOrbs(room, zoneRadius);
-            this.collectEnergy(room, zoneRadius);
-            this.collectCores(room, zoneRadius);
-          }
+          const broadcastInterval =
+            room.players.size >= PVP_HEAVY_STATE_THRESHOLD
+              ? ZONE_STATE_INTERVAL_HEAVY_MS
+              : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
+                ? ZONE_STATE_INTERVAL_CROWDED_MS
+                : ZONE_STATE_INTERVAL_MS;
 
-          if (!room.lastZoneItemMaintenanceAt || now - room.lastZoneItemMaintenanceAt >= ZONE_ITEM_MAINTENANCE_INTERVAL_MS) {
-            room.lastZoneItemMaintenanceAt = now;
-            this.maintainWorldItems(room, zoneRadius, now);
-            this.cleanupCombatEvents(room, now);
-          }
-
-          this.updateZonePvpWinCondition(room, now);
-        }
-
-        const broadcastInterval =
-          room.players.size >= PVP_HEAVY_STATE_THRESHOLD
-            ? ZONE_STATE_INTERVAL_HEAVY_MS
-            : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
-              ? ZONE_STATE_INTERVAL_CROWDED_MS
-              : ZONE_STATE_INTERVAL_MS;
-
-        if (
-          !room.lastBroadcastAt ||
-          now - room.lastBroadcastAt >= broadcastInterval
-        ) {
-          room.lastBroadcastAt = now;
-          this.broadcastZonePvpRoomState(room, now);
-        }
-
-        // Transforms have their own compact latest-wins tuple lane. Never let HUD/loot
-        // payloads queue in front of remote drone or attack-drone positions.
-        if (room.status === "playing") {
           if (
-            !room.lastTransformBroadcastAt ||
-            now - room.lastTransformBroadcastAt >= ZONE_TRANSFORM_INTERVAL_MS
+            !room.lastBroadcastAt ||
+            now - room.lastBroadcastAt >= broadcastInterval
           ) {
-            room.lastTransformBroadcastAt = now;
-            this.broadcastZonePvpTransforms(room, now);
+            room.lastBroadcastAt = now;
+            this.broadcastZonePvpRoomState(room, now);
+          }
+
+          // Transforms have their own compact latest-wins tuple lane. Never let HUD/loot
+          // payloads queue in front of remote drone or attack-drone positions.
+          if (room.status === "playing") {
+            if (
+              !room.lastTransformBroadcastAt ||
+              now - room.lastTransformBroadcastAt >= ZONE_TRANSFORM_INTERVAL_MS
+            ) {
+              room.lastTransformBroadcastAt = now;
+              this.broadcastZonePvpTransforms(room, now);
+            }
+          }
+
+          this.flushZonePvpWorldDelta(room, now);
+          this.cleanupZonePvpRoom(room, now);
+        } catch (error) {
+          room.zoneLoopErrorCount = Number(room.zoneLoopErrorCount || 0) + 1;
+          room.lastZoneLoopErrorAt = now;
+
+          // Avoid a log storm on a corrupt client packet while retaining a useful
+          // Render log entry for diagnosis. The next simulation tick still runs.
+          if (!room.lastZoneLoopErrorLogAt || now - room.lastZoneLoopErrorLogAt >= 5000) {
+            room.lastZoneLoopErrorLogAt = now;
+            // eslint-disable-next-line no-console
+            console.error(`[Zone PvP] recovered room tick error for ${room.id}`, error);
           }
         }
-
-        this.flushZonePvpWorldDelta(room, now);
-        this.cleanupZonePvpRoom(room, now);
       }
     }, 1000 / 60);
   }
@@ -2390,12 +2407,22 @@ export class GameGateway {
         player.energy = Math.max(0, player.energy - ENERGY_DRAIN_AMOUNT);
         player.lastEnergyDrainAt = now;
         if (player.energy <= 0) {
-          player.hp = 0;
-          player.alive = false;
-          player.input = {};
-          player.killedById = null;
-          player.spectatorTargetId = null;
-          continue;
+          // Zone PvP energy is a resource for shields and sustained pressure,
+          // not an instant-death timer. Bots move continuously by design, so
+          // killing at 0 energy previously eliminated the entire bot field
+          // (and active real players) after roughly 100 seconds.
+          //
+          // Keep the legacy elimination rule for the old non-Zone modes, but
+          // clamp Zone players at zero until they collect an energy cell.
+          player.energy = 0;
+          if (!room?.zonePvpMode) {
+            player.hp = 0;
+            player.alive = false;
+            player.input = {};
+            player.killedById = null;
+            player.spectatorTargetId = null;
+            continue;
+          }
         }
       }
       player.shieldActive = Boolean(
@@ -3852,8 +3879,19 @@ export class GameGateway {
 
     // Last alive wins. A disconnect goes through removeZonePvpPlayer,
     // which calls this function instead of restarting matchmaking.
-    if (alive.length <= 1) {
-      this.finishZonePvpMatch(room, alive[0] || null, now, "winner");
+    if (alive.length === 1) {
+      this.finishZonePvpMatch(room, alive[0], now, "winner");
+      return;
+    }
+
+    // `alive.length === 0` is never a valid winner transition. Keep the
+    // authoritative room alive rather than disposing it as if every bot and
+    // real player had legitimately left at the same instant. The simulation
+    // will continue and the next authoritative state/health event can recover.
+    if (alive.length === 0) {
+      room.lastNoAliveAt = room.lastNoAliveAt || now;
+    } else {
+      room.lastNoAliveAt = null;
     }
   }
   broadcastRoomState(room, now) {
@@ -4677,6 +4715,12 @@ export class GameGateway {
       lastZoneItemMaintenanceAt: 0,
       lastZoneWorldDeltaAt: 0,
       pendingZoneWorldDelta: null,
+      // Defensive room-health markers. They never affect gameplay but make a
+      // bad tick recoverable instead of crashing the entire gateway process.
+      zoneLoopErrorCount: 0,
+      lastZoneLoopErrorAt: 0,
+      lastZoneLoopErrorLogAt: 0,
+      lastNoAliveAt: null,
       players: new Map(),
       orbs: Array.from({ length: MAX_ORBS }, () =>
         this.createOrb(ZONE_START_RADIUS),
@@ -4902,6 +4946,10 @@ export class GameGateway {
     if (!room?.zonePvpMode || room.status !== "playing") return;
 
     const units = [...room.players.values()];
+    // A transform packet is sent often. Indexing the small live unit set once
+    // lets each viewer inspect only nearby cells instead of repeatedly scanning
+    // all 60 drones every 25 ms.
+    const unitSpatialIndex = this.buildSpatialIndex(units);
     const sequence = Number(room.zoneTransformSequence || 0) + 1;
     room.zoneTransformSequence = sequence;
 
@@ -4924,13 +4972,20 @@ export class GameGateway {
         ? VIEW_DISTANCE + 1700
         : VIEW_DISTANCE + ZONE_TRANSFORM_RANGE_PADDING;
 
+      const nearbyUnits = this.querySpatialIndex(
+        unitSpatialIndex,
+        viewAnchor.x,
+        viewAnchor.y,
+        range,
+      ).filter(
+        (other: any) =>
+          other.id !== viewer.id &&
+          (viewer.alive !== false || other.alive !== false),
+      );
+
       const playerRows = this.filterNear(
         viewAnchor,
-        units.filter(
-          (other: any) =>
-            other.id !== viewer.id &&
-            (viewer.alive !== false || other.alive !== false),
-        ),
+        nearbyUnits,
         range,
         ZONE_TRANSFORM_PLAYER_LIMIT,
       ).map((unit: any) => {

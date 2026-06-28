@@ -40,10 +40,15 @@ const SELF_IDLE_FREEZE_DISTANCE = 360;
 const REMOTE_SMOOTHING = 42;
 const REMOTE_PREDICTION = 1.0;
 const REMOTE_HARD_SNAP_DISTANCE = 900;
-const REMOTE_MAX_EXTRAPOLATE_MS = 180;
+const REMOTE_MAX_EXTRAPOLATE_MS = 220;
 const REMOTE_PRESENTATION_LEAD_MS = 22;
 const REMOTE_FOLLOW_RESPONSE = 56;
-const REMOTE_STALE_TIMEOUT_MS = 850;
+// Do not remove a remote drone just because one or two volatile transform
+// packets were skipped under a weak CPU/Wi-Fi burst. It stays visible at its
+// last authoritative position until a fresh transform arrives.
+const REMOTE_STALE_TIMEOUT_MS = 5000;
+const ZONE_PACKET_SILENCE_BEFORE_CHECK_MS = 20000;
+const ZONE_SESSION_CHECK_TIMEOUT_MS = 8000;
 const ZONE_BINARY_PROTOCOL_VERSION = 1;
 const ZONE_BINARY_PLAYER_BYTES = 32;
 const ZONE_BINARY_PROJECTILE_BYTES = 28;
@@ -1582,16 +1587,25 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const forceZoneTransportReconnect = () => {
       if (disposed || intentionalExitRef.current) return;
+
+      // A missed volatile transform/state packet is not proof that the socket
+      // itself is dead. The old implementation disconnected a healthy socket
+      // here, which could create the visible "Connection lost" cascade during
+      // a busy 60-seat fight. Keep the transport/seat intact and retry only the
+      // reliable session check. Socket.IO still reconnects on a real transport
+      // failure by itself.
       clearZoneSessionCheck();
-      zoneJoinAcceptedRef.current = false;
-      zoneJoinAttemptRef.current = 0;
-      setConnectionError("Se restabilește conexiunea la sesiunea PvP...");
-      socket.disconnect();
+      setConnectionError("Se verifică și se sincronizează sesiunea PvP...");
+      if (!socket.connected) {
+        socket.connect();
+        return;
+      }
+
       if (zoneForcedReconnectTimer !== null) window.clearTimeout(zoneForcedReconnectTimer);
       zoneForcedReconnectTimer = window.setTimeout(() => {
         zoneForcedReconnectTimer = null;
-        if (!disposed) socket.connect();
-      }, 120);
+        if (!disposed && !intentionalExitRef.current) verifyZoneSession();
+      }, 900);
     };
 
     const verifyZoneSession = () => {
@@ -1608,7 +1622,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       });
       zoneSessionCheckTimer = window.setTimeout(() => {
         if (zoneSessionCheckInFlight) forceZoneTransportReconnect();
-      }, 3500);
+      }, ZONE_SESSION_CHECK_TIMEOUT_MS);
     };
 
     const updateServerClockOffset = (serverNow) => {
@@ -2006,6 +2020,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const handleConnect = () => {
       if (disposed || intentionalExitRef.current) return;
+      lastZoneServerPacketAtRef.current = Date.now();
       setConnectionError("");
       combatEventMapRef.current.clear();
       selfCombatSnapshotRef.current = null;
@@ -2027,7 +2042,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       clearZoneJoinRetry();
 
       if (!disposed && !intentionalExitRef.current && reason !== "io client disconnect") {
-        setConnectionError("Conexiunea Zone PvP s-a intrerupt. Se reconecteaza...");
+        setConnectionError("Se restabilește conexiunea la sesiunea Zone PvP...");
 
         // Socket.IO does not automatically reconnect after a server-initiated
         // disconnect. Reopen the same client instance so its resume token can
@@ -2620,10 +2635,18 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const zoneSessionWatchdog = window.setInterval(() => {
       if (disposed || document.visibilityState === "hidden") return;
-      if (Date.now() - Number(lastZoneServerPacketAtRef.current || 0) > 12000) {
+
+      // Full state packets intentionally slow down in crowded rooms and volatile
+      // movement packets can be dropped. Give the server a generous silence
+      // window before asking for a reliable resync; never tear down a healthy
+      // live transport merely because one frame burst was skipped.
+      if (
+        Date.now() - Number(lastZoneServerPacketAtRef.current || 0) >
+        ZONE_PACKET_SILENCE_BEFORE_CHECK_MS
+      ) {
         verifyZoneSession();
       }
-    }, 4000);
+    }, 5000);
 
     const sendInputNow = (force = false) => {
       if (!socket.connected) return;
@@ -2937,7 +2960,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           Number(target.x || 0) - Number(current.x ?? target.x ?? 0),
           Number(target.y || 0) - Number(current.y ?? target.y ?? 0),
         );
-        const correction = error > 180 ? 1 : error > 42 ? 0.64 : 0.34;
+        // Attack drones are tiny and fast. Favor the newest transform much more
+        // aggressively than player bodies so they never trail behind their real
+        // server position during a crowded fight.
+        const correction = error > 120 ? 1 : error > 28 ? 0.82 : 0.58;
 
         projectileMap.set(id, {
           ...current,

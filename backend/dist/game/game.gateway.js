@@ -1720,49 +1720,59 @@ let GameGateway = class GameGateway {
                 this.cleanupBattleRoyaleOnlineRoom(room, now);
             }
             for (const room of this.zonePvpRooms.values()) {
-                this.updateZonePvpRoomStatus(room, now);
-                if (room.status === "playing") {
-                    const zoneRadius = this.getZonePvpZoneRadius(room);
-                    this.updateZonePvpBots(room, now, zoneRadius);
-                    this.updatePlayers(room, now, zoneRadius, deltaFrames);
-                    this.applyZonePvpZoneDamage(room, now, zoneRadius);
-                    this.updateProjectiles(room, deltaFrames, now);
-                    if (!room.lastZoneCollisionAt || now - room.lastZoneCollisionAt >= ZONE_COLLISION_TICK_INTERVAL_MS) {
-                        room.lastZoneCollisionAt = now;
-                        this.handleBodyCollisions(room, now, zoneRadius);
+                try {
+                    this.updateZonePvpRoomStatus(room, now);
+                    if (room.status === "playing") {
+                        const zoneRadius = this.getZonePvpZoneRadius(room);
+                        this.updateZonePvpBots(room, now, zoneRadius);
+                        this.updatePlayers(room, now, zoneRadius, deltaFrames);
+                        this.applyZonePvpZoneDamage(room, now, zoneRadius);
+                        this.updateProjectiles(room, deltaFrames, now);
+                        if (!room.lastZoneCollisionAt || now - room.lastZoneCollisionAt >= ZONE_COLLISION_TICK_INTERVAL_MS) {
+                            room.lastZoneCollisionAt = now;
+                            this.handleBodyCollisions(room, now, zoneRadius);
+                        }
+                        if (!room.lastZoneLootAt || now - room.lastZoneLootAt >= ZONE_LOOT_TICK_INTERVAL_MS) {
+                            room.lastZoneLootAt = now;
+                            this.collectOrbs(room, zoneRadius);
+                            this.collectEnergy(room, zoneRadius);
+                            this.collectCores(room, zoneRadius);
+                        }
+                        if (!room.lastZoneItemMaintenanceAt || now - room.lastZoneItemMaintenanceAt >= ZONE_ITEM_MAINTENANCE_INTERVAL_MS) {
+                            room.lastZoneItemMaintenanceAt = now;
+                            this.maintainWorldItems(room, zoneRadius, now);
+                            this.cleanupCombatEvents(room, now);
+                        }
+                        this.updateZonePvpWinCondition(room, now);
                     }
-                    if (!room.lastZoneLootAt || now - room.lastZoneLootAt >= ZONE_LOOT_TICK_INTERVAL_MS) {
-                        room.lastZoneLootAt = now;
-                        this.collectOrbs(room, zoneRadius);
-                        this.collectEnergy(room, zoneRadius);
-                        this.collectCores(room, zoneRadius);
+                    const broadcastInterval = room.players.size >= PVP_HEAVY_STATE_THRESHOLD
+                        ? ZONE_STATE_INTERVAL_HEAVY_MS
+                        : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
+                            ? ZONE_STATE_INTERVAL_CROWDED_MS
+                            : ZONE_STATE_INTERVAL_MS;
+                    if (!room.lastBroadcastAt ||
+                        now - room.lastBroadcastAt >= broadcastInterval) {
+                        room.lastBroadcastAt = now;
+                        this.broadcastZonePvpRoomState(room, now);
                     }
-                    if (!room.lastZoneItemMaintenanceAt || now - room.lastZoneItemMaintenanceAt >= ZONE_ITEM_MAINTENANCE_INTERVAL_MS) {
-                        room.lastZoneItemMaintenanceAt = now;
-                        this.maintainWorldItems(room, zoneRadius, now);
-                        this.cleanupCombatEvents(room, now);
+                    if (room.status === "playing") {
+                        if (!room.lastTransformBroadcastAt ||
+                            now - room.lastTransformBroadcastAt >= ZONE_TRANSFORM_INTERVAL_MS) {
+                            room.lastTransformBroadcastAt = now;
+                            this.broadcastZonePvpTransforms(room, now);
+                        }
                     }
-                    this.updateZonePvpWinCondition(room, now);
+                    this.flushZonePvpWorldDelta(room, now);
+                    this.cleanupZonePvpRoom(room, now);
                 }
-                const broadcastInterval = room.players.size >= PVP_HEAVY_STATE_THRESHOLD
-                    ? ZONE_STATE_INTERVAL_HEAVY_MS
-                    : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
-                        ? ZONE_STATE_INTERVAL_CROWDED_MS
-                        : ZONE_STATE_INTERVAL_MS;
-                if (!room.lastBroadcastAt ||
-                    now - room.lastBroadcastAt >= broadcastInterval) {
-                    room.lastBroadcastAt = now;
-                    this.broadcastZonePvpRoomState(room, now);
-                }
-                if (room.status === "playing") {
-                    if (!room.lastTransformBroadcastAt ||
-                        now - room.lastTransformBroadcastAt >= ZONE_TRANSFORM_INTERVAL_MS) {
-                        room.lastTransformBroadcastAt = now;
-                        this.broadcastZonePvpTransforms(room, now);
+                catch (error) {
+                    room.zoneLoopErrorCount = Number(room.zoneLoopErrorCount || 0) + 1;
+                    room.lastZoneLoopErrorAt = now;
+                    if (!room.lastZoneLoopErrorLogAt || now - room.lastZoneLoopErrorLogAt >= 5000) {
+                        room.lastZoneLoopErrorLogAt = now;
+                        console.error(`[Zone PvP] recovered room tick error for ${room.id}`, error);
                     }
                 }
-                this.flushZonePvpWorldDelta(room, now);
-                this.cleanupZonePvpRoom(room, now);
             }
         }, 1000 / 60);
     }
@@ -1862,12 +1872,15 @@ let GameGateway = class GameGateway {
                 player.energy = Math.max(0, player.energy - ENERGY_DRAIN_AMOUNT);
                 player.lastEnergyDrainAt = now;
                 if (player.energy <= 0) {
-                    player.hp = 0;
-                    player.alive = false;
-                    player.input = {};
-                    player.killedById = null;
-                    player.spectatorTargetId = null;
-                    continue;
+                    player.energy = 0;
+                    if (!room?.zonePvpMode) {
+                        player.hp = 0;
+                        player.alive = false;
+                        player.input = {};
+                        player.killedById = null;
+                        player.spectatorTargetId = null;
+                        continue;
+                    }
                 }
             }
             player.shieldActive = Boolean(player.shieldUntil && player.shieldUntil > now);
@@ -3011,8 +3024,15 @@ let GameGateway = class GameGateway {
         if (room.status !== "playing" || !room.matchHadMultiplePlayers)
             return;
         const alive = this.getAlivePlayers(room);
-        if (alive.length <= 1) {
-            this.finishZonePvpMatch(room, alive[0] || null, now, "winner");
+        if (alive.length === 1) {
+            this.finishZonePvpMatch(room, alive[0], now, "winner");
+            return;
+        }
+        if (alive.length === 0) {
+            room.lastNoAliveAt = room.lastNoAliveAt || now;
+        }
+        else {
+            room.lastNoAliveAt = null;
         }
     }
     broadcastRoomState(room, now) {
@@ -3598,6 +3618,10 @@ let GameGateway = class GameGateway {
             lastZoneItemMaintenanceAt: 0,
             lastZoneWorldDeltaAt: 0,
             pendingZoneWorldDelta: null,
+            zoneLoopErrorCount: 0,
+            lastZoneLoopErrorAt: 0,
+            lastZoneLoopErrorLogAt: 0,
+            lastNoAliveAt: null,
             players: new Map(),
             orbs: Array.from({ length: MAX_ORBS }, () => this.createOrb(ZONE_START_RADIUS)),
             energyCells: Array.from({ length: MAX_ENERGY_CELLS }, () => this.createEnergyCell(ZONE_START_RADIUS)),
@@ -3758,6 +3782,7 @@ let GameGateway = class GameGateway {
         if (!room?.zonePvpMode || room.status !== "playing")
             return;
         const units = [...room.players.values()];
+        const unitSpatialIndex = this.buildSpatialIndex(units);
         const sequence = Number(room.zoneTransformSequence || 0) + 1;
         room.zoneTransformSequence = sequence;
         for (const viewer of units) {
@@ -3773,8 +3798,9 @@ let GameGateway = class GameGateway {
             const range = viewer.alive === false
                 ? VIEW_DISTANCE + 1700
                 : VIEW_DISTANCE + ZONE_TRANSFORM_RANGE_PADDING;
-            const playerRows = this.filterNear(viewAnchor, units.filter((other) => other.id !== viewer.id &&
-                (viewer.alive !== false || other.alive !== false)), range, ZONE_TRANSFORM_PLAYER_LIMIT).map((unit) => {
+            const nearbyUnits = this.querySpatialIndex(unitSpatialIndex, viewAnchor.x, viewAnchor.y, range).filter((other) => other.id !== viewer.id &&
+                (viewer.alive !== false || other.alive !== false));
+            const playerRows = this.filterNear(viewAnchor, nearbyUnits, range, ZONE_TRANSFORM_PLAYER_LIMIT).map((unit) => {
                 const flags = (unit.isMoving ? 1 : 0) |
                     (unit.input?.attacking ? 2 : 0) |
                     (unit.shieldActive ? 4 : 0) |

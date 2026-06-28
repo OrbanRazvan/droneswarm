@@ -209,13 +209,13 @@ function getRendererConfig(forceLowQuality) {
   // own anti-aliased vector edges). This is much cheaper than removing models,
   // props or the world background.
   const resolution = device.lowSpecDesktop
-    ? 0.72
+    ? 0.68
     : device.weakMobile
-      ? 0.70
+      ? 0.66
       : visualFirstDesktop
-        ? Math.min(0.74, device.dpr)
+        ? Math.min(0.68, device.dpr)
         : lightMobile
-          ? 0.84
+          ? 0.80
           : Math.min(1.35, device.dpr);
 
   return {
@@ -228,16 +228,22 @@ function getRendererConfig(forceLowQuality) {
     // Nearby drones remain premium. Distant drones retain their full bodies,
     // rotors, propulsion and escort count; only the amount of static loot and
     // decoration work is budgeted for older desktop GPUs.
-    maxStaticItems: device.lowSpecDesktop ? 50 : device.weakMobile ? 46 : visualFirstDesktop ? 80 : lightMobile ? 54 : 120,
-    maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : visualFirstDesktop ? 7 : lightMobile ? 5 : MAX_RENDERED_PLAYERS,
+    maxStaticItems: device.lowSpecDesktop ? 38 : device.weakMobile ? 38 : visualFirstDesktop ? 58 : lightMobile ? 46 : 120,
+    maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : visualFirstDesktop ? 5 : lightMobile ? 5 : MAX_RENDERED_PLAYERS,
     maxSimplePlayers: 60,
-    maxProjectiles: device.lowSpecDesktop ? 5 : device.weakMobile ? 4 : visualFirstDesktop ? 8 : lightMobile ? 6 : MAX_RENDERED_PROJECTILES,
-    maxSimpleProjectiles: device.lowSpecDesktop ? 28 : device.weakMobile ? 24 : visualFirstDesktop ? 30 : lightMobile ? 26 : 48,
-    staticSyncInterval: device.lowSpecDesktop ? 500 : device.weakMobile ? 560 : visualFirstDesktop ? 420 : lightMobile ? 400 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: device.lowSpecDesktop ? 8 : device.weakMobile ? 9 : visualFirstDesktop ? 5 : lightMobile ? 5 : 1,
-    // Weak desktops keep the same premium space terrain. Only explicit low
-    // quality/mobile profiles start without it.
-    disableExpensiveTerrain: Boolean(device.weakMobile || device.lowSpecDesktop || lightMobile),
+    maxProjectiles: device.lowSpecDesktop ? 6 : device.weakMobile ? 5 : visualFirstDesktop ? 9 : lightMobile ? 6 : MAX_RENDERED_PROJECTILES,
+    maxSimpleProjectiles: device.lowSpecDesktop ? 30 : device.weakMobile ? 26 : visualFirstDesktop ? 32 : lightMobile ? 26 : 48,
+    staticSyncInterval: device.lowSpecDesktop ? 620 : device.weakMobile ? 620 : visualFirstDesktop ? 560 : lightMobile ? 480 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: device.lowSpecDesktop ? 10 : device.weakMobile ? 10 : visualFirstDesktop ? 7 : lightMobile ? 6 : 1,
+    // The large terrain texture is fill-rate expensive on Intel/older Radeon
+    // iGPUs. Weak desktops keep every gameplay model/projectile, but start
+    // without that purely decorative layer to preserve a stable 60 FPS.
+    disableExpensiveTerrain: Boolean(
+      device.weakMobile ||
+      device.lowSpecDesktop ||
+      visualFirstDesktop ||
+      lightMobile,
+    ),
   };
 }
 
@@ -1659,7 +1665,10 @@ function updateProjectileVisual(visual, projectile, resources, now, compact = fa
   visual.aura.visible = false;
   visual.jet.visible = false;
 
-  visual.body.position.set(0, compact ? 0 : hover);
+  // Attack drones are a priority object even on weak hardware. Keep their
+  // flight bob and rotor cadence live; only larger world/remote decorations
+  // are downgraded by the adaptive profile.
+  visual.body.position.set(0, hover);
   visual.rotorSpins.forEach((rotor, index) => {
     const direction = index % 2 === 0 ? 1 : -1;
     rotor.visible = true;
@@ -2354,6 +2363,14 @@ function PixiArenaRenderer({
         app = new PIXI.Application(initOptions);
       }
 
+      // Running a weak laptop at 120/144 Hz wastes CPU/GPU time on frames the
+      // game does not need. A stable 60 FPS is better than oscillating between
+      // 45 and 100, and gameplay/projectile simulation remains display-smooth.
+      if (app?.ticker) {
+        app.ticker.maxFPS = 60;
+        app.ticker.minFPS = 30;
+      }
+
       if (destroyed || !hostRef.current) {
         safeDestroy(app);
         return;
@@ -2602,9 +2619,9 @@ function PixiArenaRenderer({
         // without removing any player/bot/drone from the scene.
         visualFrameIndex += 1;
         const remoteDecorEvery = config.visualFirstWeakDesktop
-          ? (adaptiveTier >= 2 ? 4 : adaptiveTier === 1 ? 3 : 2)
+          ? (adaptiveTier >= 2 ? 5 : adaptiveTier === 1 ? 4 : 3)
           : config.lowSpecDesktop || config.weakMobile
-            ? (adaptiveTier >= 2 ? 5 : 3)
+            ? (adaptiveTier >= 2 ? 6 : 4)
             : 1;
         const animateRemoteDecor = visualFrameIndex % remoteDecorEvery === 0;
 
@@ -2635,9 +2652,9 @@ function PixiArenaRenderer({
           const staticBudgetCeiling = config.mobile
             ? 190
             : config.visualFirstWeakDesktop
-              ? 80
+              ? 58
               : config.lowSpecDesktop
-                ? 60
+                ? 42
                 : 300;
           const baseItemBudget = hasRequestedStaticBudget
             ? clamp(Math.round(requestedStaticBudget), 0, staticBudgetCeiling)
@@ -2708,9 +2725,9 @@ function PixiArenaRenderer({
           preCulled: Boolean(data.zonePreCulled),
         });
         const fullUnitCap = adaptiveTier === 2
-          ? Math.min(config.maxPlayers, config.visualFirstWeakDesktop ? 5 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
+          ? Math.min(config.maxPlayers, config.visualFirstWeakDesktop ? 3 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
           : adaptiveTier === 1
-            ? Math.min(config.maxPlayers, config.visualFirstWeakDesktop ? 7 : config.lowSpecDesktop || config.weakMobile ? 3 : 5)
+            ? Math.min(config.maxPlayers, config.visualFirstWeakDesktop ? 4 : config.lowSpecDesktop || config.weakMobile ? 3 : 5)
             : config.maxPlayers;
         const fullRemoteIds = syncUnitPool({
           pool: remotePool,
