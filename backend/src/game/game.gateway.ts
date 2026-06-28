@@ -135,9 +135,6 @@ const ZONE_STATE_INTERVAL_CROWDED_MS = 620;
 const ZONE_STATE_INTERVAL_HEAVY_MS = 760;
 const ZONE_ENTITY_DEFINITION_INTERVAL_MS = 900;
 const ZONE_PROJECTILE_DEFINITION_INTERVAL_MS = 800;
-// Non-volatile resync closes gaps after a volatile transform/state packet is
-// dropped. It is intentionally infrequent so it cannot create a TCP queue.
-const ZONE_RELIABLE_RESYNC_INTERVAL_MS = 2500;
 
 // Forty transform updates/second plus local display-rate interpolation is a
 // better mobile trade-off than 60 large JSON payloads.  The server always sends
@@ -182,14 +179,7 @@ const EMPTY_ROOM_GRACE_MS = 30000;
 
 // A temporary network interruption must never create another Zone lobby or
 // restart an existing round. Human seats are reserved by a per-tab resume token.
-// A real mobile/Wi-Fi handoff can pause a websocket for more than one minute.
-// Keep the authoritative Zone seat resumable long enough for Socket.IO to
-// reconnect and for the client to re-send its idempotent resume join.
-const ZONE_PVP_RECONNECT_GRACE_MS = 300000;
-// Input packets are volatile by design. The client also sends a tiny reliable
-// application heartbeat, so an active tab is never removed merely because a
-// burst of volatile inputs was dropped during a congested frame.
-const ZONE_PVP_SILENT_SOCKET_GRACE_MS = 300000;
+const ZONE_PVP_RECONNECT_GRACE_MS = 180000;
 const ZONE_PVP_RESUME_TOKEN_MIN_LENGTH = 20;
 const ZONE_PVP_RESUME_TOKEN_MAX_LENGTH = 160;
 
@@ -286,23 +276,22 @@ function normalizeSkin(skin) {
   },
   // Keep both transports for the other game modes. ZonePvpArena itself starts
   // directly on WebSocket, so it never enters the polling upgrade path.
-  transports: ["polling", "websocket"],
+  // Keep WebSocket fast-path but allow Engine.IO polling fallback when a
+  // Wi-Fi/proxy path resets a long-lived socket.
+  transports: ["websocket", "polling"],
   allowUpgrades: true,
   perMessageDeflate: false,
   httpCompression: false,
   // Mobile browsers can briefly pause timers while a page changes orientation
   // or returns from the background. Keep the transport alive long enough for
   // the client-side idempotent join handshake to recover cleanly.
-  // Keep transport liveness forgiving during Wi-Fi/4G handoffs and when
-  // browsers briefly pause timers. Gameplay still uses the explicit input
-  // freshness timeout, so a stale movement vector can never keep moving.
-  pingInterval: 20000,
-  pingTimeout: 120000,
+  pingInterval: 25000,
+  pingTimeout: 60000,
   // Socket.IO can restore the Engine.IO session/rooms after a short network
   // interruption. Manual Zone seat recovery below remains the authoritative
   // fallback for deployments or browsers where recovery is not available.
   connectionStateRecovery: {
-    maxDisconnectionDuration: 300000,
+    maxDisconnectionDuration: 180000,
     skipMiddlewares: true,
   },
 })
@@ -483,31 +472,6 @@ export class GameGateway {
     return { room, player };
   }
 
-  // The resume-token lookup is deliberately backed by the room/player proof
-  // sent by the same browser tab. This covers the narrow reconnect race where
-  // Socket.IO changes ids while the in-memory token index is being rebuilt.
-  // It never trusts a room id alone: the tab still has to present the exact
-  // token (or the authenticated account that owns that seat).
-  private findZonePvpResumeSeatByProof(data: any, token: string | null) {
-    const roomId = String(data?.resumeRoomId || "").trim();
-    const playerId = String(data?.resumePlayerId || "").trim();
-    if (!roomId || !playerId) return null;
-
-    const room = this.zonePvpRooms.get(roomId);
-    const player = room?.players?.get(playerId);
-    if (!room || !player || player?.isBot || room.status === "finished") return null;
-
-    const tokenMatches = Boolean(token && String(player.resumeToken || "") === token);
-    const incomingUserId = data?.isGuest ? "" : String(data?.userId || "").trim();
-    const userMatches = Boolean(
-      incomingUserId &&
-      !player.isGuest &&
-      String(player.userId || "") === incomingUserId,
-    );
-
-    return tokenMatches || userMatches ? { room, player } : null;
-  }
-
   private detachZonePvpSocket(socketId: string, now = Date.now()) {
     const roomId = this.zonePvpSocketRoom.get(socketId);
     if (!roomId) return;
@@ -526,40 +490,68 @@ export class GameGateway {
     this.zonePvpSocketResumeToken.delete(socketId);
   }
 
+  private remapZonePvpPlayerReferences(room: any, previousId: string, nextId: string) {
+    if (!room || !previousId || !nextId || previousId === nextId) return;
+
+    // A reconnection changes Socket.IO's id. Preserve every server-side link
+    // that points to the participant so projectiles, kill credit and spectator
+    // camera do not refer to the departed socket id.
+    for (const projectile of room.projectiles || []) {
+      if (String(projectile?.ownerId || "") === previousId) projectile.ownerId = nextId;
+    }
+    for (const unit of room.players?.values?.() || []) {
+      if (String(unit?.killedById || "") === previousId) unit.killedById = nextId;
+      if (String(unit?.lastDamageById || "") === previousId) unit.lastDamageById = nextId;
+      if (String(unit?.spectatorTargetId || "") === previousId) unit.spectatorTargetId = nextId;
+    }
+    for (const event of room.combatEvents || []) {
+      if (String(event?.viewerId || "") === previousId) event.viewerId = nextId;
+      if (String(event?.ownerId || "") === previousId) event.ownerId = nextId;
+    }
+
+    if (room.zoneNetIds instanceof Map) {
+      const netId = room.zoneNetIds.get(previousId);
+      if (netId) {
+        room.zoneNetIds.delete(previousId);
+        room.zoneNetIds.set(nextId, netId);
+      }
+    }
+    // Old collision-pair keys contain the previous socket id. Clearing this
+    // tiny cooldown map is safer than retaining stale pairs after a rebind.
+    room.collisionCooldowns?.clear?.();
+  }
+
   private rebindZonePvpResumeSeat(room: any, player: any, client: Socket, token: string) {
     const previousSocketId = String(player.id);
     const nextSocketId = String(client.id);
-    const previousSocket = previousSocketId !== nextSocketId
-      ? this.server.sockets.sockets.get(previousSocketId)
-      : null;
 
     if (previousSocketId !== nextSocketId) {
-      // Move the authoritative map entry *before* closing the old transport.
-      // Otherwise its disconnect handler can race this method and leave the
-      // player in neither socket map, which used to create a second lobby.
+      // Move mappings before the old socket is released. Its disconnect handler
+      // then finds no active seat to detach, preventing a reconnect race.
       room.players.delete(previousSocketId);
       this.zonePvpSocketRoom.delete(previousSocketId);
       this.zonePvpSocketResumeToken.delete(previousSocketId);
+      this.remapZonePvpPlayerReferences(room, previousSocketId, nextSocketId);
 
       player.id = nextSocketId;
       room.players.set(nextSocketId, player);
+
+      const previousSocket = this.server.sockets.sockets.get(previousSocketId);
+      if (previousSocket?.connected) {
+        previousSocket.leave(room.id);
+        previousSocket.disconnect(true);
+      }
     }
 
+    const now = Date.now();
     player.disconnectedAt = 0;
-    player.lastSeenAt = Date.now();
-    player.lastInputReceivedAt = Date.now();
+    player.lastSeenAt = now;
+    player.lastInputReceivedAt = now;
     player.input = {};
     this.zonePvpSocketRoom.set(nextSocketId, room.id);
     this.rememberZonePvpResumeSeat(room, player, token);
     client.join(room.id);
     this.markRoomOccupied(room);
-
-    // Disconnecting the older tab/socket is now safe because the player has
-    // already been rebound to the new id above.
-    if (previousSocket?.connected) {
-      previousSocket.leave(room.id);
-      previousSocket.disconnect(true);
-    }
   }
 
   private getZoneBotPower(unit: any) {
@@ -1731,17 +1723,13 @@ export class GameGateway {
     const now = Date.now();
     const resumeToken = this.normalizeZonePvpResumeToken(data?.resumeToken);
 
-    // First restore this tab's exact existing human seat. The proof fallback
-    // prevents a token-index race from silently creating a new lobby while the
-    // old player and bots are still fighting in the original round.
-    const resumeSeat =
-      this.findZonePvpResumeSeat(resumeToken) ||
-      this.findZonePvpResumeSeatByProof(data, resumeToken);
-    if (resumeSeat) {
+    // First try to restore this tab's exact existing human seat. Rebinding the
+    // player object preserves HP, drones, projectiles, phase and spectator state.
+    const resumeSeat = this.findZonePvpResumeSeat(resumeToken);
+    if (resumeSeat && resumeToken) {
       const { room, player } = resumeSeat;
-      const effectiveResumeToken = resumeToken || this.normalizeZonePvpResumeToken(player?.resumeToken);
-      if (room.status !== "finished" && effectiveResumeToken) {
-        this.rebindZonePvpResumeSeat(room, player, client, effectiveResumeToken);
+      if (room.status !== "finished") {
+        this.rebindZonePvpResumeSeat(room, player, client, resumeToken);
         player.userId = data?.isGuest ? null : data?.userId;
         player.isGuest = Boolean(data?.isGuest);
         player.username = String(data?.username || (data?.isGuest ? "Guest" : "Player")).slice(0, 18);
@@ -1750,6 +1738,21 @@ export class GameGateway {
         this.broadcastZonePvpRoomState(room, now, true);
         return;
       }
+    }
+
+    // A reconnect with a known room/player is allowed to restore only that
+    // exact seat. Never silently create a second room when a token is delayed,
+    // stale or the server is briefly resynchronising.
+    const requestedResumeRoomId = String(data?.resumeRoomId || data?.roomId || "").trim();
+    const requestedResumePlayerId = String(data?.resumePlayerId || data?.playerId || "").trim();
+    const strictResume = Boolean(data?.resumeOnly && requestedResumeRoomId && requestedResumePlayerId);
+    if (strictResume) {
+      client.emit("zone-pvp:resume-missing", {
+        roomId: requestedResumeRoomId,
+        playerId: requestedResumePlayerId,
+        serverNow: now,
+      });
+      return;
     }
 
     // Duplicate joins on the same socket are idempotent and never remove a
@@ -1761,6 +1764,7 @@ export class GameGateway {
       existingZonePlayer.isGuest = Boolean(data?.isGuest);
       existingZonePlayer.username = String(data?.username || (data?.isGuest ? "Guest" : "Player")).slice(0, 18);
       existingZonePlayer.skin = normalizeSkin(data?.isGuest ? "cyan" : data?.skin);
+      existingZonePlayer.disconnectedAt = 0;
       existingZonePlayer.lastSeenAt = now;
       existingZonePlayer.lastInputReceivedAt = now;
       if (resumeToken) this.rememberZonePvpResumeSeat(existingZoneRoom, existingZonePlayer, resumeToken);
@@ -1768,27 +1772,6 @@ export class GameGateway {
       client.join(existingZoneRoom.id);
       this.emitZonePvpJoined(client, existingZoneRoom, existingZonePlayer, true);
       this.broadcastZonePvpRoomState(existingZoneRoom, now, true);
-      return;
-    }
-
-    // A live room with the caller's prior id means this is a resume attempt,
-    // not permission to create a fresh empty Zone session. Refuse the fallback
-    // rather than desynchronizing the browser from the still-running match.
-    const requestedRoomId = String(data?.resumeRoomId || "").trim();
-    const requestedPlayerId = String(data?.resumePlayerId || "").trim();
-    const requestedRoom = requestedRoomId ? this.zonePvpRooms.get(requestedRoomId) : null;
-    if (
-      requestedRoom &&
-      requestedRoom.status !== "finished" &&
-      requestedPlayerId &&
-      requestedRoom.players?.has(requestedPlayerId)
-    ) {
-      client.emit("zone-pvp:resume-unavailable", {
-        roomId: requestedRoomId,
-        roundId: requestedRoom.roundId || null,
-        serverNow: now,
-        retryAfterMs: 650,
-      });
       return;
     }
 
@@ -1893,6 +1876,22 @@ export class GameGateway {
     this.broadcastZonePvpRoomState(room, now, true);
   }
 
+  @SubscribeMessage("zone-pvp:resync")
+  handleZonePvpResync(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: any,
+  ) {
+    // Reuse the exact join/rebind path. It is idempotent for an already-bound
+    // socket and emits a reliable full state, without allocating a new lobby.
+    this.handleZonePvpJoin(client, {
+      ...(data || {}),
+      resumeOnly: Boolean(data?.resumeOnly),
+      resumeRoomId: data?.resumeRoomId || data?.roomId || null,
+      resumePlayerId: data?.resumePlayerId || data?.playerId || null,
+    });
+    return { ok: true, serverNow: Date.now() };
+  }
+
   @SubscribeMessage("zone-pvp:leave")
   handleZonePvpLeave(@ConnectedSocket() client: Socket) {
     const roomId = this.zonePvpSocketRoom.get(client.id) || null;
@@ -1905,29 +1904,6 @@ export class GameGateway {
       roomId,
       playerId: client.id,
       serverNow: Date.now(),
-    });
-  }
-
-
-
-  // A connection can remain alive while a browser temporarily drops volatile
-  // movement packets. This lightweight reliable heartbeat protects the Zone
-  // seat from cleanup without keeping the player moving or firing.
-  @SubscribeMessage("zone-pvp:heartbeat")
-  handleZonePvpHeartbeat(@ConnectedSocket() client: Socket) {
-    const room = this.getZonePvpRoomBySocket(client.id);
-    const player = room?.players.get(client.id);
-    if (!room || !player || player.isBot) return;
-
-    const now = Date.now();
-    player.lastSeenAt = now;
-    client.emit("zone-pvp:heartbeat-ack", {
-      roomId: room.id,
-      roundId: room.roundId || null,
-      phaseVersion: Number(room.phaseVersion || 0),
-      status: room.status,
-      playerId: player.id,
-      serverNow: now,
     });
   }
 
@@ -2146,11 +2122,7 @@ export class GameGateway {
           now - room.lastBroadcastAt >= broadcastInterval
         ) {
           room.lastBroadcastAt = now;
-          const reliableResync =
-            !room.lastReliableZoneStateAt ||
-            now - room.lastReliableZoneStateAt >= ZONE_RELIABLE_RESYNC_INTERVAL_MS;
-          if (reliableResync) room.lastReliableZoneStateAt = now;
-          this.broadcastZonePvpRoomState(room, now, reliableResync);
+          this.broadcastZonePvpRoomState(room, now);
         }
 
         // Transforms have their own compact latest-wins tuple lane. Never let HUD/loot
@@ -3755,7 +3727,7 @@ export class GameGateway {
       .slice(0, 12);
     for (const player of players) {
       const socket = this.server.sockets.sockets.get(player.id);
-      if (!socket?.connected) continue;
+      if (!socket) continue;
       const visiblePlayers = players
         .filter((other) => other.id !== player.id)
         .filter((other) => this.isNear(player, other, VIEW_DISTANCE))
@@ -4627,7 +4599,7 @@ export class GameGateway {
         room.status === "playing" &&
         player.alive !== false &&
         socketOnline &&
-        now - Number(player.lastSeenAt || now) > ZONE_PVP_SILENT_SOCKET_GRACE_MS;
+        now - Number(player.lastSeenAt || now) > 45000;
 
       if (disconnectedTooLong || shouldExpireSilentActivePlayer) {
         // A disconnected resumable seat is intentionally no longer present in

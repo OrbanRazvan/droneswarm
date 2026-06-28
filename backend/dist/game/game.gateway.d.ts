@@ -28,8 +28,8 @@ export declare class GameGateway {
     private normalizeZonePvpResumeToken;
     private rememberZonePvpResumeSeat;
     private findZonePvpResumeSeat;
-    private findZonePvpResumeSeatByProof;
     private detachZonePvpSocket;
+    private remapZonePvpPlayerReferences;
     private rebindZonePvpResumeSeat;
     private getZoneBotPower;
     private normalizeZoneBotMove;
@@ -71,8 +71,11 @@ export declare class GameGateway {
     handleBattleRoyaleOnlineLeave(client: Socket): void;
     handleBattleRoyaleOnlineInput(client: Socket, input: any): void;
     handleZonePvpJoin(client: Socket, data: any): void;
+    handleZonePvpResync(client: Socket, data: any): {
+        ok: boolean;
+        serverNow: number;
+    };
     handleZonePvpLeave(client: Socket): void;
-    handleZonePvpHeartbeat(client: Socket): void;
     handleZonePvpInput(client: Socket, input: any): void;
     handleZonePvpInputStop(client: Socket, payload: any): void;
     startLoop(): void;
