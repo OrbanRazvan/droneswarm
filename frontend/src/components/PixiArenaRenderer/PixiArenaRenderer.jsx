@@ -2637,8 +2637,15 @@ function PixiArenaRenderer({
           }
         }
 
-        const staticSyncInterval = config.staticSyncInterval;
-        if (now - lastStaticSync >= staticSyncInterval) {
+        const realtimeMotion = Boolean(data.zoneRealtimeMotion);
+        // Zone PvP marks entities as latency-sensitive. Static loot has no
+        // gameplay timing requirement, so defer its rebuild during a slow
+        // frame rather than making player/attack-drone transforms late.
+        const staticSyncInterval = realtimeMotion && (config.weakDesktop || config.weakMobile)
+          ? Math.max(config.staticSyncInterval, 760)
+          : config.staticSyncInterval;
+        const deferStaticForMotion = realtimeMotion && tickMs > 20;
+        if (!deferStaticForMotion && now - lastStaticSync >= staticSyncInterval) {
           lastStaticSync = now;
           // Normal PvP can request a denser loot budget without changing
           // other game modes. Clamp it to a safe device-specific ceiling.
@@ -2779,11 +2786,20 @@ function PixiArenaRenderer({
           animateDecor: animateRemoteDecor,
           preCulled: Boolean(data.zonePreCulled),
         });
-        const fullProjectileCap = adaptiveTier === 2
-          ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 5 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
-          : adaptiveTier === 1
-            ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 8 : config.lowSpecDesktop || config.weakMobile ? 3 : 5)
-            : config.maxProjectiles;
+        // Attack drones are the most latency-sensitive entities in Zone PvP.
+        // Keep a small premium priority pool even at the strongest adaptive
+        // tier; remaining shots still use the lightweight pool below.
+        const fullProjectileCap = data.realtimeProjectiles
+          ? (adaptiveTier === 2
+              ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 6 : config.lowSpecDesktop || config.weakMobile ? 4 : 5)
+              : adaptiveTier === 1
+                ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 9 : config.lowSpecDesktop || config.weakMobile ? 6 : 7)
+                : config.maxProjectiles)
+          : (adaptiveTier === 2
+              ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 5 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
+              : adaptiveTier === 1
+                ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 8 : config.lowSpecDesktop || config.weakMobile ? 3 : 5)
+                : config.maxProjectiles);
         const fullProjectileIds = syncProjectilePool({
           pool: projectilePool,
           source: data.projectiles,

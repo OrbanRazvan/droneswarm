@@ -105,17 +105,33 @@ const ZONE_PVP_BOT_SKINS = [
   "ghost-white", "cyber-yellow", "deep-ocean", "magenta-cyan", "bronze-steel",
   "electric-indigo", "dark-emerald", "emerald-rift-a", "emerald-rift-b", "emerald-rift-c",
 ];
-const ZONE_PVP_BOT_OPENING_ORB_FARM_MS = 10000;
-// Decisions are staggered. Every bot keeps its held vector every 60 Hz tick,
-// but expensive target scans are amortized over time instead of firing together.
-const ZONE_PVP_BOT_REPLAN_MIN_MS = 180;
-const ZONE_PVP_BOT_REPLAN_MAX_MS = 320;
-const ZONE_PVP_BOT_ATTACK_RANGE = 1710;
-const ZONE_PVP_BOT_GLOBAL_HUNT_RANGE = 11200;
-const ZONE_PVP_BOT_SAFE_DISTANCE = 760;
-const ZONE_PVP_BOT_THREAT_RADIUS = 2200;
+// Prepare phase is a true economy phase: bots collect orbs only, so they
+// emerge with escort drones before the combat lock opens.
+const ZONE_PVP_BOT_OPENING_ORB_FARM_MS = ZONE_PVP_BATTLE_PREPARE_DURATION;
+
+// AI plans are staggered but intentionally responsive. The held vector is
+// applied every simulation tick; only target selection/replanning is sampled.
+const ZONE_PVP_BOT_REPLAN_MIN_MS = 110;
+const ZONE_PVP_BOT_REPLAN_MAX_MS = 210;
+const ZONE_PVP_BOT_ATTACK_RANGE = 2180;
+const ZONE_PVP_BOT_GLOBAL_HUNT_RANGE = 11800;
+const ZONE_PVP_BOT_SAFE_DISTANCE = 690;
+const ZONE_PVP_BOT_THREAT_RADIUS = 2350;
 const ZONE_PVP_BOT_ZONE_EDGE_BUFFER = 720;
 const ZONE_PVP_BOT_SPAWN_MIN_DISTANCE = 1000;
+
+// Tactical steering / target selection. These stay server authoritative and
+// are deliberately small numeric rules instead of pathfinding allocations,
+// so 57 bots remain cheap enough for a Render/Node room.
+const ZONE_PVP_BOT_FARM_AVOID_RADIUS = 700;
+const ZONE_PVP_BOT_TACTICAL_AVOID_RADIUS = 500;
+const ZONE_PVP_BOT_ENDGAME_AVOID_RADIUS = 340;
+const ZONE_PVP_BOT_PROJECTILE_WARNING_RANGE = 620;
+const ZONE_PVP_BOT_ORB_CLAIM_PENALTY = 1050;
+const ZONE_PVP_BOT_FARM_VIEW_RANGE = 5600;
+const ZONE_PVP_BOT_LOW_HP = 30;
+const ZONE_PVP_BOT_LOW_ENERGY = 28;
+const ZONE_PVP_BOT_FAST_FIRE_COOLDOWN = 780;
 
 const COLLISION_GRID_CELL_SIZE = 600;
 
@@ -138,12 +154,14 @@ const ZONE_STATE_INTERVAL_HEAVY_MS = 760;
 const ZONE_ENTITY_DEFINITION_INTERVAL_MS = 900;
 const ZONE_PROJECTILE_DEFINITION_INTERVAL_MS = 800;
 
-// Forty transform updates/second plus local display-rate interpolation is a
-// better mobile trade-off than 60 large JSON payloads.  The server always sends
-// the newest transform and clients discard an obsolete packet before processing.
-const ZONE_TRANSFORM_INTERVAL_MS = 25; // 40 Hz compact latest-wins transforms for smoother attack drones.
+// Fifty compact latest-wins updates/second keep fast attack drones visually
+// attached to their authoritative path while still avoiding a reliable-packet
+// backlog on mobile or older laptops.
+const ZONE_TRANSFORM_INTERVAL_MS = 20; // 50 Hz latest-wins transforms: low latency without transport backlog.
 const ZONE_TRANSFORM_PLAYER_LIMIT = 60;
-const ZONE_TRANSFORM_PROJECTILE_LIMIT = 36;
+// Projectiles are brief and very fast. Keep more of them in the hot lane so
+// an attack drone never waits for the slower definition/state packet.
+const ZONE_TRANSFORM_PROJECTILE_LIMIT = 48;
 const ZONE_TRANSFORM_RANGE_PADDING = 820;
 const ZONE_WORLD_DELTA_INTERVAL_MS = 250;
 const ZONE_LOOT_TICK_INTERVAL_MS = 50;
@@ -655,6 +673,132 @@ export class GameGateway {
     return { x: x / length, y: y / length };
   }
 
+  private getZonePvpBattlePhase(room: any, now: number, zoneRadius: number, aliveCount: number) {
+    if (this.isBattlePrepareLocked(room, now)) return "prepare";
+    if (aliveCount <= 12 || zoneRadius <= 1350) return "endgame";
+    if (aliveCount <= 28 || zoneRadius <= 3600) return "midgame";
+    return "skirmish";
+  }
+
+  private getZoneBotAvoidance(bot: any, alive: any[], radius: number) {
+    let x = 0;
+    let y = 0;
+
+    for (const other of alive) {
+      if (!other || other.id === bot.id) continue;
+      const dx = Number(bot.x || 0) - Number(other.x || 0);
+      const dy = Number(bot.y || 0) - Number(other.y || 0);
+      const distance = Math.hypot(dx, dy) || 1;
+      if (distance >= radius) continue;
+
+      // Strong near-field separation stops bot balls / body-collision loops,
+      // while the softer outer force still makes the opening orb routes split.
+      const ratio = (radius - distance) / radius;
+      const strength = ratio * ratio;
+      x += (dx / distance) * strength;
+      y += (dy / distance) * strength;
+    }
+
+    return { x, y };
+  }
+
+  private getZoneBotIncomingProjectileThreat(room: any, bot: any) {
+    let nearestDistance = Infinity;
+    let severity = 0;
+
+    for (const projectile of room?.projectiles || []) {
+      if (!projectile || String(projectile.ownerId || "") === String(bot.id)) continue;
+      const dx = Number(bot.x || 0) - Number(projectile.x || 0);
+      const dy = Number(bot.y || 0) - Number(projectile.y || 0);
+      const distance = Math.hypot(dx, dy) || 1;
+      if (distance > ZONE_PVP_BOT_PROJECTILE_WARNING_RANGE) continue;
+
+      const velocityLength = Math.hypot(Number(projectile.vx || 0), Number(projectile.vy || 0)) || 1;
+      const approaching =
+        (Number(projectile.vx || 0) * dx + Number(projectile.vy || 0) * dy) /
+        (velocityLength * distance);
+
+      if (approaching <= 0.22) continue;
+      nearestDistance = Math.min(nearestDistance, distance);
+      severity = Math.max(
+        severity,
+        (1 - distance / ZONE_PVP_BOT_PROJECTILE_WARNING_RANGE) * approaching,
+      );
+    }
+
+    return {
+      incoming: Number.isFinite(nearestDistance),
+      distance: nearestDistance,
+      severity,
+    };
+  }
+
+  private getZoneBotAimPoint(bot: any, target: any, room: any) {
+    const dx = Number(target?.x || 0) - Number(bot?.x || 0);
+    const dy = Number(target?.y || 0) - Number(bot?.y || 0);
+    const distance = Math.hypot(dx, dy);
+    const projectileSpeedPerSecond =
+      (PROJECTILE_SPEED +
+        Number(bot?.projectileSpeedBonus || 0) +
+        (bot?.rapidFireUntil && bot.rapidFireUntil > Date.now() ? 0.75 : 0) +
+        (bot?.overclockUntil && bot.overclockUntil > Date.now() ? 1.25 : 0)) *
+      (this.usesProgressionPvpCombat(room)
+        ? NORMAL_BASE_ATTACK_DRONE_SPEED_MULTIPLIER *
+          Math.max(1, Number(bot?.attackDroneSpeedMultiplier || 1))
+        : 1) *
+      60;
+
+    const leadSeconds = Math.max(0, Math.min(1.15, distance / Math.max(1, projectileSpeedPerSecond)));
+    const x = Number(target?.x || 0) + Number(target?.velocityX || 0) * leadSeconds;
+    const y = Number(target?.y || 0) + Number(target?.velocityY || 0) * leadSeconds;
+
+    return {
+      x: this.clamp(x, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS),
+      y: this.clamp(y, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS),
+    };
+  }
+
+  private findZoneBotBestOrb(
+    bot: any,
+    room: any,
+    zoneRadius: number,
+    orbClaims: Map<string, number>,
+    openingFarm: boolean,
+  ) {
+    const orbs = room?.orbs || [];
+    const stride = openingFarm ? 1 : 2;
+    let best: any = null;
+    let bestScore = Infinity;
+    const preferredAngle = Number(bot.aiFarmAngle || 0);
+
+    for (let index = 0; index < orbs.length; index += stride) {
+      const orb = orbs[index];
+      if (!orb || !this.isInsideSafeZone(orb.x, orb.y, zoneRadius, ZONE_PVP_BOT_ZONE_EDGE_BUFFER)) continue;
+
+      const dx = Number(orb.x || 0) - Number(bot.x || 0);
+      const dy = Number(orb.y || 0) - Number(bot.y || 0);
+      const distance = Math.hypot(dx, dy);
+      if (distance > ZONE_PVP_BOT_FARM_VIEW_RANGE) continue;
+
+      const routeAngle = Math.atan2(dy, dx);
+      const angleDelta = Math.abs(Math.atan2(Math.sin(routeAngle - preferredAngle), Math.cos(routeAngle - preferredAngle)));
+      const claims = Number(orbClaims.get(String(orb.id)) || 0);
+      let score = distance + angleDelta * 85;
+
+      if (String(bot.aiTargetOrbId || "") === String(orb.id)) score -= 280;
+      if (claims > 0 && String(bot.aiTargetOrbId || "") !== String(orb.id)) {
+        score += claims * ZONE_PVP_BOT_ORB_CLAIM_PENALTY;
+      }
+
+      if (score < bestScore) {
+        bestScore = score;
+        best = orb;
+      }
+    }
+
+    return best;
+  }
+
   private getZoneBotSpawn(room: any, zoneRadius: number) {
     const alive = [...(room?.players?.values?.() || [])].filter((unit: any) => unit?.alive !== false);
     const maxRadius = Math.max(900, Number(zoneRadius || ZONE_START_RADIUS) - 1200);
@@ -758,19 +902,43 @@ export class GameGateway {
       eliminationReason: null,
       collectionSeq: 0,
       aiArchetype,
-      aiAggression: aiArchetype === "hunter" ? 1.45 : aiArchetype === "raider" ? 1.28 : 1.12,
-      aiCourage: aiArchetype === "sentinel" ? 1.02 : 1.2,
-      aiSkill: 1.2 + Math.random() * 0.35,
-      desiredDroneStock: 1 + Math.floor(Math.random() * 2),
-      preferredRange: aiArchetype === "hunter" ? 560 : aiArchetype === "sentinel" ? 780 : 650,
+      aiAggression:
+        aiArchetype === "hunter"
+          ? 1.42 + Math.random() * 0.22
+          : aiArchetype === "raider"
+            ? 1.27 + Math.random() * 0.20
+            : 1.10 + Math.random() * 0.18,
+      aiCourage:
+        aiArchetype === "sentinel"
+          ? 1.00 + Math.random() * 0.14
+          : 1.16 + Math.random() * 0.22,
+      aiSkill: 1.28 + Math.random() * 0.42,
+      // One escort drone is enough to join combat after prepare. A small
+      // minority stockpile two drones, keeping the field varied but aggressive.
+      desiredDroneStock: index % 5 === 0 ? 2 : 1,
+      preferredRange:
+        aiArchetype === "hunter"
+          ? 500 + Math.random() * 100
+          : aiArchetype === "sentinel"
+            ? 720 + Math.random() * 140
+            : 600 + Math.random() * 120,
+      aiHumanHuntBias:
+        aiArchetype === "hunter"
+          ? 1.0 + Math.random() * 0.40
+          : aiArchetype === "raider"
+            ? 0.62 + Math.random() * 0.30
+            : 0.25 + Math.random() * 0.20,
+      aiFarmAngle: (Math.PI * 2 * index) / Math.max(1, ZONE_PVP_BOT_TARGET_TOTAL - 1),
+      botFireCooldown: ZONE_PVP_BOT_FAST_FIRE_COOLDOWN + (index % 5) * 35,
       // Spread the initial expensive plan over several simulation frames.
-      aiPlanUntil: now + (index % 12) * 18 + Math.floor(Math.random() * 24),
+      aiPlanUntil: now + (index % 18) * 14 + Math.floor(Math.random() * 30),
       aiTargetEnemyId: null,
       aiTargetOrbId: null,
       aiTargetEnergyCellId: null,
+      aiTargetCoreId: null,
       aiWanderAngle: Math.random() * Math.PI * 2,
       aiStrafeDir: index % 2 ? 1 : -1,
-      aiState: "opening-orb-farm",
+      aiState: "prepare-orb-farm",
     };
   }
 
@@ -807,12 +975,23 @@ export class GameGateway {
   private updateZonePvpBots(room: any, now: number, zoneRadius: number) {
     if (!room?.zonePvpMode || room.status !== "playing") return;
 
-    const everyone = [...room.players.values()];
-    const alive = everyone.filter((unit: any) => unit?.alive !== false);
-    const openingFarm = now - Number(room.matchStartedAt || now) < ZONE_PVP_BOT_OPENING_ORB_FARM_MS;
+    const alive = [...room.players.values()].filter((unit: any) => unit?.alive !== false);
+    const phase = this.getZonePvpBattlePhase(room, now, zoneRadius, alive.length);
+    const openingFarm = phase === "prepare";
+    const centerX = WORLD_WIDTH * 0.5;
+    const centerY = WORLD_HEIGHT * 0.5;
+
+    // Route reservations stop 57 bots from selecting the exact same nearest
+    // orb in prepare phase. They still react dynamically when an orb is taken.
+    const orbClaims = new Map<string, number>();
+    for (const unit of alive) {
+      if (!unit?.isBot || !unit?.aiTargetOrbId) continue;
+      const key = String(unit.aiTargetOrbId);
+      orbClaims.set(key, Number(orbClaims.get(key) || 0) + 1);
+    }
 
     for (const bot of alive) {
-      if (!bot.isBot) continue;
+      if (!bot?.isBot) continue;
       if (now < Number(bot.aiPlanUntil || 0)) continue;
 
       const nextPlanMs =
@@ -822,174 +1001,395 @@ export class GameGateway {
       bot.lastInputReceivedAt = now;
       bot.lastSeenAt = now;
 
-      const centerX = WORLD_WIDTH * 0.5;
-      const centerY = WORLD_HEIGHT * 0.5;
-      const centerDx = centerX - bot.x;
-      const centerDy = centerY - bot.y;
+      const centerDx = centerX - Number(bot.x || 0);
+      const centerDy = centerY - Number(bot.y || 0);
       const centerDistance = Math.hypot(centerDx, centerDy) || 1;
-      const zoneEdgeDistance = zoneRadius - centerDistance;
+      const zoneEdgeDistance = Number(zoneRadius || 0) - centerDistance;
 
-      // Shrinking-zone priority matches Battle Royale: run inward first, not
-      // through an enemy or an orb outside the safe ring.
-      if (zoneEdgeDistance < ZONE_PVP_BOT_ZONE_EDGE_BUFFER) {
-        const move = this.normalizeZoneBotMove(centerDx, centerDy);
+      // The safety buffer gets proportionally tighter with the circle, but
+      // never disappears. This makes late-game bots converge early enough to
+      // survive instead of panicking at the final pixel.
+      const zoneBuffer = Math.max(
+        phase === "endgame" ? 185 : 330,
+        Math.min(
+          ZONE_PVP_BOT_ZONE_EDGE_BUFFER,
+          Number(zoneRadius || ZONE_START_RADIUS) * (phase === "endgame" ? 0.20 : 0.12),
+        ),
+      );
+      const avoidRadius = openingFarm
+        ? ZONE_PVP_BOT_FARM_AVOID_RADIUS
+        : phase === "endgame"
+          ? ZONE_PVP_BOT_ENDGAME_AVOID_RADIUS
+          : ZONE_PVP_BOT_TACTICAL_AVOID_RADIUS;
+      const avoidance = this.getZoneBotAvoidance(bot, alive, avoidRadius);
+      const projectileThreat = this.getZoneBotIncomingProjectileThreat(room, bot);
+
+      // Zone survival always wins over combat/loot. The bot moves diagonally
+      // inward while separating from the crowd rather than charging straight
+      // through the central pile.
+      if (zoneEdgeDistance < zoneBuffer) {
+        const urgency = zoneEdgeDistance <= 0 ? 5.8 : 2.8 + (zoneBuffer - zoneEdgeDistance) / Math.max(1, zoneBuffer) * 2.4;
+        const move = this.normalizeZoneBotMove(
+          (centerDx / centerDistance) * urgency + avoidance.x * 0.34,
+          (centerDy / centerDistance) * urgency + avoidance.y * 0.34,
+        );
         bot.input = {
           mobileMove: true,
           moveX: move.x,
           moveY: move.y,
           attacking: false,
-          shield: false,
+          shield: Boolean(
+            projectileThreat.incoming &&
+              projectileThreat.distance < 360 &&
+              Number(bot.energy || 0) >= 20 &&
+              Number(bot.drones || 0) > 1,
+          ),
           mouseX: centerX,
           mouseY: centerY,
         };
-        bot.aiState = "escape-zone";
+        bot.aiTargetEnemyId = null;
+        bot.aiTargetOrbId = null;
+        bot.aiTargetEnergyCellId = null;
+        bot.aiTargetCoreId = null;
+        bot.aiState = zoneEdgeDistance <= 0 ? "escape-zone-critical" : "escape-zone-smart";
         continue;
       }
 
+      // Prepare is deliberately pure economy. Combat is server-locked too,
+      // but keeping the decision logic pure avoids a pre-fight bot pile-up.
+      if (openingFarm) {
+        const targetOrb = this.findZoneBotBestOrb(bot, room, zoneRadius, orbClaims, true);
+
+        if (targetOrb) {
+          const previousOrbId = String(bot.aiTargetOrbId || "");
+          const nextOrbId = String(targetOrb.id || "");
+          if (previousOrbId && previousOrbId !== nextOrbId) {
+            const previousClaims = Number(orbClaims.get(previousOrbId) || 0);
+            if (previousClaims <= 1) orbClaims.delete(previousOrbId);
+            else orbClaims.set(previousOrbId, previousClaims - 1);
+          }
+          if (nextOrbId && previousOrbId !== nextOrbId) {
+            orbClaims.set(nextOrbId, Number(orbClaims.get(nextOrbId) || 0) + 1);
+          }
+
+          const route = this.normalizeZoneBotMove(
+            Number(targetOrb.x || 0) - Number(bot.x || 0) + avoidance.x * 220,
+            Number(targetOrb.y || 0) - Number(bot.y || 0) + avoidance.y * 220,
+          );
+          bot.input = {
+            mobileMove: true,
+            moveX: route.x,
+            moveY: route.y,
+            attacking: false,
+            shield: false,
+            mouseX: Number(targetOrb.x || bot.x),
+            mouseY: Number(targetOrb.y || bot.y),
+          };
+          bot.aiTargetEnemyId = null;
+          bot.aiTargetOrbId = targetOrb.id;
+          bot.aiTargetEnergyCellId = null;
+          bot.aiTargetCoreId = null;
+          bot.aiState = "prepare-orb-farm";
+        } else {
+          const angle = Number(bot.aiFarmAngle || 0) + (Math.random() - 0.5) * 0.35;
+          bot.aiFarmAngle = angle;
+          const move = this.normalizeZoneBotMove(
+            Math.cos(angle) + (centerDx / centerDistance) * 0.25 + avoidance.x,
+            Math.sin(angle) + (centerDy / centerDistance) * 0.25 + avoidance.y,
+          );
+          bot.input = {
+            mobileMove: true,
+            moveX: move.x,
+            moveY: move.y,
+            attacking: false,
+            shield: false,
+            mouseX: Number(bot.x || 0) + move.x * 300,
+            mouseY: Number(bot.y || 0) + move.y * 300,
+          };
+          bot.aiTargetOrbId = null;
+          bot.aiState = "prepare-search-orbs";
+        }
+        continue;
+      }
+
+      const ownPower = this.getZoneBotPower(bot);
       let targetEnemy: any = null;
       let targetEnemyDistance = Infinity;
+      let targetEnemyPower = 0;
       let targetEnemyScore = Infinity;
-      const ownPower = this.getZoneBotPower(bot);
+      let nearbyEnemyCount = 0;
+      let strongerEnemyCount = 0;
+      let weakestNearbyCount = 0;
+      let nearestThreat: any = null;
+      let nearestThreatDistance = Infinity;
 
-      if (!openingFarm && (bot.drones || 0) > 0) {
-        for (const other of alive) {
-          if (other.id === bot.id) continue;
-          const dx = other.x - bot.x;
-          const dy = other.y - bot.y;
-          const distance = Math.hypot(dx, dy);
-          if (distance > ZONE_PVP_BOT_GLOBAL_HUNT_RANGE) continue;
+      for (const other of alive) {
+        if (!other || other.id === bot.id) continue;
 
-          const enemyPower = this.getZoneBotPower(other);
-          const weak = Number(other.hp || 0) <= 58 || Number(other.drones || 0) <= 1 || Number(other.energy || 0) <= 18;
-          const advantage = Number(bot.drones || 0) >= Number(other.drones || 0) + 1;
-          const canEngage = weak || advantage || ownPower * Number(bot.aiCourage || 1) >= enemyPower * 0.82;
-          if (!canEngage && distance > ZONE_PVP_BOT_THREAT_RADIUS) continue;
+        const dx = Number(other.x || 0) - Number(bot.x || 0);
+        const dy = Number(other.y || 0) - Number(bot.y || 0);
+        const distance = Math.hypot(dx, dy);
+        if (distance > ZONE_PVP_BOT_GLOBAL_HUNT_RANGE) continue;
 
-          const score =
-            distance -
-            (weak ? 720 : 0) -
-            (advantage ? 380 : 0) +
-            Math.max(0, enemyPower - ownPower) * 1.5;
-          if (score < targetEnemyScore) {
-            targetEnemy = other;
-            targetEnemyDistance = distance;
-            targetEnemyScore = score;
+        const enemyPower = this.getZoneBotPower(other);
+        const enemyWeak =
+          Number(other.hp || 0) <= 58 ||
+          Number(other.drones || 0) <= 1 ||
+          Number(other.energy || 0) <= 18;
+        const hasDroneAdvantage =
+          Number(bot.drones || 0) >= Number(other.drones || 0) + 1;
+
+        if (distance <= ZONE_PVP_BOT_THREAT_RADIUS) {
+          nearbyEnemyCount += 1;
+          if (enemyPower > ownPower * 1.12) strongerEnemyCount += 1;
+          if (enemyWeak) weakestNearbyCount += 1;
+          if (enemyPower > ownPower * 1.08 && distance < nearestThreatDistance) {
+            nearestThreat = other;
+            nearestThreatDistance = distance;
           }
+        }
+
+        if (Number(bot.drones || 0) <= 0) continue;
+
+        const phaseFightFactor =
+          phase === "endgame" ? 0.66 : phase === "midgame" ? 0.75 : 0.82;
+        const canEngage =
+          enemyWeak ||
+          hasDroneAdvantage ||
+          ownPower * Number(bot.aiCourage || 1) >= enemyPower * phaseFightFactor;
+
+        // Strong targets are still tracked at close range (so bots can flee
+        // intelligently), but they are not selected for a pointless cross-map
+        // suicide chase early in the round.
+        if (!canEngage && distance > ZONE_PVP_BOT_THREAT_RADIUS && phase !== "endgame") continue;
+
+        let score = distance;
+        if (String(bot.aiTargetEnemyId || "") === String(other.id)) score -= 330;
+        if (enemyWeak) score -= 720;
+        if (hasDroneAdvantage) score -= 480;
+        if (Number(other.hp || 0) < Number(bot.hp || 0)) score -= 145;
+        if (!other.isBot) score -= 260 * Number(bot.aiHumanHuntBias || 0.45);
+        if (phase === "endgame") score -= 300;
+        if (enemyPower > ownPower * 1.65 && !enemyWeak) score += 420;
+
+        if (score < targetEnemyScore) {
+          targetEnemy = other;
+          targetEnemyDistance = distance;
+          targetEnemyPower = enemyPower;
+          targetEnemyScore = score;
         }
       }
 
-      const lowHp = Number(bot.hp || 0) <= 28;
-      const isThreatened = Boolean(
+      const lowHp = Number(bot.hp || 0) <= ZONE_PVP_BOT_LOW_HP;
+      const lowEnergy = Number(bot.energy || 0) <= ZONE_PVP_BOT_LOW_ENERGY;
+      const targetWeak = Boolean(
         targetEnemy &&
-          targetEnemyDistance < 680 &&
-          this.getZoneBotPower(targetEnemy) > ownPower * 1.35,
+          (Number(targetEnemy.hp || 0) <= 58 ||
+            Number(targetEnemy.drones || 0) <= 1 ||
+            Number(targetEnemy.energy || 0) <= 18),
+      );
+      const droneAdvantage = Boolean(
+        targetEnemy &&
+          Number(bot.drones || 0) >= Number(targetEnemy.drones || 0) + 1,
+      );
+      const tacticalRetreat = Boolean(
+        targetEnemy &&
+          (
+            lowHp ||
+            (lowEnergy && targetEnemyDistance < 900) ||
+            (strongerEnemyCount >= (phase === "endgame" ? 3 : 2) && !droneAdvantage) ||
+            (targetEnemyPower > ownPower * 1.55 && !targetWeak && targetEnemyDistance < 1180)
+          ),
+      );
+      const panicThreat = Boolean(
+        nearestThreat &&
+          (nearestThreatDistance < 480 || projectileThreat.severity > 0.34),
       );
 
-      if (targetEnemy && (!lowHp || targetEnemyDistance > 560)) {
-        const angle = Math.atan2(targetEnemy.y - bot.y, targetEnemy.x - bot.x);
-        const preferredRange = Number(bot.preferredRange || ZONE_PVP_BOT_SAFE_DISTANCE);
+      // One escort drone is enough to create pressure after prepare. Bots with
+      // zero drones use a deliberate emergency farm route instead of suicidal
+      // body-chasing.
+      const needsEmergencyFarm = Number(bot.drones || 0) <= 0;
+
+      if (
+        targetEnemy &&
+        !needsEmergencyFarm &&
+        (targetEnemyDistance <= ZONE_PVP_BOT_GLOBAL_HUNT_RANGE || tacticalRetreat || panicThreat)
+      ) {
+        const angle = Math.atan2(
+          Number(targetEnemy.y || 0) - Number(bot.y || 0),
+          Number(targetEnemy.x || 0) - Number(bot.x || 0),
+        );
+        const preferredRange = Math.max(
+          410,
+          Number(bot.preferredRange || ZONE_PVP_BOT_SAFE_DISTANCE) -
+            (phase === "endgame" ? 150 : phase === "midgame" ? 75 : 0),
+        );
+
         let moveX = 0;
         let moveY = 0;
-
-        if (lowHp || isThreatened) {
-          moveX = Math.cos(angle + Math.PI);
-          moveY = Math.sin(angle + Math.PI);
-        } else if (targetEnemyDistance > preferredRange + 160) {
-          moveX = Math.cos(angle);
-          moveY = Math.sin(angle);
-        } else if (targetEnemyDistance < preferredRange - 150) {
-          moveX = Math.cos(angle + Math.PI);
-          moveY = Math.sin(angle + Math.PI);
+        if (tacticalRetreat || panicThreat) {
+          // Retreat still includes a tangent, preventing a bot from simply
+          // reversing into a second enemy or outside the shrinking zone.
+          const retreatStrafe = Number(bot.aiStrafeDir || 1);
+          moveX = Math.cos(angle + Math.PI) * 1.15 + Math.cos(angle + Math.PI * 0.5 * retreatStrafe) * 0.40;
+          moveY = Math.sin(angle + Math.PI) * 1.15 + Math.sin(angle + Math.PI * 0.5 * retreatStrafe) * 0.40;
+        } else if (targetEnemyDistance > preferredRange + 120) {
+          moveX = Math.cos(angle) * 1.15;
+          moveY = Math.sin(angle) * 1.15;
+        } else if (targetEnemyDistance < preferredRange - 145) {
+          moveX = Math.cos(angle + Math.PI) * 0.85;
+          moveY = Math.sin(angle + Math.PI) * 0.85;
         } else {
+          if (!bot.aiNextStrafeAt || now >= bot.aiNextStrafeAt) {
+            bot.aiStrafeDir = Math.random() < 0.52 ? 1 : -1;
+            bot.aiNextStrafeAt = now + 400 + Math.floor(Math.random() * 650);
+          }
           const strafe = Number(bot.aiStrafeDir || 1);
-          moveX = Math.cos(angle + Math.PI * 0.5 * strafe) * 0.92 + Math.cos(angle) * 0.18;
-          moveY = Math.sin(angle + Math.PI * 0.5 * strafe) * 0.92 + Math.sin(angle) * 0.18;
-          if (Math.random() < 0.18) bot.aiStrafeDir = -strafe;
+          moveX = Math.cos(angle + Math.PI * 0.5 * strafe) * 1.08 + Math.cos(angle) * 0.28;
+          moveY = Math.sin(angle + Math.PI * 0.5 * strafe) * 1.08 + Math.sin(angle) * 0.28;
         }
 
+        const inwardPressure =
+          zoneEdgeDistance < zoneBuffer * 2.2
+            ? Math.max(0, (zoneBuffer * 2.2 - zoneEdgeDistance) / Math.max(1, zoneBuffer * 2.2))
+            : 0;
         const move = this.normalizeZoneBotMove(
-          moveX + (centerDx / centerDistance) * 0.18,
-          moveY + (centerDy / centerDistance) * 0.18,
+          moveX +
+            avoidance.x * (phase === "endgame" ? 0.28 : 0.54) +
+            (centerDx / centerDistance) * inwardPressure * 1.6,
+          moveY +
+            avoidance.y * (phase === "endgame" ? 0.28 : 0.54) +
+            (centerDy / centerDistance) * inwardPressure * 1.6,
         );
+
         const attackRange = Math.min(
-          PROJECTILE_MAX_DISTANCE * 0.95,
-          ZONE_PVP_BOT_ATTACK_RANGE * Number(bot.aiAggression || 1),
+          PROJECTILE_MAX_DISTANCE * 0.96,
+          ZONE_PVP_BOT_ATTACK_RANGE *
+            (phase === "endgame" ? 1.16 : phase === "midgame" ? 1.08 : 1) *
+            Math.max(1, Number(bot.aiAggression || 1) * 0.92),
         );
-        const shouldAttack =
-          !lowHp &&
-          (bot.drones || 0) > 0 &&
-          targetEnemyDistance <= attackRange;
+        const shouldShield = Boolean(
+          !tacticalRetreat &&
+            Number(bot.energy || 0) >= 20 &&
+            Number(bot.drones || 0) > 1 &&
+            (
+              (projectileThreat.incoming && projectileThreat.distance < 420) ||
+              (targetEnemyDistance < 390 && targetEnemyPower > ownPower * 1.24) ||
+              (nearbyEnemyCount >= 3 && Number(bot.hp || 0) < 50)
+            ),
+        );
+        const shouldAttack = Boolean(
+          !tacticalRetreat &&
+            !shouldShield &&
+            Number(bot.drones || 0) > 0 &&
+            targetEnemyDistance <= attackRange,
+        );
+        const aim = this.getZoneBotAimPoint(bot, targetEnemy, room);
 
         bot.input = {
           mobileMove: true,
           moveX: move.x,
           moveY: move.y,
           attacking: shouldAttack,
-          shield: Boolean(
-            isThreatened &&
-              (bot.drones || 0) > 0 &&
-              (bot.energy || 0) >= 20 &&
-              targetEnemyDistance < 520,
-          ),
-          mouseX: targetEnemy.x,
-          mouseY: targetEnemy.y,
+          shield: shouldShield,
+          mouseX: aim.x,
+          mouseY: aim.y,
         };
         bot.aiTargetEnemyId = targetEnemy.id;
-        bot.aiState = shouldAttack ? "attack-strafe" : lowHp ? "retreat" : "hunt";
+        bot.aiTargetOrbId = null;
+        bot.aiTargetEnergyCellId = null;
+        bot.aiTargetCoreId = null;
+        bot.aiState = tacticalRetreat || panicThreat
+          ? "defend-flee"
+          : shouldAttack
+            ? "attack-strafe"
+            : "hunt-target";
         continue;
       }
 
+      // Resource choices are made only when there is no worthwhile immediate
+      // target. Emergency energy comes first; a usable core comes next.
       const targetEnergy =
-        Number(bot.energy || 0) <= 55
-          ? this.findZoneBotNearest(bot, room.energyCells || [], 2600)
+        Number(bot.energy || 0) <= (lowHp ? 66 : 42)
+          ? this.findZoneBotNearest(
+              bot,
+              room.energyCells || [],
+              4200,
+              (cell: any) => this.isInsideSafeZone(cell.x, cell.y, zoneRadius, Math.max(150, zoneBuffer * 0.55)),
+            )
           : null;
       const targetCore =
-        !openingFarm
-          ? this.findZoneBotNearest(bot, room.cores || [], 3200)
+        !targetEnergy
+          ? this.findZoneBotNearest(
+              bot,
+              room.cores || [],
+              4600,
+              (core: any) =>
+                this.isInsideSafeZone(core.x, core.y, zoneRadius, Math.max(150, zoneBuffer * 0.55)) &&
+                this.canUseCore(bot, core),
+            )
           : null;
 
-      let target = targetEnergy?.unit || targetCore?.unit || null;
-      let state = targetEnergy ? "energy" : targetCore ? "core" : "orb";
+      let target: any = targetEnergy?.unit || targetCore?.unit || null;
+      let state = targetEnergy ? "energy" : targetCore ? "collect-core" : "farm-orbs";
 
       if (!target) {
-        const stride = openingFarm ? 2 : 4;
-        let bestOrb: any = null;
-        let bestScore = Infinity;
-        const orbs = room.orbs || [];
-        for (let i = 0; i < orbs.length; i += stride) {
-          const orb = orbs[i];
-          if (!orb || !this.isInsideSafeZone(orb.x, orb.y, zoneRadius, ZONE_PVP_BOT_ZONE_EDGE_BUFFER)) continue;
-          const distance = Math.hypot(orb.x - bot.x, orb.y - bot.y);
-          if (distance > 4600) continue;
-          const score = distance + (bot.aiTargetOrbId === orb.id ? -180 : 0);
-          if (score < bestScore) {
-            bestOrb = orb;
-            bestScore = score;
-          }
-        }
-        target = bestOrb;
+        target = this.findZoneBotBestOrb(bot, room, zoneRadius, orbClaims, false);
       }
 
       if (target) {
-        const move = this.normalizeZoneBotMove(target.x - bot.x, target.y - bot.y);
+        const targetId = String(target.id || "");
+        if (state === "farm-orbs") {
+          const previousOrbId = String(bot.aiTargetOrbId || "");
+          if (previousOrbId && previousOrbId !== targetId) {
+            const previousClaims = Number(orbClaims.get(previousOrbId) || 0);
+            if (previousClaims <= 1) orbClaims.delete(previousOrbId);
+            else orbClaims.set(previousOrbId, previousClaims - 1);
+          }
+          if (targetId && previousOrbId !== targetId) {
+            orbClaims.set(targetId, Number(orbClaims.get(targetId) || 0) + 1);
+          }
+        }
+
+        const inwardPressure =
+          zoneEdgeDistance < zoneBuffer * 2
+            ? Math.max(0, (zoneBuffer * 2 - zoneEdgeDistance) / Math.max(1, zoneBuffer * 2))
+            : 0;
+        const route = this.normalizeZoneBotMove(
+          Number(target.x || 0) - Number(bot.x || 0) +
+            avoidance.x * 190 +
+            (centerDx / centerDistance) * inwardPressure * 220,
+          Number(target.y || 0) - Number(bot.y || 0) +
+            avoidance.y * 190 +
+            (centerDy / centerDistance) * inwardPressure * 220,
+        );
+
         bot.input = {
           mobileMove: true,
-          moveX: move.x,
-          moveY: move.y,
+          moveX: route.x,
+          moveY: route.y,
           attacking: false,
-          shield: false,
-          mouseX: target.x,
-          mouseY: target.y,
+          shield: Boolean(
+            projectileThreat.incoming &&
+              projectileThreat.distance < 330 &&
+              Number(bot.energy || 0) >= 20 &&
+              Number(bot.drones || 0) > 1,
+          ),
+          mouseX: Number(target.x || bot.x),
+          mouseY: Number(target.y || bot.y),
         };
-        bot.aiTargetOrbId = state === "orb" ? target.id : null;
+        bot.aiTargetEnemyId = null;
+        bot.aiTargetOrbId = state === "farm-orbs" ? target.id : null;
         bot.aiTargetEnergyCellId = state === "energy" ? target.id : null;
-        bot.aiState = openingFarm ? "opening-orb-farm" : state;
+        bot.aiTargetCoreId = state === "collect-core" ? target.id : null;
+        bot.aiState = needsEmergencyFarm && state === "farm-orbs" ? "emergency-orb-farm" : state;
       } else {
-        const wander = Number(bot.aiWanderAngle || 0) + (Math.random() - 0.5) * 0.6;
-        bot.aiWanderAngle = wander;
+        const angle = Number(bot.aiWanderAngle || 0) + (Math.random() - 0.5) * 0.8;
+        bot.aiWanderAngle = angle;
         const move = this.normalizeZoneBotMove(
-          Math.cos(wander) + (centerDx / centerDistance) * 0.36,
-          Math.sin(wander) + (centerDy / centerDistance) * 0.36,
+          Math.cos(angle) * 0.65 + avoidance.x * 0.85 + (centerDx / centerDistance) * 0.55,
+          Math.sin(angle) * 0.65 + avoidance.y * 0.85 + (centerDy / centerDistance) * 0.55,
         );
         bot.input = {
           mobileMove: true,
@@ -997,10 +1397,14 @@ export class GameGateway {
           moveY: move.y,
           attacking: false,
           shield: false,
-          mouseX: bot.x + move.x * 300,
-          mouseY: bot.y + move.y * 300,
+          mouseX: Number(bot.x || 0) + move.x * 300,
+          mouseY: Number(bot.y || 0) + move.y * 300,
         };
-        bot.aiState = "wander";
+        bot.aiTargetEnemyId = null;
+        bot.aiTargetOrbId = null;
+        bot.aiTargetEnergyCellId = null;
+        bot.aiTargetCoreId = null;
+        bot.aiState = "search-safe-orbs";
       }
 
       bot.lastInputReceivedAt = now;
@@ -3136,7 +3540,12 @@ export class GameGateway {
     }
   }
   getFireCooldown(player, now) {
-    let cooldown = FIRE_COOLDOWN;
+    // Zone bots are allowed to re-engage quickly after their previous attack
+    // drone hits/despawns. Humans keep the normal PvP cooldown unchanged.
+    let cooldown = player?.isBot
+      ? Math.max(420, Number(player?.botFireCooldown || ZONE_PVP_BOT_FAST_FIRE_COOLDOWN))
+      : FIRE_COOLDOWN;
+
     if (player.rapidFireUntil && player.rapidFireUntil > now) {
       cooldown *= player.attackCooldownMultiplier || 0.65;
     }

@@ -40,9 +40,14 @@ const SELF_IDLE_FREEZE_DISTANCE = 360;
 const REMOTE_SMOOTHING = 42;
 const REMOTE_PREDICTION = 1.0;
 const REMOTE_HARD_SNAP_DISTANCE = 900;
-const REMOTE_MAX_EXTRAPOLATE_MS = 220;
-const REMOTE_PRESENTATION_LEAD_MS = 22;
-const REMOTE_FOLLOW_RESPONSE = 56;
+const REMOTE_MAX_EXTRAPOLATE_MS = 320;
+// A tiny forward presentation lead removes visual network latency without
+// buffering entities behind the server.
+const REMOTE_PRESENTATION_LEAD_MS = 30;
+// Large drones snap rapidly to a changed path; smoothing remains only for
+// sub-pixel jitter so a weak device never renders them one packet behind.
+const REMOTE_FOLLOW_RESPONSE = 120;
+const REMOTE_MOVING_DIRECT_SNAP_DISTANCE = 7;
 // Do not remove a remote drone just because one or two volatile transform
 // packets were skipped under a weak CPU/Wi-Fi burst. It stays visible at its
 // last authoritative position until a fresh transform arrives.
@@ -53,7 +58,11 @@ const ZONE_BINARY_PROTOCOL_VERSION = 1;
 const ZONE_BINARY_PLAYER_BYTES = 32;
 const ZONE_BINARY_PROJECTILE_BYTES = 28;
 
+// Attack drones use immediate velocity extrapolation. They intentionally
+// have no interpolation buffer and no correction blend.
 const PROJECTILE_SMOOTHING = 18;
+const PROJECTILE_PRESENTATION_LEAD_MS = 34;
+const PROJECTILE_MAX_EXTRAPOLATE_MS = 360;
 const PROJECTILE_FRAME_SCALE = 60;
 const PROJECTILE_VISUAL_TTL = 10000;
 const LOCAL_PROJECTILE_MIN_VISUAL_MS = 85;
@@ -1071,7 +1080,15 @@ function upsertRemoteMotion(map, incoming, receivedAt, serverAt = 0, metadataOnl
 
 function resolveRemoteMotion(motion, now, dt) {
   if (!motion) return null;
-  const ageMs = clamp(now - Number(motion.receivedAt || now) + REMOTE_PRESENTATION_LEAD_MS, 0, REMOTE_MAX_EXTRAPOLATE_MS);
+
+  // The renderer presents a tiny amount ahead of the last transform using the
+  // server velocity. This avoids an interpolation buffer entirely: remote main
+  // drones stay responsive even when the browser only draws at 30-45 FPS.
+  const ageMs = clamp(
+    now - Number(motion.receivedAt || now) + REMOTE_PRESENTATION_LEAD_MS,
+    0,
+    REMOTE_MAX_EXTRAPOLATE_MS,
+  );
   const moving = Boolean(motion.isMoving);
   const targetX = Number(motion.sourceX || 0) + (moving ? Number(motion.velocityX || 0) * (ageMs / 1000) : 0);
   const targetY = Number(motion.sourceY || 0) + (moving ? Number(motion.velocityY || 0) * (ageMs / 1000) : 0);
@@ -1082,7 +1099,13 @@ function resolveRemoteMotion(motion, now, dt) {
     motion.ready = true;
   } else {
     const distance = Math.hypot(targetX - Number(motion.renderX || 0), targetY - Number(motion.renderY || 0));
-    if (distance >= REMOTE_HARD_SNAP_DISTANCE) {
+
+    // A changed movement vector is gameplay, not visual decoration. Apply it
+    // immediately once it is visible; only very small packet jitter is damped.
+    if (
+      distance >= REMOTE_HARD_SNAP_DISTANCE ||
+      (moving && distance >= REMOTE_MOVING_DIRECT_SNAP_DISTANCE)
+    ) {
       motion.renderX = targetX;
       motion.renderY = targetY;
     } else {
@@ -2346,10 +2369,18 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         if (!projectile?.id) continue;
         packetProjectileIds.add(projectile.id);
         const existing = movementProjectiles.get(projectile.id);
+        // Preserve the exact authoritative transform as an origin. The render
+        // loop advances from this origin using velocity instead of blending
+        // toward it, so attack drones cannot visually trail the server.
         movementProjectiles.set(projectile.id, {
           ...(existing || {}),
           ...projectile,
+          sourceX: Number(projectile.x || 0),
+          sourceY: Number(projectile.y || 0),
+          velocityX: Number(projectile.vx || existing?.velocityX || 0),
+          velocityY: Number(projectile.vy || existing?.velocityY || 0),
           __movementSeenAt: now,
+          __motionReceivedAt: now,
           __serverAt: serverNow,
         });
       }
@@ -2363,15 +2394,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const applyMovementFrame = (packet = {}) => {
       lastZoneServerPacketAtRef.current = Date.now();
-      latestMovementPacketRef.current = packet;
-      if (movementFlushRafRef.current) return;
 
-      movementFlushRafRef.current = window.requestAnimationFrame(() => {
-        movementFlushRafRef.current = 0;
-        const latest = latestMovementPacketRef.current;
-        latestMovementPacketRef.current = null;
-        if (latest) consumeMovementFrame(latest);
-      });
+      // Never wait behind a browser frame before parsing authoritative motion.
+      // The packet is already compact and latest-wins; immediate ingestion keeps
+      // player drones and attack drones responsive on a CPU-constrained device.
+      consumeMovementFrame(packet);
     };
 
     // Legacy binary packets are intentionally ignored. The JSON transform lane
@@ -2947,7 +2974,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
 
       for (const [id, current] of projectileMap.entries()) {
-        projectileMap.set(id, advanceProjectile(current, dt));
+        // Local shots are client-predicted. Remote shots are re-resolved below
+        // from their newest authoritative origin every render frame.
+        if (current?.localOnly || !movementProjectiles.has(id)) {
+          projectileMap.set(id, advanceProjectile(current, dt));
+        }
       }
 
       for (const [id, target] of incomingProjectiles.entries()) {
@@ -2972,22 +3003,34 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           continue;
         }
 
-        const error = Math.hypot(
-          Number(target.x || 0) - Number(current.x ?? target.x ?? 0),
-          Number(target.y || 0) - Number(current.y ?? target.y ?? 0),
+        const motionReceivedAt = Number(
+          target.__motionReceivedAt ||
+          target.__movementSeenAt ||
+          target.__seenAt ||
+          now,
         );
-        // Attack drones are tiny and fast. Favor the newest transform much more
-        // aggressively than player bodies so they never trail behind their real
-        // server position during a crowded fight.
-        const correction = error > 120 ? 1 : error > 28 ? 0.82 : 0.58;
+        const motionAgeMs = clamp(
+          now - motionReceivedAt + PROJECTILE_PRESENTATION_LEAD_MS,
+          0,
+          PROJECTILE_MAX_EXTRAPOLATE_MS,
+        );
+        const velocityX = Number(target.velocityX ?? target.vx ?? 0);
+        const velocityY = Number(target.velocityY ?? target.vy ?? 0);
+        const sourceX = Number(target.sourceX ?? target.x ?? current.x ?? 0);
+        const sourceY = Number(target.sourceY ?? target.y ?? current.y ?? 0);
 
+        // No interpolation/correction blend here. A fast attack drone is drawn
+        // directly at its latest authoritative position plus a short velocity
+        // projection, which removes the "following behind" effect entirely.
         projectileMap.set(id, {
           ...current,
           ...target,
           localOnly: false,
           __seenAt: now,
-          x: Number(current.x ?? target.x ?? 0) + (Number(target.x ?? current.x ?? 0) - Number(current.x ?? target.x ?? 0)) * correction,
-          y: Number(current.y ?? target.y ?? 0) + (Number(target.y ?? current.y ?? 0) - Number(current.y ?? target.y ?? 0)) * correction,
+          x: sourceX + velocityX * (motionAgeMs / 1000),
+          y: sourceY + velocityY * (motionAgeMs / 1000),
+          vx: velocityX,
+          vy: velocityY,
         });
       }
 
@@ -3131,7 +3174,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         // Zone PvP shares the same premium space background as the good-desktop
         // profile. Pixi hides it only temporarily if emergency frame pressure is measured.
         worldTheme: "premium-space-battle",
-        staticItemBudget: mobilePerformanceRef.current ? 52 : 110,
+        // On a weak GPU, static loot is deliberately cheaper than motion.
+        // Drones and attack drones always keep the frame budget first.
+        staticItemBudget: mobilePerformanceRef.current ? 34 : constrainedDesktopRef.current ? 46 : 110,
+        zoneRealtimeMotion: true,
+        realtimeProjectiles: true,
         safeZoneRadius: zoneRadius,
         showZone: true,
         coreColorMap: coreColorMapRef.current,

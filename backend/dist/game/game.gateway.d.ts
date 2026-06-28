@@ -36,6 +36,11 @@ export declare class GameGateway {
     private rebindZonePvpResumeSeat;
     private getZoneBotPower;
     private normalizeZoneBotMove;
+    private getZonePvpBattlePhase;
+    private getZoneBotAvoidance;
+    private getZoneBotIncomingProjectileThreat;
+    private getZoneBotAimPoint;
+    private findZoneBotBestOrb;
     private getZoneBotSpawn;
     private createZonePvpBot;
     private fillZonePvpBots;
