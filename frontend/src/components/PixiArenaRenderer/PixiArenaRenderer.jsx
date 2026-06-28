@@ -167,27 +167,22 @@ function isMobileDevice() {
 function getRendererDeviceProfile(forceLowQuality = false) {
   const mobile = isMobileDevice();
   const dpr = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
-  const deviceMemory =
-    typeof navigator !== "undefined" && typeof navigator.deviceMemory === "number"
-      ? Number(navigator.deviceMemory)
-      : null;
-  const cores =
-    typeof navigator !== "undefined" ? Number(navigator.hardwareConcurrency || 4) : 4;
+  const deviceMemory = typeof navigator !== "undefined" && typeof navigator.deviceMemory === "number"
+    ? Number(navigator.deviceMemory)
+    : null;
+  const cores = typeof navigator !== "undefined" ? Number(navigator.hardwareConcurrency || 4) : 4;
+  const weakMobile = mobile && (cores <= 4 || (deviceMemory !== null && deviceMemory <= 4));
+  const weakDesktop = !mobile && (
+    cores <= 4 || (deviceMemory !== null && deviceMemory <= 8)
+  );
 
-  // Phones always use the premium visual profile. Device detection is retained
-  // only so phone-specific layout code elsewhere in the renderer still works.
-  // A user-controlled low-quality switch must never downgrade a phone here.
-  const weakMobile = false;
-
-  // Desktop/laptop performance profile:
-  // - older/office laptops start directly on the lightweight profile;
-  // - good desktop/laptop hardware remains premium;
-  // - forceLowQuality only affects desktop/laptop devices.
-  const weakDesktop =
-    !mobile && (cores <= 4 || (deviceMemory !== null && deviceMemory <= 8));
+  // Weak desktop hardware starts in the same visual profile as a good desktop.
+  // It is not permanently downgraded based only on CPU/RAM heuristics; the
+  // adaptive loop below lowers detail only if real frame time proves it is needed.
+  // `forceLowQuality` remains an explicit player choice.
   const lowSpecDesktop = Boolean(!mobile && forceLowQuality);
   const visualFirstWeakDesktop = Boolean(!mobile && weakDesktop && !forceLowQuality);
-  const forcedMobileQuality = false;
+  const forcedMobileQuality = Boolean(mobile && forceLowQuality);
 
   return {
     mobile,
@@ -205,56 +200,79 @@ function getRendererDeviceProfile(forceLowQuality = false) {
 function getRendererConfig(forceLowQuality) {
   const device = getRendererDeviceProfile(forceLowQuality);
 
-  // Keep exactly two desktop quality lanes:
-  // 1) Premium: good desktop/laptop + every phone/tablet.
-  // 2) Performance: weak desktop/laptop only.
-  //
-  // `visualFirstWeakDesktop` keeps the existing weak-laptop visual budget
-  // (0.68 resolution / 5 detailed drones / 9 detailed projectiles).
-  // `lowSpecDesktop` remains the explicit manual low-quality mode.
-  const weakDesktopProfile = Boolean(
-    !device.mobile && (device.visualFirstWeakDesktop || device.lowSpecDesktop),
-  );
-  const forcedDesktopLowProfile = Boolean(device.lowSpecDesktop);
-  const mobilePremium = Boolean(device.mobile);
+  // CERINȚĂ: toate telefoanele folosesc exact profilul premium complet.
+  // Detectarea weakMobile rămâne disponibilă doar ca informație de device,
+  // însă nu mai reduce rezoluția, dronele, proiectilele, animațiile sau terrain-ul.
+  const premiumMobile = Boolean(device.mobile);
+  const lowSpec = Boolean(device.lowSpecDesktop);
+  const visualFirstDesktop = Boolean(device.visualFirstWeakDesktop);
 
-  const resolution = forcedDesktopLowProfile
+  // Laptop / PC slab: păstrează exact profilul performant existent.
+  // Telefon: aceeași calitate ca un laptop/PC bun.
+  const resolution = device.lowSpecDesktop
     ? 0.68
-    : weakDesktopProfile
+    : visualFirstDesktop
       ? Math.min(0.68, device.dpr)
       : Math.min(1.35, device.dpr);
 
   return {
     ...device,
 
-    // Exposed flags used by the hot render loop below.
+    // Mobile este premium indiferent de RAM / număr de core-uri.
+    premiumMobile,
     weakMobile: false,
-    mobilePremium,
-    weakDesktopProfile,
-    allowDynamicResolution: false,
+    forcedMobileQuality: false,
 
     resolution,
-    antialias: !weakDesktopProfile,
 
-    // Premium on good desktop/laptop and ALL phones.
-    // Weak desktop/laptop keeps the existing lower visual budget.
-    maxStaticItems: forcedDesktopLowProfile ? 38 : weakDesktopProfile ? 58 : 120,
-    maxPlayers: forcedDesktopLowProfile ? 4 : weakDesktopProfile ? 5 : MAX_RENDERED_PLAYERS,
+    // Anti-aliasing și terrain premium pe telefoane + desktop bun.
+    // Ramurile existente de laptop slab rămân neschimbate.
+    antialias: premiumMobile || (!lowSpec && !visualFirstDesktop),
+
+    maxStaticItems: device.lowSpecDesktop
+      ? 38
+      : visualFirstDesktop
+        ? 58
+        : 120,
+
+    maxPlayers: device.lowSpecDesktop
+      ? 4
+      : visualFirstDesktop
+        ? 5
+        : MAX_RENDERED_PLAYERS,
+
     maxSimplePlayers: 60,
 
-    // Keep attack drones in the detailed pool even on weak laptops. This
-    // eliminates visual switching that felt like movement delay in combat.
-    maxProjectiles: forcedDesktopLowProfile ? 6 : weakDesktopProfile ? 9 : MAX_RENDERED_PROJECTILES,
-    maxSimpleProjectiles: forcedDesktopLowProfile ? 30 : weakDesktopProfile ? 32 : 48,
+    maxProjectiles: device.lowSpecDesktop
+      ? 6
+      : visualFirstDesktop
+        ? 9
+        : MAX_RENDERED_PROJECTILES,
 
-    // Static world work is intentionally slower only on weak desktops. Core
-    // player and attack-drone transforms are still processed every ticker frame.
-    staticSyncInterval: forcedDesktopLowProfile ? 620 : weakDesktopProfile ? 560 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: forcedDesktopLowProfile ? 10 : weakDesktopProfile ? 7 : 1,
+    maxSimpleProjectiles: device.lowSpecDesktop
+      ? 30
+      : visualFirstDesktop
+        ? 32
+        : 48,
 
-    // Terrain is premium on good desktop/laptop and all phones. It remains
-    // disabled on weak desktop/laptop exactly as before for stable 60 FPS.
-    disableExpensiveTerrain: weakDesktopProfile,
+    staticSyncInterval: device.lowSpecDesktop
+      ? 620
+      : visualFirstDesktop
+        ? 560
+        : STATIC_SYNC_INTERVAL_MS,
+
+    animateStaticEvery: device.lowSpecDesktop
+      ? 10
+      : visualFirstDesktop
+        ? 7
+        : 1,
+
+    // Pe telefon și desktop bun rămâne fundalul premium.
+    // Doar ramurile de desktop slab îl păstrează oprit pentru 60 FPS.
+    disableExpensiveTerrain: Boolean(
+      device.lowSpecDesktop ||
+      visualFirstDesktop,
+    ),
   };
 }
 
@@ -1930,11 +1948,12 @@ function createPixelTerrainTexture(worldWidth, worldHeight) {
   // Premium deep-space backdrop for Battle Royale only.
   // Decorative only: gameplay, bots, collisions, loot and movement are untouched.
   const device = getRendererDeviceProfile(false);
-  // Phones use the same premium terrain resolution as good desktop/laptop
-  // hardware. Only weak desktop/laptop GPUs keep the small texture.
-  const weakDesktop = Boolean(device.weakDesktop);
-  const size = weakDesktop ? 1024 : 3072;
-  const cacheKey = `battle-royale-space-premium:${weakDesktop ? "desktop-low" : "premium"}:${size}`;
+  const mobile = device.mobile;
+  // The terrain is one decorative sprite. 1536px is visually sufficient at
+  // the Battle Royale camera height and avoids a large GPU texture on GTX
+  // 1050-era laptops.
+  const size = mobile ? 2048 : device.weakDesktop ? 1024 : 3072;
+  const cacheKey = `battle-royale-space-premium:${mobile ? "mobile" : device.weakDesktop ? "desktop-low" : "desktop"}:${size}`;
   let texture = WORLD_TERRAIN_TEXTURE_CACHE.get(cacheKey);
 
   // A previous Pixi application may have been unmounted after changing modes.
@@ -2520,17 +2539,18 @@ function PixiArenaRenderer({
       };
 
       const applyAdaptiveResolution = () => {
-        // Changing WebGL resolution during a live fight forces a renderer resize
-        // and causes a visible hitch on integrated GPUs. Weak laptops already
-        // start at their lighter resolution, so adaptive pressure only trims
-        // static/decorative work below; core drone motion never stalls here.
-        if (!config.allowDynamicResolution || !app?.renderer) return;
+        if (!app?.renderer || !(config.lowSpecDesktop || config.weakMobile || config.forcedMobileQuality || config.visualFirstWeakDesktop)) return;
 
+        // Resolution only steps DOWN during this mounted match. Raising it
+        // again causes a renderer resize/stall and was another source of
+        // apparent background blinking on integrated GPUs.
         const requestedTier = Math.max(appliedResolutionTier, adaptiveTier);
         if (requestedTier === appliedResolutionTier) return;
         appliedResolutionTier = requestedTier;
 
-        const ratio = requestedTier === 2 ? 0.68 : requestedTier === 1 ? 0.84 : 1;
+        const ratio = config.visualFirstWeakDesktop
+          ? (requestedTier === 2 ? 0.72 : requestedTier === 1 ? 0.86 : 1)
+          : (requestedTier === 2 ? 0.68 : requestedTier === 1 ? 0.84 : 1);
         const nextResolution = Math.max(0.34, Number((config.resolution * ratio).toFixed(2)));
         if (Math.abs(nextResolution - dynamicResolution) < 0.01) return;
 
@@ -2560,7 +2580,10 @@ function PixiArenaRenderer({
         const tickMs = Math.min(80, Math.max(1, Number(app.ticker.deltaMS || 16.7)));
         frameTimeEma = frameTimeEma * 0.92 + tickMs * 0.08;
 
-        const desiredTier = getStableAdaptiveTier();
+        // Mobile rămâne pe premium permanent: fără downgrade de efecte,
+        // drone, proiectile, terrain sau animații în timpul rundei.
+        // Desktopul păstrează exact algoritmul adaptiv existent.
+        const desiredTier = config.premiumMobile ? 0 : getStableAdaptiveTier();
         if (desiredTier === adaptiveTier) {
           adaptiveCandidateTier = adaptiveTier;
           adaptiveCandidateSince = now;
@@ -2658,27 +2681,19 @@ function PixiArenaRenderer({
           // integrated GPUs before the static layer is built; models/background
           // stay identical while off-screen/decorative pickups stop consuming
           // the frame budget.
-          const staticBudgetCeiling = config.weakDesktopProfile
-            ? (config.lowSpecDesktop ? 42 : 58)
-            : 300;
+          const staticBudgetCeiling = config.visualFirstWeakDesktop
+            ? 58
+            : config.lowSpecDesktop
+              ? 42
+              : 300;
           const baseItemBudget = hasRequestedStaticBudget
             ? clamp(Math.round(requestedStaticBudget), 0, staticBudgetCeiling)
             : config.maxStaticItems;
           const adaptiveItemCap =
             adaptiveTier === 2
-              ? Math.min(
-                  baseItemBudget,
-                  config.weakDesktopProfile
-                    ? (config.lowSpecDesktop ? 30 : 48)
-                    : 48,
-                )
+              ? Math.min(baseItemBudget, config.visualFirstWeakDesktop ? 48 : config.lowSpecDesktop ? 30 : 48)
               : adaptiveTier === 1
-                ? Math.min(
-                    baseItemBudget,
-                    config.weakDesktopProfile
-                      ? (config.lowSpecDesktop ? 38 : 58)
-                      : 78,
-                  )
+                ? Math.min(baseItemBudget, config.visualFirstWeakDesktop ? 70 : config.lowSpecDesktop ? 38 : 78)
                 : baseItemBudget;
           const itemBudget = adaptiveItemCap;
           const orbBudget = Math.floor(itemBudget * 0.70);
@@ -2739,11 +2754,11 @@ function PixiArenaRenderer({
           animateDecor: true,
           preCulled: Boolean(data.zonePreCulled),
         });
-        // Do not shrink the detailed remote-drone pool while a fight is live.
-        // Swapping a moving drone between premium/simple pools was perceived as
-        // input delay on weak laptops. Static items/effects are the adaptive
-        // budget; gameplay-critical transforms remain stable every frame.
-        const fullUnitCap = config.maxPlayers;
+        const fullUnitCap = adaptiveTier === 2
+          ? Math.min(config.maxPlayers, config.visualFirstWeakDesktop ? 3 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
+          : adaptiveTier === 1
+            ? Math.min(config.maxPlayers, config.visualFirstWeakDesktop ? 4 : config.lowSpecDesktop || config.weakMobile ? 3 : 5)
+            : config.maxPlayers;
         const fullRemoteIds = syncUnitPool({
           pool: remotePool,
           source: data.players,
@@ -2794,10 +2809,11 @@ function PixiArenaRenderer({
           animateDecor: animateRemoteDecor,
           preCulled: Boolean(data.zonePreCulled),
         });
-        // Attack drones always stay in their assigned detailed pool. Their
-        // transforms/flight vector are updated every renderer tick; adaptive
-        // pressure must never downgrade them mid-flight.
-        const fullProjectileCap = config.maxProjectiles;
+        const fullProjectileCap = adaptiveTier === 2
+          ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 5 : config.lowSpecDesktop || config.weakMobile ? 2 : 3)
+          : adaptiveTier === 1
+            ? Math.min(config.maxProjectiles, config.visualFirstWeakDesktop ? 8 : config.lowSpecDesktop || config.weakMobile ? 3 : 5)
+            : config.maxProjectiles;
         const fullProjectileIds = syncProjectilePool({
           pool: projectilePool,
           source: data.projectiles,
