@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { io } from "socket.io-client";
 import NormalPvpArena from "../NormalPvpArena/NormalPvpArena";
 import BattleRoyale from "../BattleRoyaleMode/BattleRoyaleMode";
 import ZonePvpArena from "../ZonePvpArena/ZonePvpArena";
 import PixiArenaRenderer from "../PixiArenaRenderer/PixiArenaRenderer";
 import "./Dashboard.css";
+
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 const SKIN_THEMES = {
   cyan: ["#00eaff", "#78f7ff", "#003140", "#ffffff", "rgba(0, 234, 255, 0.78)"],
@@ -103,12 +106,6 @@ const ALL_SKINS = Object.keys(SKIN_THEMES).map((id) => ({
     aura: "Shield Aura",
     projectile: "Attack Drone Skin",
   },
-  stats: [
-    { label: "Control", value: 92 },
-    { label: "Speed", value: id === "cyan" ? 78 : 82 },
-    { label: "Attack", value: id === "cyan" ? 70 : 76 },
-    { label: "Defense", value: id === "cyan" ? 72 : 74 },
-  ],
   colors: getColors(id),
 }));
 
@@ -347,17 +344,75 @@ function DronePreview({ skin = BASIC_DRONE, size = "large", compact = false }) {
   );
 }
 
-function StatBar({ label, value }) {
+
+function createEmptyGameStats() {
+  return {
+    personal: {
+      normalPvp: { bestKills: 0, wins: 0 },
+      battleRoyalePve: { bestKills: 0, wins: 0 },
+      battleRoyalePvp: { bestKills: 0, wins: 0 },
+    },
+    leaderboards: {
+      normalPvp: [],
+      battleRoyalePvp: [],
+    },
+  };
+}
+
+function PlayerRecordCard({ title, bestKills = 0, wins = 0, showWins = true }) {
   return (
-    <div className="drone-stat-row">
-      <span>{label}</span>
-      <div className="drone-stat-track">
-        <i style={{ width: `${value}%` }} />
+    <article className="player-record-card">
+      <span>{title}</span>
+      <div className="player-record-values">
+        <div>
+          <b>{Number(bestKills || 0)}</b>
+          <small>BEST KILLS / MATCH</small>
+        </div>
+        {showWins && (
+          <div>
+            <b>{Number(wins || 0)}</b>
+            <small>MATCH WINS</small>
+          </div>
+        )}
       </div>
-      <b>{value}</b>
-    </div>
+    </article>
   );
 }
+
+function GlobalRecordTable({ title, entries = [], showWins = false }) {
+  return (
+    <article className="global-record-table">
+      <header>
+        <h4>{title}</h4>
+        <span>GLOBAL TOP 10</span>
+      </header>
+
+      <div className={`global-record-head ${showWins ? "with-wins" : ""}`}>
+        <span>#</span>
+        <span>PILOT</span>
+        {showWins && <span>WINS</span>}
+        <span>BEST KILLS</span>
+      </div>
+
+      {entries.length > 0 ? (
+        entries.slice(0, 10).map((entry, index) => (
+          <div
+            key={`${entry.userId || entry.username || "pilot"}-${index}`}
+            className={`global-record-row ${showWins ? "with-wins" : ""}`}
+          >
+            <b>{index + 1}</b>
+            <strong>{entry.username || "Pilot"}</strong>
+            {showWins && <em>{Number(entry.wins || 0)}</em>}
+            <em>{Number(entry.bestKills || 0)}</em>
+          </div>
+        ))
+      ) : (
+        <p className="global-record-empty">Nu exista inca recorduri salvate.</p>
+      )}
+    </article>
+  );
+}
+
 
 function Dashboard({ user, gameMode, onExitToMenu }) {
   const isGuestUser = Boolean(user?.isGuest);
@@ -373,6 +428,9 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
     isGuestUser ? "cyan" : getInitialSelectedDrone(user)
   );
   const [openedPackId, setOpenedPackId] = useState(null);
+  const [gameStats, setGameStats] = useState(() => createEmptyGameStats());
+  const [gameStatsLoading, setGameStatsLoading] = useState(false);
+  const gameStatsSocketRef = useRef(null);
 
   // Switch global de calitate grafica (Normal/Low), aplicat la TOATE
   // modurile de joc (Normal PvP, Battle Royale, Zone PvP, Battle Royale
@@ -411,6 +469,63 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
       setActiveTab("hangar");
     }
   }, [isGuestUser, activeTab]);
+
+  // Records are requested only while the Hangar is visible. The gameplay
+  // sockets remain dedicated to their own high-frequency arena packets.
+  useEffect(() => {
+    if (isGuestUser || screen !== "hangar") {
+      if (isGuestUser) {
+        setGameStats(createEmptyGameStats());
+        setGameStatsLoading(false);
+      }
+      return undefined;
+    }
+
+    let disposed = false;
+    let timeoutId = null;
+
+    setGameStatsLoading(true);
+
+    const socket = io(API_URL, {
+      transports: ["websocket", "polling"],
+      reconnection: true,
+      timeout: 8000,
+    });
+
+    gameStatsSocketRef.current = socket;
+
+    const requestStats = () => {
+      socket.emit("game-stats:get", {
+        userId: user?.userId || user?.id || null,
+      });
+    };
+
+    const applyStats = (payload) => {
+      if (disposed) return;
+      setGameStats(payload && payload.personal ? payload : createEmptyGameStats());
+      setGameStatsLoading(false);
+    };
+
+    socket.on("connect", requestStats);
+    socket.on("game-stats:payload", applyStats);
+    socket.on("game-stats:updated", applyStats);
+
+    timeoutId = window.setTimeout(() => {
+      if (!disposed) setGameStatsLoading(false);
+    }, 4000);
+
+    return () => {
+      disposed = true;
+      if (timeoutId) window.clearTimeout(timeoutId);
+      socket.off("connect", requestStats);
+      socket.off("game-stats:payload", applyStats);
+      socket.off("game-stats:updated", applyStats);
+      socket.disconnect();
+      if (gameStatsSocketRef.current === socket) {
+        gameStatsSocketRef.current = null;
+      }
+    };
+  }, [isGuestUser, screen, user?.id, user?.userId]);
 
   const openedPack = useMemo(
     () => PREMIUM_PACKS.find((pack) => pack.id === openedPackId),
@@ -667,12 +782,53 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
                   ))}
                 </div>
 
-                <div className="stats-card">
-                  {selectedSkin.stats.map((stat) => (
-                    <StatBar key={stat.label} {...stat} />
-                  ))}
-                </div>
               </section>
+
+              {!isGuestUser && (
+                <section className="career-stats-section">
+                  <div className="career-stats-heading">
+                    <div>
+                      <span>PILOT RECORDS</span>
+                      <h3>Combat Records</h3>
+                    </div>
+                    <p>
+                      {gameStatsLoading
+                        ? "Se incarca recordurile..."
+                        : "Recordurile personale si clasamentele globale sunt salvate permanent."}
+                    </p>
+                  </div>
+
+                  <div className="player-record-grid">
+                    <PlayerRecordCard
+                      title="NORMAL PVP"
+                      bestKills={gameStats.personal?.normalPvp?.bestKills}
+                      showWins={false}
+                    />
+                    <PlayerRecordCard
+                      title="BATTLE ROYALE · PVE"
+                      bestKills={gameStats.personal?.battleRoyalePve?.bestKills}
+                      wins={gameStats.personal?.battleRoyalePve?.wins}
+                    />
+                    <PlayerRecordCard
+                      title="BATTLE ROYALE · PVP"
+                      bestKills={gameStats.personal?.battleRoyalePvp?.bestKills}
+                      wins={gameStats.personal?.battleRoyalePvp?.wins}
+                    />
+                  </div>
+
+                  <div className="global-record-grid">
+                    <GlobalRecordTable
+                      title="Normal PvP Records"
+                      entries={gameStats.leaderboards?.normalPvp || []}
+                    />
+                    <GlobalRecordTable
+                      title="Battle Royale PvP Champions"
+                      entries={gameStats.leaderboards?.battleRoyalePvp || []}
+                      showWins
+                    />
+                  </div>
+                </section>
+              )}
             </>
           )}
 

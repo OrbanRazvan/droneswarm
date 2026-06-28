@@ -11,9 +11,9 @@ export declare class MatchResultController {
         id: number;
         username: string;
         createdAt: Date;
+        userId: number | null;
         totalCollected: number;
         kills: number;
-        userId: number | null;
         gameMode: string;
         placement: number;
         totalPlayers: number;

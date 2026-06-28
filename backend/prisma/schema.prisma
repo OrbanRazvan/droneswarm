@@ -86,3 +86,25 @@ model MatchResult {
   @@index([userId])
   @@map("MatchResult")
 }
+
+// =========================================================
+// Statistici persistente pentru Dashboard.
+// O linie per utilizator + mod; bestKills pastreaza recordul unei singure
+// sesiuni, iar wins pastreaza numarul total de meciuri castigate.
+// =========================================================
+model GameModeStat {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  username  String
+  gameMode  String
+  bestKills Int      @default(0)
+  wins      Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, gameMode])
+  @@index([gameMode, bestKills])
+  @@index([gameMode, wins])
+  @@map("GameModeStat")
+}
+

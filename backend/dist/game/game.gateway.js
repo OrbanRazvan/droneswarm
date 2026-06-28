@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.GameGateway = void 0;
 const websockets_1 = require("@nestjs/websockets");
 const socket_io_1 = require("socket.io");
+const client_1 = require("@prisma/client");
 const WORLD_WIDTH = 15000;
 const WORLD_HEIGHT = 15000;
 const ROOM_MAX_PLAYERS = 60;
@@ -204,6 +205,10 @@ const CORE_TYPES = [
     "vampire",
     "emp",
 ];
+const GAME_STATS_MODE_NORMAL_PVP = "normal-pvp";
+const GAME_STATS_MODE_BATTLE_ROYALE_PVE = "battle-royale-pve";
+const GAME_STATS_MODE_BATTLE_ROYALE_PVP = "battle-royale-pvp";
+const GAME_STATS_LEADERBOARD_LIMIT = 10;
 function normalizeSkin(skin) {
     const clean = String(skin || "cyan")
         .trim()
@@ -226,8 +231,231 @@ let GameGateway = class GameGateway {
         this.zonePvpSocketRoom = new Map();
         this.zonePvpResumeSeats = new Map();
         this.zonePvpSocketResumeToken = new Map();
+        this.prisma = new client_1.PrismaClient();
         this.loop = null;
         this.lastLoopAt = Date.now();
+    }
+    normalizeGameStatsMode(value) {
+        const mode = String(value || "").trim().toLowerCase();
+        if (mode === GAME_STATS_MODE_NORMAL_PVP ||
+            mode === GAME_STATS_MODE_BATTLE_ROYALE_PVE ||
+            mode === GAME_STATS_MODE_BATTLE_ROYALE_PVP) {
+            return mode;
+        }
+        return null;
+    }
+    normalizeGameStatsUserId(value) {
+        const userId = Number(value);
+        return Number.isSafeInteger(userId) && userId > 0 ? userId : null;
+    }
+    getGameStatsDisplayName(user, fallback = "Player") {
+        const fromUsername = String(user?.username || "").trim();
+        if (fromUsername)
+            return fromUsername.slice(0, 18);
+        const fromFirstName = String(user?.firstName || "").trim();
+        if (fromFirstName)
+            return fromFirstName.slice(0, 18);
+        const emailName = String(user?.email || "").split("@")[0].trim();
+        return (emailName || fallback).slice(0, 18);
+    }
+    emptyGameModeStat(gameMode) {
+        return {
+            gameMode,
+            bestKills: 0,
+            wins: 0,
+        };
+    }
+    async persistGameModeStat(input) {
+        const userId = this.normalizeGameStatsUserId(input?.userId);
+        const gameMode = this.normalizeGameStatsMode(input?.gameMode);
+        if (!userId || !gameMode)
+            return null;
+        const kills = Math.max(0, Math.floor(Number(input?.kills || 0)));
+        const won = Boolean(input?.won);
+        const db = this.prisma;
+        try {
+            const user = await db.gameUser.findUnique({
+                where: { id: userId },
+                select: {
+                    id: true,
+                    username: true,
+                    firstName: true,
+                    email: true,
+                },
+            });
+            if (!user)
+                return null;
+            const username = this.getGameStatsDisplayName(user);
+            const existing = await db.gameModeStat.findUnique({
+                where: {
+                    userId_gameMode: {
+                        userId,
+                        gameMode,
+                    },
+                },
+            });
+            if (!existing) {
+                return await db.gameModeStat.create({
+                    data: {
+                        userId,
+                        username,
+                        gameMode,
+                        bestKills: kills,
+                        wins: won ? 1 : 0,
+                    },
+                });
+            }
+            return await db.gameModeStat.update({
+                where: { id: existing.id },
+                data: {
+                    username,
+                    bestKills: Math.max(Number(existing.bestKills || 0), kills),
+                    wins: won ? { increment: 1 } : undefined,
+                },
+            });
+        }
+        catch (error) {
+            console.warn("[game-stats] persistence skipped", error);
+            return null;
+        }
+    }
+    async getGameStatsPayload(rawUserId) {
+        const userId = this.normalizeGameStatsUserId(rawUserId);
+        const empty = {
+            normalPvp: this.emptyGameModeStat(GAME_STATS_MODE_NORMAL_PVP),
+            battleRoyalePve: this.emptyGameModeStat(GAME_STATS_MODE_BATTLE_ROYALE_PVE),
+            battleRoyalePvp: this.emptyGameModeStat(GAME_STATS_MODE_BATTLE_ROYALE_PVP),
+        };
+        if (!userId) {
+            return {
+                personal: empty,
+                leaderboards: {
+                    normalPvp: [],
+                    battleRoyalePvp: [],
+                },
+            };
+        }
+        const db = this.prisma;
+        try {
+            const [personalRows, normalPvp, battleRoyalePvp] = await Promise.all([
+                db.gameModeStat.findMany({
+                    where: { userId },
+                    select: {
+                        gameMode: true,
+                        bestKills: true,
+                        wins: true,
+                    },
+                }),
+                db.gameModeStat.findMany({
+                    where: { gameMode: GAME_STATS_MODE_NORMAL_PVP },
+                    orderBy: [
+                        { bestKills: "desc" },
+                        { updatedAt: "asc" },
+                    ],
+                    take: GAME_STATS_LEADERBOARD_LIMIT,
+                    select: {
+                        userId: true,
+                        username: true,
+                        bestKills: true,
+                        wins: true,
+                    },
+                }),
+                db.gameModeStat.findMany({
+                    where: { gameMode: GAME_STATS_MODE_BATTLE_ROYALE_PVP },
+                    orderBy: [
+                        { wins: "desc" },
+                        { bestKills: "desc" },
+                        { updatedAt: "asc" },
+                    ],
+                    take: GAME_STATS_LEADERBOARD_LIMIT,
+                    select: {
+                        userId: true,
+                        username: true,
+                        bestKills: true,
+                        wins: true,
+                    },
+                }),
+            ]);
+            for (const row of personalRows || []) {
+                const stat = {
+                    gameMode: row.gameMode,
+                    bestKills: Number(row.bestKills || 0),
+                    wins: Number(row.wins || 0),
+                };
+                if (row.gameMode === GAME_STATS_MODE_NORMAL_PVP)
+                    empty.normalPvp = stat;
+                if (row.gameMode === GAME_STATS_MODE_BATTLE_ROYALE_PVE)
+                    empty.battleRoyalePve = stat;
+                if (row.gameMode === GAME_STATS_MODE_BATTLE_ROYALE_PVP)
+                    empty.battleRoyalePvp = stat;
+            }
+            return {
+                personal: empty,
+                leaderboards: {
+                    normalPvp: normalPvp || [],
+                    battleRoyalePvp: battleRoyalePvp || [],
+                },
+            };
+        }
+        catch (error) {
+            console.warn("[game-stats] read skipped", error);
+            return {
+                personal: empty,
+                leaderboards: {
+                    normalPvp: [],
+                    battleRoyalePvp: [],
+                },
+            };
+        }
+    }
+    async emitGameStatsPayload(client, userId, event = "game-stats:payload") {
+        const payload = await this.getGameStatsPayload(userId);
+        client.emit(event, payload);
+        return payload;
+    }
+    recordNormalPvpBest(player) {
+        if (!player || player?.isGuest || player?.isBot || player?.normalStatsRecorded)
+            return;
+        player.normalStatsRecorded = true;
+        void this.persistGameModeStat({
+            userId: player.userId,
+            gameMode: GAME_STATS_MODE_NORMAL_PVP,
+            kills: player.kills,
+            won: false,
+        });
+    }
+    recordZonePvpParticipant(player, winnerId = null) {
+        if (!player || player?.isGuest || player?.isBot || player?.zoneStatsRecorded)
+            return;
+        player.zoneStatsRecorded = true;
+        void this.persistGameModeStat({
+            userId: player.userId,
+            gameMode: GAME_STATS_MODE_BATTLE_ROYALE_PVP,
+            kills: player.kills,
+            won: winnerId !== null && String(player.id) === String(winnerId),
+        });
+    }
+    recordZonePvpMatch(room, winner) {
+        if (!room || room?.zoneStatsRecorded)
+            return;
+        room.zoneStatsRecorded = true;
+        for (const player of room.players?.values?.() || []) {
+            this.recordZonePvpParticipant(player, winner?.id || null);
+        }
+    }
+    async handleGameStatsGet(client, data) {
+        await this.emitGameStatsPayload(client, data?.userId, "game-stats:payload");
+    }
+    async handleGameStatsRecordPve(client, data) {
+        const stat = await this.persistGameModeStat({
+            userId: data?.userId,
+            gameMode: GAME_STATS_MODE_BATTLE_ROYALE_PVE,
+            kills: data?.kills,
+            won: data?.won,
+        });
+        if (stat) {
+            await this.emitGameStatsPayload(client, data?.userId, "game-stats:updated");
+        }
     }
     selectMostPopulatedJoinableRoom(rooms, canJoin) {
         let selected = null;
@@ -2224,11 +2452,7 @@ let GameGateway = class GameGateway {
                 if (player.energy <= 0) {
                     player.energy = 0;
                     if (!room?.zonePvpMode) {
-                        player.hp = 0;
-                        player.alive = false;
-                        player.input = {};
-                        player.killedById = null;
-                        player.spectatorTargetId = null;
+                        this.eliminatePlayer(room, player, null, now, "energy-empty");
                         continue;
                     }
                 }
@@ -2389,6 +2613,9 @@ let GameGateway = class GameGateway {
         const spectatorTarget = this.getStableSpectatorTarget(room, victim, validKiller);
         victim.spectatorTargetId = spectatorTarget?.id || null;
         victim.lastSeenAt = now;
+        if (wasAlive && room?.normalMode) {
+            this.recordNormalPvpBest(victim);
+        }
         if (wasAlive) {
             const socket = this.server.sockets.sockets.get(victim.id);
             if (socket) {
@@ -3335,6 +3562,7 @@ let GameGateway = class GameGateway {
             player.shieldActive = false;
             player.shieldUntil = 0;
         }
+        this.recordZonePvpMatch(room, winner);
         this.broadcastZonePvpRoomState(room, now, true);
     }
     closeZonePvpRoom(room, now = Date.now(), reason = "finished") {
@@ -3576,6 +3804,8 @@ let GameGateway = class GameGateway {
             return;
         const room = this.normalRooms.get(roomId);
         if (room) {
+            const player = room.players.get(socketId);
+            this.recordNormalPvpBest(player);
             room.players.delete(socketId);
             this.server.sockets.sockets.get(socketId)?.leave(roomId);
             this.markRoomEmptyIfNeeded(room);
@@ -4043,6 +4273,9 @@ let GameGateway = class GameGateway {
             }
             if (resumeToken)
                 this.zonePvpResumeSeats.delete(resumeToken);
+            if (room.status === "playing") {
+                this.recordZonePvpParticipant(player, null);
+            }
             room.players.delete(socketId);
             room.projectiles = (room.projectiles || []).filter((projectile) => String(projectile?.ownerId || "") !== String(socketId));
             room.projectileSpatialIndex = null;
@@ -4735,6 +4968,22 @@ __decorate([
     (0, websockets_1.WebSocketServer)(),
     __metadata("design:type", socket_io_1.Server)
 ], GameGateway.prototype, "server", void 0);
+__decorate([
+    (0, websockets_1.SubscribeMessage)("game-stats:get"),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", Promise)
+], GameGateway.prototype, "handleGameStatsGet", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)("game-stats:record-pve"),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", Promise)
+], GameGateway.prototype, "handleGameStatsRecordPve", null);
 __decorate([
     (0, websockets_1.SubscribeMessage)("pvp:join"),
     __param(0, (0, websockets_1.ConnectedSocket)()),

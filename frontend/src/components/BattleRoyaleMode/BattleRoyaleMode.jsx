@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { io } from "socket.io-client";
 import MiniMap from "../MiniMap/MiniMap";
 import PixiArenaRenderer from "../PixiArenaRenderer/PixiArenaRenderer";
 import "../GameArena/GameArena.css";
@@ -1775,6 +1776,13 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
   });
   const shieldTimeoutRef = useRef(null);
   const matchSavedRef = useRef(false);
+  // The PvE simulation is local, so this id lets the browser report exactly
+  // one final record for the current round to the shared stats gateway.
+  const statsMatchIdRef = useRef(
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `pve-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
   const matchStartedAtRef = useRef(Date.now());
   const battleStartTimeRef = useRef(Date.now());
 
@@ -2179,7 +2187,13 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
       0,
       Math.round((Date.now() - matchStartedAtRef.current) / 1000)
     );
+    const kills = Math.max(0, Number(summary?.kills ?? p?.kills ?? 0));
+    const won = Boolean(
+      Number(summary?.placement || 0) === 1 &&
+      String(summary?.winner || "") === String(p?.username || displayName)
+    );
 
+    // Existing match-history endpoint remains untouched.
     try {
       await fetch(`${API_URL}/matches/battle-royale`, {
         method: "POST",
@@ -2187,7 +2201,7 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
         body: JSON.stringify({
           userId: user?.isGuest ? null : user?.id ?? null,
           username: displayName,
-          kills: summary?.kills ?? p?.kills ?? 0,
+          kills,
           totalCollected: p?.totalCollected ?? 0,
           placement: summary?.placement ?? 1,
           totalPlayers: summary?.totalPlayers ?? BOT_COUNT + 1,
@@ -2196,7 +2210,38 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
         }),
       });
     } catch {
-      // Nu blocam ecranul de final daca reteaua/serverul nu raspunde.
+      // Nu blocam ecranul de final daca endpoint-ul vechi nu raspunde.
+    }
+
+    // The Hangar records use the same Socket.IO gateway as Normal/Zone PvP.
+    // It is fire-and-forget, does not affect the match UI and auto-closes.
+    try {
+      const statsSocket = io(API_URL, {
+        transports: ["websocket", "polling"],
+        reconnection: false,
+        timeout: 5000,
+        forceNew: true,
+      });
+
+      let sent = false;
+      const sendStats = () => {
+        if (sent) return;
+        sent = true;
+
+        statsSocket.emit("game-stats:record-pve", {
+          matchId: statsMatchIdRef.current,
+          userId: user?.userId || user?.id || null,
+          kills,
+          won,
+        });
+
+        window.setTimeout(() => statsSocket.disconnect(), 700);
+      };
+
+      statsSocket.on("connect", sendStats);
+      window.setTimeout(() => statsSocket.disconnect(), 5200);
+    } catch {
+      // Record persistence is best-effort; PvE gameplay remains fully local.
     }
   };
 
@@ -2367,6 +2412,10 @@ function BattleRoyale({ user, onExitToMenu, graphicsQuality = "normal" }) {
     setBattleCountdown(Math.ceil(BATTLE_PREPARE_DURATION / 1000));
     setBattleBeginFlash(false);
     matchSavedRef.current = false;
+    statsMatchIdRef.current =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `pve-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     lastZoneDamageRef.current = 0;
     lastBotEnergyDrainRef.current = Date.now();
     safeZoneRadiusRef.current = ZONE_START_RADIUS;

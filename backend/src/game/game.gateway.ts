@@ -6,6 +6,7 @@ import {
   WebSocketServer,
 } from "@nestjs/websockets";
 import { Server, Socket } from "socket.io";
+import { PrismaClient } from "@prisma/client";
 
 const WORLD_WIDTH = 15000;
 const WORLD_HEIGHT = 15000;
@@ -281,6 +282,13 @@ const CORE_TYPES = [
   "vampire",
   "emp",
 ];
+
+// Persisted Dashboard records. These string values are deliberately stable:
+// they are stored in PostgreSQL and are also used by the Hangar UI.
+const GAME_STATS_MODE_NORMAL_PVP = "normal-pvp";
+const GAME_STATS_MODE_BATTLE_ROYALE_PVE = "battle-royale-pve";
+const GAME_STATS_MODE_BATTLE_ROYALE_PVP = "battle-royale-pvp";
+const GAME_STATS_LEADERBOARD_LIMIT = 10;
 function normalizeSkin(skin) {
   const clean = String(skin || "cyan")
     .trim()
@@ -331,10 +339,279 @@ export class GameGateway {
   private zonePvpSocketRoom = new Map<string, string>();
   private zonePvpResumeSeats = new Map<string, { roomId: string; playerId: string }>();
   private zonePvpSocketResumeToken = new Map<string, string>();
+  // Stats are independent from the simulation loop. Prisma opens a connection
+  // only when a record/leaderboard operation is requested.
+  private readonly prisma = new PrismaClient();
   private loop: NodeJS.Timeout | null = null;
   private lastLoopAt = Date.now();
 
   constructor() {}
+
+  // -------------------------------------------------------------------------
+  // Persistent player records / global leaderboards.
+  // GameUser remains the source of identity; GameModeStat only aggregates
+  // public records, so a Dashboard lookup never touches live room state.
+  // -------------------------------------------------------------------------
+  private normalizeGameStatsMode(value: any) {
+    const mode = String(value || "").trim().toLowerCase();
+    if (
+      mode === GAME_STATS_MODE_NORMAL_PVP ||
+      mode === GAME_STATS_MODE_BATTLE_ROYALE_PVE ||
+      mode === GAME_STATS_MODE_BATTLE_ROYALE_PVP
+    ) {
+      return mode;
+    }
+    return null;
+  }
+
+  private normalizeGameStatsUserId(value: any) {
+    const userId = Number(value);
+    return Number.isSafeInteger(userId) && userId > 0 ? userId : null;
+  }
+
+  private getGameStatsDisplayName(user: any, fallback = "Player") {
+    const fromUsername = String(user?.username || "").trim();
+    if (fromUsername) return fromUsername.slice(0, 18);
+
+    const fromFirstName = String(user?.firstName || "").trim();
+    if (fromFirstName) return fromFirstName.slice(0, 18);
+
+    const emailName = String(user?.email || "").split("@")[0].trim();
+    return (emailName || fallback).slice(0, 18);
+  }
+
+  private emptyGameModeStat(gameMode: string) {
+    return {
+      gameMode,
+      bestKills: 0,
+      wins: 0,
+    };
+  }
+
+  private async persistGameModeStat(input: {
+    userId: any;
+    gameMode: any;
+    kills?: any;
+    won?: any;
+  }) {
+    const userId = this.normalizeGameStatsUserId(input?.userId);
+    const gameMode = this.normalizeGameStatsMode(input?.gameMode);
+    if (!userId || !gameMode) return null;
+
+    const kills = Math.max(0, Math.floor(Number(input?.kills || 0)));
+    const won = Boolean(input?.won);
+    const db: any = this.prisma as any;
+
+    try {
+      const user = await db.gameUser.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          username: true,
+          firstName: true,
+          email: true,
+        },
+      });
+
+      // Guests and stale/deleted browser sessions never create public records.
+      if (!user) return null;
+
+      const username = this.getGameStatsDisplayName(user);
+      const existing = await db.gameModeStat.findUnique({
+        where: {
+          userId_gameMode: {
+            userId,
+            gameMode,
+          },
+        },
+      });
+
+      if (!existing) {
+        return await db.gameModeStat.create({
+          data: {
+            userId,
+            username,
+            gameMode,
+            bestKills: kills,
+            wins: won ? 1 : 0,
+          },
+        });
+      }
+
+      return await db.gameModeStat.update({
+        where: { id: existing.id },
+        data: {
+          username,
+          bestKills: Math.max(Number(existing.bestKills || 0), kills),
+          wins: won ? { increment: 1 } : undefined,
+        },
+      });
+    } catch (error) {
+      // Stats must never interrupt an active arena if a migration has not yet
+      // been applied or PostgreSQL is temporarily unavailable.
+      console.warn("[game-stats] persistence skipped", error);
+      return null;
+    }
+  }
+
+  private async getGameStatsPayload(rawUserId: any) {
+    const userId = this.normalizeGameStatsUserId(rawUserId);
+    const empty = {
+      normalPvp: this.emptyGameModeStat(GAME_STATS_MODE_NORMAL_PVP),
+      battleRoyalePve: this.emptyGameModeStat(GAME_STATS_MODE_BATTLE_ROYALE_PVE),
+      battleRoyalePvp: this.emptyGameModeStat(GAME_STATS_MODE_BATTLE_ROYALE_PVP),
+    };
+
+    if (!userId) {
+      return {
+        personal: empty,
+        leaderboards: {
+          normalPvp: [],
+          battleRoyalePvp: [],
+        },
+      };
+    }
+
+    const db: any = this.prisma as any;
+
+    try {
+      const [personalRows, normalPvp, battleRoyalePvp] = await Promise.all([
+        db.gameModeStat.findMany({
+          where: { userId },
+          select: {
+            gameMode: true,
+            bestKills: true,
+            wins: true,
+          },
+        }),
+        db.gameModeStat.findMany({
+          where: { gameMode: GAME_STATS_MODE_NORMAL_PVP },
+          orderBy: [
+            { bestKills: "desc" },
+            { updatedAt: "asc" },
+          ],
+          take: GAME_STATS_LEADERBOARD_LIMIT,
+          select: {
+            userId: true,
+            username: true,
+            bestKills: true,
+            wins: true,
+          },
+        }),
+        db.gameModeStat.findMany({
+          where: { gameMode: GAME_STATS_MODE_BATTLE_ROYALE_PVP },
+          orderBy: [
+            { wins: "desc" },
+            { bestKills: "desc" },
+            { updatedAt: "asc" },
+          ],
+          take: GAME_STATS_LEADERBOARD_LIMIT,
+          select: {
+            userId: true,
+            username: true,
+            bestKills: true,
+            wins: true,
+          },
+        }),
+      ]);
+
+      for (const row of personalRows || []) {
+        const stat = {
+          gameMode: row.gameMode,
+          bestKills: Number(row.bestKills || 0),
+          wins: Number(row.wins || 0),
+        };
+
+        if (row.gameMode === GAME_STATS_MODE_NORMAL_PVP) empty.normalPvp = stat;
+        if (row.gameMode === GAME_STATS_MODE_BATTLE_ROYALE_PVE) empty.battleRoyalePve = stat;
+        if (row.gameMode === GAME_STATS_MODE_BATTLE_ROYALE_PVP) empty.battleRoyalePvp = stat;
+      }
+
+      return {
+        personal: empty,
+        leaderboards: {
+          normalPvp: normalPvp || [],
+          battleRoyalePvp: battleRoyalePvp || [],
+        },
+      };
+    } catch (error) {
+      console.warn("[game-stats] read skipped", error);
+      return {
+        personal: empty,
+        leaderboards: {
+          normalPvp: [],
+          battleRoyalePvp: [],
+        },
+      };
+    }
+  }
+
+  private async emitGameStatsPayload(client: Socket, userId: any, event = "game-stats:payload") {
+    const payload = await this.getGameStatsPayload(userId);
+    client.emit(event, payload);
+    return payload;
+  }
+
+  private recordNormalPvpBest(player: any) {
+    if (!player || player?.isGuest || player?.isBot || player?.normalStatsRecorded) return;
+    player.normalStatsRecorded = true;
+
+    void this.persistGameModeStat({
+      userId: player.userId,
+      gameMode: GAME_STATS_MODE_NORMAL_PVP,
+      kills: player.kills,
+      won: false,
+    });
+  }
+
+  private recordZonePvpParticipant(player: any, winnerId: any = null) {
+    if (!player || player?.isGuest || player?.isBot || player?.zoneStatsRecorded) return;
+    player.zoneStatsRecorded = true;
+
+    void this.persistGameModeStat({
+      userId: player.userId,
+      gameMode: GAME_STATS_MODE_BATTLE_ROYALE_PVP,
+      kills: player.kills,
+      won: winnerId !== null && String(player.id) === String(winnerId),
+    });
+  }
+
+  private recordZonePvpMatch(room: any, winner: any) {
+    if (!room || room?.zoneStatsRecorded) return;
+    room.zoneStatsRecorded = true;
+
+    for (const player of room.players?.values?.() || []) {
+      this.recordZonePvpParticipant(player, winner?.id || null);
+    }
+  }
+
+  @SubscribeMessage("game-stats:get")
+  async handleGameStatsGet(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: any,
+  ) {
+    await this.emitGameStatsPayload(client, data?.userId, "game-stats:payload");
+  }
+
+  // Battle Royale - PvE is simulated locally in the browser, therefore it
+  // reports its final summary here. PvP/Normal records are written directly
+  // from the authoritative server loop and never rely on this client event.
+  @SubscribeMessage("game-stats:record-pve")
+  async handleGameStatsRecordPve(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: any,
+  ) {
+    const stat = await this.persistGameModeStat({
+      userId: data?.userId,
+      gameMode: GAME_STATS_MODE_BATTLE_ROYALE_PVE,
+      kills: data?.kills,
+      won: data?.won,
+    });
+
+    if (stat) {
+      await this.emitGameStatsPayload(client, data?.userId, "game-stats:updated");
+    }
+  }
 
   /**
    * Keeps matchmaking dense: new players join the busiest compatible room
@@ -2922,11 +3199,7 @@ export class GameGateway {
           // clamp Zone players at zero until they collect an energy cell.
           player.energy = 0;
           if (!room?.zonePvpMode) {
-            player.hp = 0;
-            player.alive = false;
-            player.input = {};
-            player.killedById = null;
-            player.spectatorTargetId = null;
+            this.eliminatePlayer(room, player, null, now, "energy-empty");
             continue;
           }
         }
@@ -3154,6 +3427,12 @@ export class GameGateway {
     // Dead players do not emit input any more. Keep their session alive for
     // spectating instead of treating the lack of input as a disconnect.
     victim.lastSeenAt = now;
+
+    if (wasAlive && room?.normalMode) {
+      // Normal PvP has no final room winner; the personal record is committed
+      // the moment this real player is eliminated.
+      this.recordNormalPvpBest(victim);
+    }
 
     if (wasAlive) {
       const socket = this.server.sockets.sockets.get(victim.id);
@@ -4339,6 +4618,10 @@ export class GameGateway {
       player.shieldUntil = 0;
     }
 
+    // Save every real participant's best kill score; only the actual winner
+    // receives a win. Bots and guests are never persisted.
+    this.recordZonePvpMatch(room, winner);
+
     this.broadcastZonePvpRoomState(room, now, true);
   }
 
@@ -4643,6 +4926,10 @@ export class GameGateway {
 
     const room = this.normalRooms.get(roomId);
     if (room) {
+      const player = room.players.get(socketId);
+      // Preserve the personal Normal PvP record even when the player exits
+      // before the spectator screen closes.
+      this.recordNormalPvpBest(player);
       room.players.delete(socketId);
       this.server.sockets.sockets.get(socketId)?.leave(roomId);
       this.markRoomEmptyIfNeeded(room);
@@ -5328,6 +5615,12 @@ export class GameGateway {
       }
 
       if (resumeToken) this.zonePvpResumeSeats.delete(resumeToken);
+
+      // A voluntary departure cannot become a win, but its personal best-kill
+      // result from this round must still be retained.
+      if (room.status === "playing") {
+        this.recordZonePvpParticipant(player, null);
+      }
 
       // An explicit EXIT TO MENU is authoritative: remove the main drone,
       // every active attack drone it owns and all stale collision links now.
