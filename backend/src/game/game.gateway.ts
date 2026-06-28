@@ -142,13 +142,6 @@ const NORMAL_STATE_INTERVAL_MS = 33; // 30 Hz in small PvP rooms
 const NORMAL_STATE_INTERVAL_SOLO_MS = 33; // 30 Hz authoritative snapshots; local prediction remains 60 Hz
 const NORMAL_STATE_INTERVAL_CROWDED_MS = 33; // 30 Hz at 12+ players
 const NORMAL_STATE_INTERVAL_HEAVY_MS = 50; // 20 Hz at 28+ players
-// Normal PvP now mirrors Zone's split replication: compact transforms arrive
-// independently from HUD, loot and minimap state, so remote drones remain
-// smooth even in heavy rooms.
-const NORMAL_TRANSFORM_INTERVAL_MS = 20;
-const NORMAL_TRANSFORM_PLAYER_LIMIT = 60;
-const NORMAL_TRANSFORM_PROJECTILE_LIMIT = 48;
-const NORMAL_TRANSFORM_RANGE_PADDING = 820;
 const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
 const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
 // Zone PvP has two lanes. Movement is a small latest-wins JSON packet at 30 Hz;
@@ -3143,17 +3136,6 @@ export class GameGateway {
           this.broadcastNormalRoomState(room, now);
         }
 
-        // Keep movement out of the larger HUD/loot packet. It is volatile and
-        // latest-wins by design, therefore it cannot build a TCP queue in
-        // front of remote drones or attack drones.
-        if (
-          !room.lastNormalTransformBroadcastAt ||
-          now - room.lastNormalTransformBroadcastAt >= NORMAL_TRANSFORM_INTERVAL_MS
-        ) {
-          room.lastNormalTransformBroadcastAt = now;
-          this.broadcastNormalPvpTransforms(room, now);
-        }
-
         this.cleanupNormalRoom(room, now);
       }
 
@@ -5201,95 +5183,6 @@ export class GameGateway {
         NORMAL_WORLD_HEIGHT - PLAYER_RADIUS,
       ),
     };
-  }
-
-  private broadcastNormalPvpTransforms(room: any, now: number) {
-    if (!room?.normalMode || room.status !== "playing") return;
-
-    const units = [...room.players.values()];
-    const unitSpatialIndex = this.buildSpatialIndex(units);
-    const sequence = Number(room.normalTransformSequence || 0) + 1;
-    room.normalTransformSequence = sequence;
-
-    for (const viewer of units) {
-      const socket = this.server.sockets.sockets.get(viewer.id);
-      if (!socket?.connected) continue;
-
-      const spectatorTarget = viewer.alive === false
-        ? this.getStableSpectatorTarget(room, viewer)
-        : null;
-      const viewAnchor = spectatorTarget || viewer;
-      const range = viewer.alive === false
-        ? VIEW_DISTANCE + 1700
-        : VIEW_DISTANCE + NORMAL_TRANSFORM_RANGE_PADDING;
-
-      const nearbyUnits = this.querySpatialIndex(
-        unitSpatialIndex,
-        viewAnchor.x,
-        viewAnchor.y,
-        range,
-      ).filter(
-        (other: any) =>
-          other.id !== viewer.id &&
-          (viewer.alive !== false || other.alive !== false),
-      );
-
-      const playerRows = this.filterNear(
-        viewAnchor,
-        nearbyUnits,
-        range,
-        NORMAL_TRANSFORM_PLAYER_LIMIT,
-      ).map((unit: any) => {
-        const flags =
-          (unit.isMoving ? 1 : 0) |
-          (unit.input?.attacking ? 2 : 0) |
-          (unit.shieldActive ? 4 : 0) |
-          (unit.alive !== false ? 8 : 0) |
-          (unit.isBot ? 16 : 0);
-        return [
-          String(unit.id),
-          Math.round(Number(unit.x || 0) * 10) / 10,
-          Math.round(Number(unit.y || 0) * 10) / 10,
-          Math.round(Number(unit.velocityX || 0) * 10) / 10,
-          Math.round(Number(unit.velocityY || 0) * 10) / 10,
-          Math.round(Number(unit.moveAngle || 0) * 10000) / 10000,
-          flags,
-          Math.max(0, Math.min(MAX_DRONES, Number(unit.drones || 0))),
-          normalizeSkin(unit.skin || "cyan"),
-        ];
-      });
-
-      const projectileRows = this.filterNear(
-        viewAnchor,
-        room.projectiles || [],
-        range + 460,
-        NORMAL_TRANSFORM_PROJECTILE_LIMIT,
-      ).map((projectile: any) => {
-        const flags =
-          (Number(projectile.pierceLeft || 1) > 1 ? 1 : 0) |
-          (projectile.shieldBreaker ? 2 : 0) |
-          (projectile.piercesShield ? 4 : 0);
-        return [
-          String(projectile.id),
-          String(projectile.ownerId || ""),
-          Math.round(Number(projectile.x || 0) * 10) / 10,
-          Math.round(Number(projectile.y || 0) * 10) / 10,
-          Math.round(Number(projectile.vx || 0) * 10) / 10,
-          Math.round(Number(projectile.vy || 0) * 10) / 10,
-          Math.round(Number(projectile.angle || 0) * 10000) / 10000,
-          flags,
-          Number(projectile.createdAt || now),
-          normalizeSkin(projectile.skin || "cyan"),
-        ];
-      });
-
-      socket.volatile.compress(false).emit("normal-pvp:movement", {
-        t: now,
-        s: sequence,
-        p: playerRows,
-        q: projectileRows,
-      });
-    }
   }
 
   broadcastNormalRoomState(room, now) {

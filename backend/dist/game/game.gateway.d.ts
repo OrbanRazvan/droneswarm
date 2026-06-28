@@ -234,7 +234,6 @@ export declare class GameGateway {
         x: number;
         y: number;
     };
-    private broadcastNormalPvpTransforms;
     broadcastNormalRoomState(room: any, now: any): void;
     findOrCreateBattleRoyaleOnlineRoom(): any;
     getBattleRoyaleOnlineRoomBySocket(socketId: any): any;
