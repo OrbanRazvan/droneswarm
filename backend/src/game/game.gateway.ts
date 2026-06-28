@@ -185,6 +185,12 @@ const NORMAL_CROWDED_ORB_TARGET = 24;
 const NORMAL_CROWDED_ORB_ADD_LIMIT = 12;
 const NORMAL_CROWDED_ORB_EXTRA_CAP = 30;
 
+// Slow laptops can occasionally delay a browser timer for a few hundred
+// milliseconds while still holding a direction. Keep only Normal/Zone's last
+// validated input alive a little longer; a real STOP packet still clears it
+// immediately, so this is transport-jitter protection, not client authority.
+const PVP_REMOTE_INPUT_GRACE_MS = 520;
+
 // Spectator lifecycle: a dead player remains in the room and follows the
 // player who eliminated them. This is intentionally independent from input
 // freshness so spectators are never removed just because they no longer send
@@ -3350,7 +3356,14 @@ export class GameGateway {
       // Human input is latest-wins and expires quickly after a lost STOP packet.
       // Bots keep their held vector until the next tactical replan (up to 320 ms),
       // otherwise they visibly pause before every AI decision.
-      const inputFresh = player.isBot || !player.lastInputReceivedAt || now - player.lastInputReceivedAt <= 280;
+      const inputGraceMs =
+        room?.normalMode || room?.zonePvpMode
+          ? PVP_REMOTE_INPUT_GRACE_MS
+          : 280;
+      const inputFresh =
+        player.isBot ||
+        !player.lastInputReceivedAt ||
+        now - player.lastInputReceivedAt <= inputGraceMs;
       if (!inputFresh) {
         player.input = {};
       }

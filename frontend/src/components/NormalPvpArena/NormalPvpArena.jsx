@@ -60,7 +60,11 @@ const MOBILE_RENDER_LIMITS = Object.freeze({
 const REMOTE_SMOOTHING = 24;
 const REMOTE_PREDICTION = 1.0;
 const REMOTE_HARD_SNAP_DISTANCE = 360;
-const REMOTE_MAX_EXTRAPOLATE_MS = 80;
+const REMOTE_MAX_EXTRAPOLATE_MS = 180;
+// Normal PvP has one full-state lane rather than Zone's compact tuple lane.
+// A short presentation lead lets a good PC render remote players continuously
+// even when the sender's weak browser delayed one input timer.
+const REMOTE_PRESENTATION_LEAD_MS = 34;
 
 const PROJECTILE_SMOOTHING = 18;
 const PROJECTILE_FRAME_SCALE = 60;
@@ -88,7 +92,7 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 // latest input. It cuts mobile/network pressure roughly in half vs 60 Hz.
 const INPUT_SEND_INTERVAL_MS = 20;
 const INPUT_HEARTBEAT_MS = 240;
-const SNAPSHOT_INTERPOLATION_DELAY_MS = 70;
+const SNAPSHOT_INTERPOLATION_DELAY_MS = 36;
 const SNAPSHOT_BUFFER_TTL_MS = 520;
 
 // Keep PvP desktop framing exactly locked to BattleRoyaleMode.
@@ -1166,12 +1170,58 @@ function reconcileHeldInputUnit(local, server, now = performance.now(), lastLoca
   };
 }
 
+function getRemoteVelocity(snapshot) {
+  const fallbackSpeed =
+    CLIENT_SPEED *
+    NORMAL_BASE_MOVE_SPEED_MULTIPLIER *
+    Math.max(1, Number(snapshot?.moveSpeedMultiplier || 1));
+
+  const velocityX = Number(snapshot?.velocityX);
+  const velocityY = Number(snapshot?.velocityY);
+
+  return {
+    x: Number.isFinite(velocityX)
+      ? velocityX
+      : Number(snapshot?.moveX || 0) * fallbackSpeed,
+    y: Number.isFinite(velocityY)
+      ? velocityY
+      : Number(snapshot?.moveY || 0) * fallbackSpeed,
+  };
+}
+
+function extrapolateRemoteSnapshot(snapshot, aheadMs = 0) {
+  if (!snapshot) return snapshot;
+
+  const safeAheadMs = clamp(
+    Number(aheadMs || 0) + REMOTE_PRESENTATION_LEAD_MS,
+    0,
+    REMOTE_MAX_EXTRAPOLATE_MS,
+  );
+
+  if (!snapshot.isMoving || safeAheadMs <= 0) return snapshot;
+
+  const velocity = getRemoteVelocity(snapshot);
+  const seconds = safeAheadMs / 1000;
+
+  return {
+    ...snapshot,
+    x: Number(snapshot.x || 0) + velocity.x * seconds,
+    y: Number(snapshot.y || 0) + velocity.y * seconds,
+  };
+}
+
 function interpolateSnapshotBuffer(buffer = [], renderTime) {
   if (!buffer.length) return null;
-  if (buffer.length === 1) return buffer[0];
+
+  const newest = buffer[buffer.length - 1];
+  const newestAt = Number(newest?.__receivedAt || renderTime);
+
+  if (buffer.length === 1 || renderTime >= newestAt) {
+    return extrapolateRemoteSnapshot(newest, renderTime - newestAt);
+  }
 
   let older = buffer[0];
-  let newer = buffer[buffer.length - 1];
+  let newer = newest;
 
   for (let i = 0; i < buffer.length - 1; i += 1) {
     const a = buffer[i];
@@ -1186,15 +1236,15 @@ function interpolateSnapshotBuffer(buffer = [], renderTime) {
     }
   }
 
-  const aTime = older.__receivedAt || renderTime;
-  const bTime = newer.__receivedAt || aTime;
+  const aTime = Number(older.__receivedAt || renderTime);
+  const bTime = Number(newer.__receivedAt || aTime);
   const span = Math.max(1, bTime - aTime);
   const t = clamp((renderTime - aTime) / span, 0, 1);
 
   return {
     ...newer,
-    x: lerp(older.x ?? newer.x, newer.x ?? older.x, t),
-    y: lerp(older.y ?? newer.y, newer.y ?? older.y, t),
+    x: lerp(Number(older.x ?? newer.x ?? 0), Number(newer.x ?? older.x ?? 0), t),
+    y: lerp(Number(older.y ?? newer.y ?? 0), Number(newer.y ?? older.y ?? 0), t),
     hp: newer.hp,
     energy: newer.energy,
     drones: newer.drones,

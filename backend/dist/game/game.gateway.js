@@ -128,6 +128,7 @@ const NORMAL_HIGH_POPULATION_THRESHOLD = 16;
 const NORMAL_CROWDED_ORB_TARGET = 24;
 const NORMAL_CROWDED_ORB_ADD_LIMIT = 12;
 const NORMAL_CROWDED_ORB_EXTRA_CAP = 30;
+const PVP_REMOTE_INPUT_GRACE_MS = 520;
 const SPECTATOR_KILL_CREDIT_WINDOW_MS = 6000;
 const EMPTY_ROOM_GRACE_MS = 30000;
 const ZONE_PVP_RECONNECT_GRACE_MS = 600000;
@@ -2569,7 +2570,12 @@ let GameGateway = class GameGateway {
             let dx = 0;
             let dy = 0;
             const input = player.input || {};
-            const inputFresh = player.isBot || !player.lastInputReceivedAt || now - player.lastInputReceivedAt <= 280;
+            const inputGraceMs = room?.normalMode || room?.zonePvpMode
+                ? PVP_REMOTE_INPUT_GRACE_MS
+                : 280;
+            const inputFresh = player.isBot ||
+                !player.lastInputReceivedAt ||
+                now - player.lastInputReceivedAt <= inputGraceMs;
             if (!inputFresh) {
                 player.input = {};
             }

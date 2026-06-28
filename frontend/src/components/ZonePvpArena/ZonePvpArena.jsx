@@ -2546,21 +2546,20 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       // Consume only the newest tuple packet on the next display frame. The
       // motion resolver below extrapolates velocity by a small fixed lead, so
       // the player sees continuous 60 Hz motion rather than delayed steps.
-      if (constrainedDesktopRef.current && !mobilePerformanceRef.current) {
-        latestMovementPacketRef.current = packet;
-        if (!movementFlushRafRef.current) {
-          movementFlushRafRef.current = window.requestAnimationFrame(() => {
-            movementFlushRafRef.current = 0;
-            const latestPacket = latestMovementPacketRef.current;
-            latestMovementPacketRef.current = null;
-            if (latestPacket) consumeMovementFrame(latestPacket);
-          });
-        }
-        return;
+      // Every viewer uses one latest-wins transform consumption step per
+      // display frame. This makes a good laptop render a remote player from a
+      // weak laptop exactly like a continuous local trajectory: packet bursts
+      // cannot split the frame, and resolveRemoteMotion fills the gap from the
+      // server-authoritative velocity.
+      latestMovementPacketRef.current = packet;
+      if (!movementFlushRafRef.current) {
+        movementFlushRafRef.current = window.requestAnimationFrame(() => {
+          movementFlushRafRef.current = 0;
+          const latestPacket = latestMovementPacketRef.current;
+          latestMovementPacketRef.current = null;
+          if (latestPacket) consumeMovementFrame(latestPacket);
+        });
       }
-
-      // Good desktops and phones keep the existing immediate behavior.
-      consumeMovementFrame(packet);
     };
 
     // Legacy binary packets are intentionally ignored. The JSON transform lane
