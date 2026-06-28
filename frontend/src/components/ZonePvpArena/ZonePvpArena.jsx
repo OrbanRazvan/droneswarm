@@ -41,8 +41,14 @@ const REMOTE_SMOOTHING = 42;
 const REMOTE_PREDICTION = 1.0;
 const REMOTE_HARD_SNAP_DISTANCE = 900;
 const REMOTE_MAX_EXTRAPOLATE_MS = 220;
-const REMOTE_PRESENTATION_LEAD_MS = 22;
-const REMOTE_FOLLOW_RESPONSE = 56;
+const REMOTE_PRESENTATION_LEAD_MS = 26;
+const REMOTE_FOLLOW_RESPONSE = 92;
+// Attack drones are rendered from their newest authoritative velocity with a
+// tiny presentation lead. This removes the old "one packet behind" feel even
+// when an older laptop skips an animation frame.
+const PROJECTILE_PRESENTATION_LEAD_MS = 30;
+const PROJECTILE_MAX_EXTRAPOLATE_MS = 180;
+const PROJECTILE_STREAM_MISSING_MS = 190;
 // Do not remove a remote drone just because one or two volatile transform
 // packets were skipped under a weak CPU/Wi-Fi burst. It stays visible at its
 // last authoritative position until a fresh transform arrives.
@@ -1082,7 +1088,11 @@ function resolveRemoteMotion(motion, now, dt) {
     motion.ready = true;
   } else {
     const distance = Math.hypot(targetX - Number(motion.renderX || 0), targetY - Number(motion.renderY || 0));
-    if (distance >= REMOTE_HARD_SNAP_DISTANCE) {
+    // At 40 Hz the normal predicted correction is only a few world pixels.
+    // Snap those tiny corrections immediately: it eliminates display latency
+    // without producing a visible teleport. Large unexpected divergence still
+    // follows the high-response path rather than jumping across the map.
+    if (distance <= 78 || distance >= REMOTE_HARD_SNAP_DISTANCE) {
       motion.renderX = targetX;
       motion.renderY = targetY;
     } else {
@@ -1096,6 +1106,68 @@ function resolveRemoteMotion(motion, now, dt) {
     ...motion,
     x: Number(motion.renderX || 0),
     y: Number(motion.renderY || 0),
+  };
+}
+
+function upsertProjectileMotion(map, incoming, receivedAt, serverAt = 0) {
+  if (!incoming?.id) return null;
+
+  const id = String(incoming.id);
+  const previous = map.get(id);
+  const incomingServerAt = Number(serverAt || incoming?.__serverAt || incoming?.serverNow || 0);
+  const previousServerAt = Number(previous?.serverAt || 0);
+
+  // A slow state packet must never pull a newer projectile transform backwards.
+  if (previous && incomingServerAt > 0 && previousServerAt > incomingServerAt) {
+    const merged = {
+      ...previous,
+      ...incoming,
+      id,
+      skin: normalizeSkin(incoming.skin || previous.skin || "cyan"),
+      lastSeenAt: receivedAt,
+    };
+    map.set(id, merged);
+    return merged;
+  }
+
+  const sourceX = Number(incoming.x ?? previous?.sourceX ?? previous?.x ?? 0);
+  const sourceY = Number(incoming.y ?? previous?.sourceY ?? previous?.y ?? 0);
+  const next = {
+    ...(previous || {}),
+    ...incoming,
+    id,
+    skin: normalizeSkin(incoming.skin || previous?.skin || "cyan"),
+    sourceX,
+    sourceY,
+    vx: Number(incoming.vx ?? previous?.vx ?? 0),
+    vy: Number(incoming.vy ?? previous?.vy ?? 0),
+    serverAt: incomingServerAt || previousServerAt || 0,
+    receivedAt,
+    lastSeenAt: receivedAt,
+    ready: true,
+  };
+
+  map.set(id, next);
+  return next;
+}
+
+function resolveProjectileMotion(motion, now) {
+  if (!motion) return null;
+
+  // vx/vy are server world pixels per 60 Hz frame. Predict only from the last
+  // authoritative transform to the display time; no damp/lerp remains in the
+  // attack-drone path, because a projectile has a fixed trajectory.
+  const ageMs = clamp(
+    now - Number(motion.receivedAt || now) + PROJECTILE_PRESENTATION_LEAD_MS,
+    0,
+    PROJECTILE_MAX_EXTRAPOLATE_MS,
+  );
+  const frameScale = (ageMs / 1000) * PROJECTILE_FRAME_SCALE;
+
+  return {
+    ...motion,
+    x: Number(motion.sourceX ?? motion.x ?? 0) + Number(motion.vx || 0) * frameScale,
+    y: Number(motion.sourceY ?? motion.y ?? 0) + Number(motion.vy || 0) * frameScale,
   };
 }
 
@@ -1492,16 +1564,20 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     // loot/HUD traffic and is the main cause of slow-motion remote drones.
     const socket = io(API_URL, {
       autoConnect: false,
-      // Zone PvP has one authoritative seat per match. Use direct WebSocket
-      // only and do not reconnect this arena instance after a transport closes:
-      // the server removes the drone permanently and the UI returns to menu.
+      // Zone PvP stays on direct WebSocket, but a temporary transport loss is
+      // recovered silently into the same authoritative seat. Explicit EXIT TO
+      // MENU still calls socket.disconnect() after the server removed the seat.
       transports: ["websocket"],
       upgrade: false,
       forceNew: true,
       multiplex: false,
       withCredentials: false,
-      timeout: 12000,
-      reconnection: false,
+      timeout: 20000,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 450,
+      reconnectionDelayMax: 2200,
+      randomizationFactor: 0.2,
     });
 
     socketRef.current = socket;
@@ -1676,22 +1752,37 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
 
     const forceZoneTransportReconnect = () => {
-      // No visible Connection lost state and no automatic resume/rejoin. A
-      // missing authoritative stream ends only this local arena instance.
-      leaveZoneSilentlyToMenu();
+      // Never send a live match to Dashboard because one packet burst was late.
+      // Socket.IO retries the WebSocket transport; after reconnect the join
+      // handler rebinds the same server-side seat using resumeToken.
+      if (disposed || intentionalExitRef.current) return;
+      clearZoneSessionCheck();
+      setConnectionError("");
+
+      if (!socket.connected) {
+        socket.connect();
+        return;
+      }
+
+      // A connected transport may have skipped volatile packets under CPU load.
+      // Ask for a reliable state only; do not disconnect/recreate the room.
+      socket.emit("zone-pvp:resync");
     };
 
     const verifyZoneSession = () => {
       if (disposed || intentionalExitRef.current || document.visibilityState === "hidden") return;
-      if (!socket.connected || zoneSessionCheckInFlight) {
-        forceZoneTransportReconnect();
+      if (!socket.connected) {
+        socket.connect();
         return;
       }
+      if (zoneSessionCheckInFlight) return;
 
       zoneSessionCheckInFlight = true;
       socket.emit("zone-pvp:session-check", { resumeToken: resumeTokenRef.current });
       zoneSessionCheckTimer = window.setTimeout(() => {
-        if (zoneSessionCheckInFlight) forceZoneTransportReconnect();
+        if (!zoneSessionCheckInFlight) return;
+        zoneSessionCheckInFlight = false;
+        forceZoneTransportReconnect();
       }, ZONE_SESSION_CHECK_TIMEOUT_MS);
     };
 
@@ -1805,6 +1896,14 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           const previousKey = zoneNetKey(netId);
           const currentKey = String(projectile.id);
           zoneProjectileMetaRef.current.set(netId, { ...projectile });
+          // State packets are infrequent, but they are still a valid first
+          // transform when a projectile appears between hot-lane packets.
+          upsertProjectileMotion(
+            projectileMovementRef.current,
+            { ...projectile, id: currentKey },
+            now,
+            Number(state?.serverNow || 0),
+          );
           if (previousKey !== currentKey) {
             // A transform can arrive one frame before the low-frequency
             // projectile definition. Migrate *both* transform and rendered
@@ -2101,19 +2200,24 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
 
     const handleConnectError = () => {
-      // Never show Connection lost / Connection error in the arena. A failed
-      // initial transport simply returns to the hangar; the user can start a
-      // completely new matchmaking request explicitly.
-      leaveZoneSilentlyToMenu();
+      // A transient connect error must never turn into a menu redirect. The
+      // Socket.IO manager retries silently and the last WebGL frame remains on
+      // screen until the same authoritative seat is rebound.
+      if (disposed || intentionalExitRef.current) return;
+      setConnectionError("");
     };
 
     const handleDisconnect = () => {
       zoneJoinAcceptedRef.current = false;
       zoneJoinAttemptRef.current = 0;
       clearZoneJoinRetry();
+      clearZoneSessionCheck();
+
+      // Preserve all live world data. A transport loss is not a player action;
+      // reconnect will call handleConnect -> zone-pvp:join with the same token.
       if (!disposed && !intentionalExitRef.current) {
-        // No Socket.IO resume and no automatic join of the previous room.
-        leaveZoneSilentlyToMenu();
+        setConnectionError("");
+        lastZoneServerPacketAtRef.current = Date.now();
       }
     };
 
@@ -2129,26 +2233,32 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const closedRoomId = String(event?.roomId || "");
       if (currentRoomId && closedRoomId && currentRoomId !== closedRoomId) return;
 
-      // The backend sends this only when the existing round has ended and its
-      // room is being disposed. Stop all retry/rejoin paths before returning to
-      // Dashboard, so no fresh Zone PvP lobby can be created by a late packet.
-      intentionalExitRef.current = true;
-      explicitLeaveSentRef.current = true;
-      zoneJoinAcceptedRef.current = true;
-      zoneJoinAttemptRef.current = 0;
+      // Keep the terminal result on screen. A server lifecycle event is not a
+      // user click, therefore it must never force all connected devices back to
+      // Dashboard. The player can explicitly press EXIT TO MENU from the result.
       clearZoneJoinRetry();
       clearZoneSessionCheck();
-      if (zoneForcedReconnectTimer !== null) {
-        window.clearTimeout(zoneForcedReconnectTimer);
-        zoneForcedReconnectTimer = null;
-      }
-      clearZonePvpResumeToken();
-      resumeTokenRef.current = createZonePvpResumeToken();
+      zoneJoinAcceptedRef.current = true;
+      zoneJoinAttemptRef.current = 0;
 
-      socket.disconnect();
-      window.setTimeout(() => {
-        if (!disposed) onExitToMenu?.();
-      }, 0);
+      const terminalState = {
+        ...worldRef.current,
+        status: "finished",
+        winnerId: event?.winnerId ?? worldRef.current?.winnerId ?? null,
+        winnerName: event?.winnerName ?? worldRef.current?.winnerName ?? null,
+        finishReason: event?.reason || worldRef.current?.finishReason || "finished",
+      };
+
+      worldRef.current = terminalState;
+      zonePhaseRef.current = {
+        ...zonePhaseRef.current,
+        roomId: closedRoomId || zonePhaseRef.current?.roomId || null,
+        roundId: String(event?.roundId || zonePhaseRef.current?.roundId || "") || null,
+        status: "finished",
+        lockedRoomId: closedRoomId || zonePhaseRef.current?.lockedRoomId || null,
+      };
+      setRenderData({ ...terminalState, fps: fpsRef.current.value });
+      setHudData({ ...terminalState, you: predictedYouRef.current || terminalState.you, fps: fpsRef.current.value });
     };
 
     const stopAutomaticFreshLobbyForLiveRound = () => {
@@ -2165,14 +2275,26 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         return;
       }
 
-      // A non-active session is not revived. Return silently rather than
-      // recreating a room or showing an error banner.
-      leaveZoneSilentlyToMenu();
+      // A stale socket mapping can happen after a Render restart. Do not send
+      // the player to Dashboard: ask the normal join path to either rebind the
+      // preserved seat or create the next authoritative matchmaking state.
+      if (worldRef.current?.status === "finished") return;
+      zoneJoinAcceptedRef.current = false;
+      zoneJoinAttemptRef.current = 0;
+      if (socket.connected) {
+        requestZoneJoin();
+      } else {
+        socket.connect();
+      }
     };
 
     const handleZoneResumeMissing = () => {
       clearZoneSessionCheck();
-      leaveZoneSilentlyToMenu();
+      if (disposed || intentionalExitRef.current || worldRef.current?.status === "finished") return;
+      zoneJoinAcceptedRef.current = false;
+      zoneJoinAttemptRef.current = 0;
+      if (socket.connected) requestZoneJoin();
+      else socket.connect();
     };
 
     const recoverVisibleZoneSession = () => {
@@ -2345,17 +2467,22 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         });
         if (!projectile?.id) continue;
         packetProjectileIds.add(projectile.id);
-        const existing = movementProjectiles.get(projectile.id);
-        movementProjectiles.set(projectile.id, {
-          ...(existing || {}),
-          ...projectile,
-          __movementSeenAt: now,
-          __serverAt: serverNow,
-        });
+        upsertProjectileMotion(
+          movementProjectiles,
+          projectile,
+          now,
+          serverNow,
+        );
       }
 
       for (const [id, projectile] of movementProjectiles.entries()) {
-        if (!packetProjectileIds.has(id) && now - Number(projectile?.__movementSeenAt || now) > 700) {
+        // A projectile omitted from several consecutive latest-wins frames is
+        // already gone on the server. Remove it quickly instead of keeping a
+        // stale visual hundreds of milliseconds behind the collision.
+        if (
+          !packetProjectileIds.has(id) &&
+          now - Number(projectile?.lastSeenAt || now) > PROJECTILE_STREAM_MISSING_MS
+        ) {
           movementProjectiles.delete(id);
         }
       }
@@ -2363,15 +2490,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const applyMovementFrame = (packet = {}) => {
       lastZoneServerPacketAtRef.current = Date.now();
-      latestMovementPacketRef.current = packet;
-      if (movementFlushRafRef.current) return;
-
-      movementFlushRafRef.current = window.requestAnimationFrame(() => {
-        movementFlushRafRef.current = 0;
-        const latest = latestMovementPacketRef.current;
-        latestMovementPacketRef.current = null;
-        if (latest) consumeMovementFrame(latest);
-      });
+      // This handler mutates only small Maps. Processing it now removes the
+      // extra requestAnimationFrame delay that made drones feel one frame late.
+      // Pixi still renders at display refresh through liveDataRef.
+      consumeMovementFrame(packet);
     };
 
     // Legacy binary packets are intentionally ignored. The JSON transform lane
@@ -2640,7 +2762,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     socket.on("zone-pvp:world-delta", applyWorldItemDelta);
     socket.on("zone-pvp:entity-removed", applyEntityRemoved);
     socket.on("zone-pvp:eliminated", applyEliminated);
-    socket.on("zone-pvp:error", () => leaveZoneSilentlyToMenu());
+    socket.on("zone-pvp:error", () => {
+      // Game-state errors are soft/recoverable. Keep the current world and let
+      // the reliable resync/reconnect path repair it; never redirect the player.
+      if (!intentionalExitRef.current) forceZoneTransportReconnect();
+    });
 
     // All listeners are attached before transport starts, avoiding a fast
     // join/state race on mobile browsers.
@@ -2932,26 +3058,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const projectileMap = projectilesRef.current;
       const movementProjectiles = projectileMovementRef.current;
 
-      // Full state is slow by design; merge it with the 60 Hz projectile
-      // transform stream. The stream wins because it is always newer.
-      const incomingProjectiles = new Map(
-        (data.projectiles || [])
-          .filter((p) => p?.id || p?.netId)
-          .map((p) => [p.id || zoneNetKey(p.netId), p])
-      );
-      for (const [id, movementProjectile] of movementProjectiles.entries()) {
-        incomingProjectiles.set(id, {
-          ...(incomingProjectiles.get(id) || {}),
-          ...movementProjectile,
-        });
-      }
-
-      for (const [id, current] of projectileMap.entries()) {
-        projectileMap.set(id, advanceProjectile(current, dt));
-      }
-
-      for (const [id, target] of incomingProjectiles.entries()) {
-        const current = projectileMap.get(id) || target;
+      // Projectiles do not need interpolation buffers. Their velocity is fixed,
+      // so every render frame derives the exact display-time position from the
+      // most recent authoritative transform. This is both smoother and cheaper
+      // than allocating a merged Map plus blending each drone toward stale data.
+      for (const [id, motion] of movementProjectiles.entries()) {
+        const target = resolveProjectileMotion(motion, now);
+        if (!target) continue;
 
         const belongsToLocalPlayer =
           Boolean(me?.id) &&
@@ -2961,44 +3074,39 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
             String(target.ownerId || "") === zoneNetKey(me.netId)
           );
 
-        // Keep the Normal PvP behavior: the shooter sees its one locally
-        // predicted mini-drone, while every other viewer sees the authoritative
-        // server copy. Do not add a second copy during Zone net-id migration.
+        // The shooter keeps only its locally predicted attack drone. Remove the
+        // network alias so an initial metadata race can never show two copies.
         if (belongsToLocalPlayer) {
-          // The locally predicted projectile is already in the map. Remove any
-          // authoritative alias immediately; otherwise a net-id/UUID race can
-          // briefly render two mini drones for the same launch.
           if (!String(id).startsWith("local-")) projectileMap.delete(id);
           continue;
         }
 
-        const error = Math.hypot(
-          Number(target.x || 0) - Number(current.x ?? target.x ?? 0),
-          Number(target.y || 0) - Number(current.y ?? target.y ?? 0),
-        );
-        // Attack drones are tiny and fast. Favor the newest transform much more
-        // aggressively than player bodies so they never trail behind their real
-        // server position during a crowded fight.
-        const correction = error > 120 ? 1 : error > 28 ? 0.82 : 0.58;
-
+        const current = projectileMap.get(id);
         projectileMap.set(id, {
-          ...current,
+          ...(current || {}),
           ...target,
           localOnly: false,
           __seenAt: now,
-          x: Number(current.x ?? target.x ?? 0) + (Number(target.x ?? current.x ?? 0) - Number(current.x ?? target.x ?? 0)) * correction,
-          y: Number(current.y ?? target.y ?? 0) + (Number(target.y ?? current.y ?? 0) - Number(current.y ?? target.y ?? 0)) * correction,
+          __authoritativeSeenAt: Number(motion.lastSeenAt || now),
+          // No lerp here: target is already extrapolated to display time.
+          x: target.x,
+          y: target.y,
         });
+      }
+
+      // Only locally-owned projectiles need client-side integration. Remote
+      // projectiles are resolved from their authoritative source+velocity above.
+      for (const [id, current] of projectileMap.entries()) {
+        if (current?.localOnly) {
+          projectileMap.set(id, advanceProjectile(current, dt));
+        }
       }
 
       const projectileTargets = [me, ...remoteMap.values()].filter(Boolean);
 
       for (const [id, projectile] of projectileMap.entries()) {
-        const isIncoming = incomingProjectiles.has(id);
         const age = now - (projectile.createdAt || projectile.__seenAt || now);
-        const missingAge = now - (projectile.__seenAt || now);
         const traveled = getProjectileTravelDistance(projectile);
-
         const visuallyHitTarget = projectileHitsAnyTarget(projectile, projectileTargets);
 
         if (projectile.localOnly) {
@@ -3009,15 +3117,18 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           ) {
             projectileMap.delete(id);
           }
-
           continue;
         }
+
+        const authoritativeSeenAt = Number(projectile.__authoritativeSeenAt || projectile.__seenAt || now);
+        const streamExpired = !movementProjectiles.has(id) &&
+          now - authoritativeSeenAt > PROJECTILE_STREAM_MISSING_MS;
 
         if (
           visuallyHitTarget ||
           age > PROJECTILE_VISUAL_TTL ||
           traveled > LOCAL_PROJECTILE_MAX_DISTANCE ||
-          (!isIncoming && missingAge > SERVER_PROJECTILE_FADE_TTL)
+          streamExpired
         ) {
           projectileMap.delete(id);
         }
