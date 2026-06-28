@@ -345,6 +345,32 @@ function DronePreview({ skin = BASIC_DRONE, size = "large", compact = false }) {
 }
 
 
+const GUEST_STATS_KEY_STORAGE = "drone-swarm-guest-leaderboard-key";
+
+function createGuestStatsKey() {
+  const generated =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+
+  return `guest_${generated}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 160);
+}
+
+function getGuestStatsKey() {
+  try {
+    const existing = sessionStorage.getItem(GUEST_STATS_KEY_STORAGE);
+    if (existing && /^[A-Za-z0-9_-]{16,160}$/.test(existing)) {
+      return existing;
+    }
+
+    const next = createGuestStatsKey();
+    sessionStorage.setItem(GUEST_STATS_KEY_STORAGE, next);
+    return next;
+  } catch {
+    return createGuestStatsKey();
+  }
+}
+
 function createEmptyGameStats() {
   return {
     personal: {
@@ -397,7 +423,7 @@ function GlobalRecordTable({ title, entries = [], showWins = false }) {
       {entries.length > 0 ? (
         entries.slice(0, 10).map((entry, index) => (
           <div
-            key={`${entry.userId || entry.username || "pilot"}-${index}`}
+            key={`${entry.userId || entry.guestKey || entry.username || "pilot"}-${index}`}
             className={`global-record-row ${showWins ? "with-wins" : ""}`}
           >
             <b>{index + 1}</b>
@@ -417,6 +443,12 @@ function GlobalRecordTable({ title, entries = [], showWins = false }) {
 function Dashboard({ user, gameMode, onExitToMenu }) {
   const isGuestUser = Boolean(user?.isGuest);
   const guestDisplayName = getDisplayName(user);
+  // Guest-ul are doar o cheie anonimă de sesiune pentru Top 10. Nu se creează
+  // GameUser, Player, email sau profil persistent în baza de date.
+  const guestStatsKey = useMemo(
+    () => (isGuestUser ? getGuestStatsKey() : null),
+    [isGuestUser],
+  );
 
   const [screen, setScreen] = useState(gameMode ? "arena" : "hangar");
   const [selectedMode, setSelectedMode] = useState(gameMode || "pvp");
@@ -470,16 +502,10 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
     }
   }, [isGuestUser, activeTab]);
 
-  // Records are requested only while the Hangar is visible. The gameplay
-  // sockets remain dedicated to their own high-frequency arena packets.
+  // Recordurile sunt cerute doar în Hangar. Guest-ul primește exclusiv
+  // clasamentele globale; recordurile personale/PvE rămân doar pentru conturi.
   useEffect(() => {
-    if (isGuestUser || screen !== "hangar") {
-      if (isGuestUser) {
-        setGameStats(createEmptyGameStats());
-        setGameStatsLoading(false);
-      }
-      return undefined;
-    }
+    if (screen !== "hangar") return undefined;
 
     let disposed = false;
     let timeoutId = null;
@@ -496,13 +522,19 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
 
     const requestStats = () => {
       socket.emit("game-stats:get", {
-        userId: user?.userId || user?.id || null,
+        userId: isGuestUser ? null : user?.userId || user?.id || null,
+        isGuest: isGuestUser,
+        guestKey: isGuestUser ? guestStatsKey : null,
       });
     };
 
     const applyStats = (payload) => {
       if (disposed) return;
-      setGameStats(payload && payload.personal ? payload : createEmptyGameStats());
+      setGameStats(
+        payload && (payload.personal || payload.leaderboards)
+          ? payload
+          : createEmptyGameStats(),
+      );
       setGameStatsLoading(false);
     };
 
@@ -525,7 +557,7 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
         gameStatsSocketRef.current = null;
       }
     };
-  }, [isGuestUser, screen, user?.id, user?.userId]);
+  }, [guestStatsKey, isGuestUser, screen, user?.id, user?.userId]);
 
   const openedPack = useMemo(
     () => PREMIUM_PACKS.find((pack) => pack.id === openedPackId),
@@ -558,6 +590,8 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
     userId: isGuestUser ? null : user?.userId || user?.id,
     email: isGuestUser ? null : user?.email,
     isGuest: isGuestUser,
+    // Folosit doar pentru recordurile globale guest din Normal/PvP Zone.
+    guestStatsKey: isGuestUser ? guestStatsKey : null,
     username: guestDisplayName,
     selectedDrone: arenaSelectedDrone,
     selectedSkin: arenaSelectedDrone,
@@ -566,6 +600,8 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
   };
 
   const launchArena = (mode) => {
+    // Guest poate juca toate cele trei moduri. Doar zona Combat Records nu
+    // afiseaza recorduri personale sau Battle Royale PvE pentru Guest.
     setArenaSessionId((value) => value + 1);
     setSelectedMode(mode);
     setScreen("arena");
@@ -633,6 +669,7 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
               sessionStorage.removeItem("token");
               sessionStorage.removeItem("user");
               sessionStorage.removeItem("droneSwarmGuestUser");
+              sessionStorage.removeItem(GUEST_STATS_KEY_STORAGE);
               window.location.reload();
             }}
           >
@@ -654,7 +691,7 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
           {isGuestUser ? (
             <div className="guest-profile-note">
               <strong>GUEST MODE</strong>
-              <span>Progresul, istoricul, skinurile si monedele nu se salveaza.</span>
+              <span>Nu se creeaza cont sau profil. Doar un record care intra in Top 10 poate ramane afisat global.</span>
             </div>
           ) : (
             <p>{user?.email || "player@drone-swarm.com"}</p>
@@ -685,8 +722,8 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
               </div>
             )}
             <div>
-              <span>{isGuestUser ? "PROGRESS" : "SERVER"}</span>
-              <strong>{isGuestUser ? "Not saved" : "EU"}</strong>
+              <span>{isGuestUser ? "LEADERBOARD" : "SERVER"}</span>
+              <strong>{isGuestUser ? "TOP 10 ONLY" : "EU"}</strong>
             </div>
           </div>
 
@@ -765,39 +802,22 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
                 <DronePreview skin={selectedSkin} size="hero" />
               </section>
 
-              <section className="basic-drone-details">
-                <div>
-                  <h3>{selectedSkin.name} Details</h3>
+              <section className={`career-stats-section ${isGuestUser ? "guest-global-records" : ""}`}>
+                <div className="career-stats-heading">
+                  <div>
+                    <span>{isGuestUser ? "GLOBAL LEADERBOARDS" : "PILOT RECORDS"}</span>
+                    <h3>{isGuestUser ? "Arena Champions" : "Combat Records"}</h3>
+                  </div>
                   <p>
-                    Preview-ul din hangar foloseste renderer-ul real din arena: aceeasi drona, aceiasi rotori, aceeasi orbita si aceleasi mini drone.
+                    {gameStatsLoading
+                      ? "Se incarca recordurile..."
+                      : isGuestUser
+                        ? "Guest-ul nu are profil sau record personal. Numele lui apare doar daca intra in Top 10."
+                        : "Recordurile personale si clasamentele globale sunt salvate permanent."}
                   </p>
                 </div>
 
-                <div className="parts-grid">
-                  {Object.entries(selectedSkin.parts).map(([key, value]) => (
-                    <div key={key}>
-                      <span>{key}</span>
-                      <strong>{value}</strong>
-                    </div>
-                  ))}
-                </div>
-
-              </section>
-
-              {!isGuestUser && (
-                <section className="career-stats-section">
-                  <div className="career-stats-heading">
-                    <div>
-                      <span>PILOT RECORDS</span>
-                      <h3>Combat Records</h3>
-                    </div>
-                    <p>
-                      {gameStatsLoading
-                        ? "Se incarca recordurile..."
-                        : "Recordurile personale si clasamentele globale sunt salvate permanent."}
-                    </p>
-                  </div>
-
+                {!isGuestUser && (
                   <div className="player-record-grid">
                     <PlayerRecordCard
                       title="NORMAL PVP"
@@ -815,20 +835,20 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
                       wins={gameStats.personal?.battleRoyalePvp?.wins}
                     />
                   </div>
+                )}
 
-                  <div className="global-record-grid">
-                    <GlobalRecordTable
-                      title="Normal PvP Records"
-                      entries={gameStats.leaderboards?.normalPvp || []}
-                    />
-                    <GlobalRecordTable
-                      title="Battle Royale PvP Champions"
-                      entries={gameStats.leaderboards?.battleRoyalePvp || []}
-                      showWins
-                    />
-                  </div>
-                </section>
-              )}
+                <div className="global-record-grid">
+                  <GlobalRecordTable
+                    title="Normal PvP Records"
+                    entries={gameStats.leaderboards?.normalPvp || []}
+                  />
+                  <GlobalRecordTable
+                    title="Battle Royale PvP Champions"
+                    entries={gameStats.leaderboards?.battleRoyalePvp || []}
+                    showWins
+                  />
+                </div>
+              </section>
             </>
           )}
 
