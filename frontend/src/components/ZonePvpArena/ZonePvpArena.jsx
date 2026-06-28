@@ -1179,6 +1179,7 @@ function shouldAcceptZonePhase(current, incoming = {}, allowFreshRoom = false) {
 }
 
 const ZONE_PVP_RESUME_STORAGE_KEY = "drone-swarm:zone-pvp-resume-v1";
+const ZONE_PVP_PARTICIPANT_STORAGE_KEY = "drone-swarm:zone-pvp-participant-v1";
 
 function createZonePvpResumeToken() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -1209,6 +1210,25 @@ function clearZonePvpResumeToken() {
   } catch {
     // Storage can be unavailable in private-browser modes. The server-side
     // explicit leave still removes the resumable seat in that case.
+  }
+}
+
+// This id identifies one browser tab for the lifetime of a Zone PvP round.
+// It is deliberately independent from the reconnect token: after EXIT TO MENU
+// the server can deny this participant from the abandoned room even though the
+// resumable seat/token has been deleted.
+function getZonePvpParticipantId() {
+  if (typeof window === "undefined") return createZonePvpResumeToken();
+
+  try {
+    const existing = String(window.sessionStorage.getItem(ZONE_PVP_PARTICIPANT_STORAGE_KEY) || "").trim();
+    if (/^[A-Za-z0-9_-]{20,160}$/.test(existing)) return existing;
+
+    const next = createZonePvpResumeToken();
+    window.sessionStorage.setItem(ZONE_PVP_PARTICIPANT_STORAGE_KEY, next);
+    return next;
+  } catch {
+    return createZonePvpResumeToken();
   }
 }
 
@@ -1264,6 +1284,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const userRef = useRef(user);
   userRef.current = user;
   const resumeTokenRef = useRef(getZonePvpResumeToken());
+  const participantIdRef = useRef(getZonePvpParticipantId());
   const intentionalExitRef = useRef(false);
   const explicitLeaveSentRef = useRef(false);
   const explicitExitFinishedRef = useRef(false);
@@ -1467,11 +1488,12 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         username: getDisplayName(currentUser),
         skin: getSelectedSkin(currentUser),
         resumeToken: resumeTokenRef.current,
+        participantId: participantIdRef.current,
       };
     };
 
     const requestZoneJoin = () => {
-      if (disposed || zoneJoinAcceptedRef.current || !socket.connected) return;
+      if (disposed || intentionalExitRef.current || zoneJoinAcceptedRef.current || !socket.connected) return;
 
       socket.emit("zone-pvp:join", getZoneJoinPayload());
       const attempt = zoneJoinAttemptRef.current;
@@ -1559,7 +1581,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
 
     const forceZoneTransportReconnect = () => {
-      if (disposed) return;
+      if (disposed || intentionalExitRef.current) return;
       clearZoneSessionCheck();
       zoneJoinAcceptedRef.current = false;
       zoneJoinAttemptRef.current = 0;
@@ -1573,7 +1595,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
 
     const verifyZoneSession = () => {
-      if (disposed || document.visibilityState === "hidden") return;
+      if (disposed || intentionalExitRef.current || document.visibilityState === "hidden") return;
       if (!socket.connected) {
         socket.connect();
         return;
@@ -1983,6 +2005,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
 
     const handleConnect = () => {
+      if (disposed || intentionalExitRef.current) return;
       setConnectionError("");
       combatEventMapRef.current.clear();
       selfCombatSnapshotRef.current = null;
@@ -1994,6 +2017,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
 
     const handleConnectError = () => {
+      if (disposed || intentionalExitRef.current) return;
       setConnectionError("Nu ma pot conecta la serverul PvP. Se reincerca automat...");
     };
 
@@ -2001,8 +2025,20 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       zoneJoinAcceptedRef.current = false;
       zoneJoinAttemptRef.current = 0;
       clearZoneJoinRetry();
-      if (!disposed && reason !== "io client disconnect") {
+
+      if (!disposed && !intentionalExitRef.current && reason !== "io client disconnect") {
         setConnectionError("Conexiunea Zone PvP s-a intrerupt. Se reconecteaza...");
+
+        // Socket.IO does not automatically reconnect after a server-initiated
+        // disconnect. Reopen the same client instance so its resume token can
+        // restore the exact live seat rather than creating another lobby.
+        if (reason === "io server disconnect") {
+          window.setTimeout(() => {
+            if (!disposed && !intentionalExitRef.current && !socket.connected) {
+              socket.connect();
+            }
+          }, 250);
+        }
       }
     };
 
@@ -2011,10 +2047,56 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       markZoneJoinAccepted(confirmation);
     };
 
+    const handleZoneRoundClosed = (event = {}) => {
+      if (disposed || intentionalExitRef.current) return;
+
+      const currentRoomId = String(zonePhaseRef.current?.roomId || worldRef.current?.roomId || "");
+      const closedRoomId = String(event?.roomId || "");
+      if (currentRoomId && closedRoomId && currentRoomId !== closedRoomId) return;
+
+      // The backend sends this only when the existing round has ended and its
+      // room is being disposed. Stop all retry/rejoin paths before returning to
+      // Dashboard, so no fresh Zone PvP lobby can be created by a late packet.
+      intentionalExitRef.current = true;
+      explicitLeaveSentRef.current = true;
+      zoneJoinAcceptedRef.current = true;
+      zoneJoinAttemptRef.current = 0;
+      clearZoneJoinRetry();
+      clearZoneSessionCheck();
+      if (zoneForcedReconnectTimer !== null) {
+        window.clearTimeout(zoneForcedReconnectTimer);
+        zoneForcedReconnectTimer = null;
+      }
+      clearZonePvpResumeToken();
+      resumeTokenRef.current = createZonePvpResumeToken();
+
+      socket.disconnect();
+      window.setTimeout(() => {
+        if (!disposed) onExitToMenu?.();
+      }, 0);
+    };
+
+    const stopAutomaticFreshLobbyForLiveRound = (message) => {
+      zoneJoinAcceptedRef.current = true;
+      zoneJoinAttemptRef.current = 0;
+      clearZoneJoinRetry();
+      setConnectionError(message);
+    };
+
     const handleZoneSessionCheckResult = (result = {}) => {
       clearZoneSessionCheck();
       if (disposed) return;
       lastZoneServerPacketAtRef.current = Date.now();
+
+      if (result?.terminal) {
+        handleZoneRoundClosed({
+          roomId: result.roomId,
+          winnerId: result.winnerId,
+          winnerName: result.winnerName,
+          reason: "finished",
+        });
+        return;
+      }
 
       if (result?.active || result?.resumable) {
         zoneJoinAcceptedRef.current = false;
@@ -2023,9 +2105,21 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         return;
       }
 
-      // The old in-memory room no longer exists (for example after a Render
-      // restart or a very long sleep). Drop only the stale tab token and enter
-      // a fresh lobby immediately instead of showing Connection Error forever.
+      const wasLiveRound =
+        zonePhaseRef.current?.status === "playing" ||
+        zonePhaseRef.current?.status === "finished" ||
+        Boolean(zonePhaseRef.current?.lockedRoomId);
+
+      if (wasLiveRound) {
+        // A server restart cannot preserve an in-memory match. Do not silently
+        // place this user into a replacement lobby, because that looks like the
+        // live round restarted. The player can explicitly return to the menu.
+        stopAutomaticFreshLobbyForLiveRound(
+          "Sesiunea Zone PvP nu mai este disponibilă. Camera nu va fi restartată automat.",
+        );
+        return;
+      }
+
       resetZoneAfterExpiredSession();
       requestZoneJoin();
     };
@@ -2033,6 +2127,19 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     const handleZoneResumeMissing = () => {
       clearZoneSessionCheck();
       if (disposed) return;
+
+      const wasLiveRound =
+        zonePhaseRef.current?.status === "playing" ||
+        zonePhaseRef.current?.status === "finished" ||
+        Boolean(zonePhaseRef.current?.lockedRoomId);
+
+      if (wasLiveRound) {
+        stopAutomaticFreshLobbyForLiveRound(
+          "Sesiunea Zone PvP nu mai este disponibilă. Camera nu va fi restartată automat.",
+        );
+        return;
+      }
+
       resetZoneAfterExpiredSession();
       requestZoneJoin();
     };
@@ -2491,6 +2598,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     socket.on("zone-pvp:join-confirmed", handleJoinConfirmed);
     socket.on("zone-pvp:session-check:result", handleZoneSessionCheckResult);
     socket.on("zone-pvp:resume-missing", handleZoneResumeMissing);
+    socket.on("zone-pvp:round-closed", handleZoneRoundClosed);
     socket.on("zone-pvp:state", applyState);
     socket.on("zone-pvp:movement", applyMovementFrame);
     // The former binary lane is intentionally not subscribed. It could produce
@@ -2613,6 +2721,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       socket.off("zone-pvp:join-confirmed", handleJoinConfirmed);
       socket.off("zone-pvp:session-check:result", handleZoneSessionCheckResult);
       socket.off("zone-pvp:resume-missing", handleZoneResumeMissing);
+      socket.off("zone-pvp:round-closed", handleZoneRoundClosed);
       socket.off("zone-pvp:state", applyState);
       socket.off("zone-pvp:movement", applyMovementFrame);
       socket.off("zone-pvp:collision", applyZoneCollisionImpulse);
@@ -3520,15 +3629,17 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
   }, [isBattlePrepare, battlePrepareSeconds, isMatchmaking, isFinished, battlePrepareRemainingMs]);
 
-  // Leaving the arena is explicit. A finished Zone PvP round remains visible
-  // until the player chooses EXIT TO MENU; it never remounts the Dashboard
-  // automatically and therefore cannot create a fresh lobby by itself.
+  // Leaving the arena is explicit. On a terminal result the backend emits a
+  // short final state, disposes the room, then the client returns to Dashboard
+  // without ever remounting a fresh lobby for the same completed round.
   const handleZoneExitToMenu = () => {
     if (intentionalExitRef.current || explicitExitFinishedRef.current) return;
 
-    // Leaving is permanent for this browser tab: discard the resumable token
-    // before returning to the Dashboard, so this player cannot restore the
-    // abandoned Zone PvP seat by opening the mode again.
+    // Leaving is permanent for this browser tab. Preserve the old identity in
+    // the leave packet first; the server records it as barred from this exact
+    // room, then the local resumable token is discarded.
+    const departingResumeToken = resumeTokenRef.current;
+    const departingParticipantId = participantIdRef.current;
     intentionalExitRef.current = true;
     zoneJoinAcceptedRef.current = true;
     clearZonePvpResumeToken();
@@ -3563,7 +3674,10 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     socket.once("zone-pvp:left", finishExit);
     if (!explicitLeaveSentRef.current) {
       explicitLeaveSentRef.current = true;
-      socket.emit("zone-pvp:leave");
+      socket.emit("zone-pvp:leave", {
+        resumeToken: departingResumeToken,
+        participantId: departingParticipantId,
+      });
     }
 
     // Do not strand the UI if a proxy drops the acknowledgement. The server

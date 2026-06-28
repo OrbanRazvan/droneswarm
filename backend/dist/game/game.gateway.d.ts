@@ -27,6 +27,7 @@ export declare class GameGateway {
     private serializeZonePvpStatePlayer;
     private serializeZonePvpStateProjectile;
     private normalizeZonePvpResumeToken;
+    private normalizeZonePvpParticipantId;
     private rememberZonePvpResumeSeat;
     private findZonePvpResumeSeat;
     private detachZonePvpSocket;
@@ -78,7 +79,7 @@ export declare class GameGateway {
         ok: boolean;
         serverNow: number;
     };
-    handleZonePvpLeave(client: Socket): void;
+    handleZonePvpLeave(client: Socket, data: any): void;
     handleZonePvpInput(client: Socket, input: any): void;
     handleZonePvpInputStop(client: Socket, payload: any): void;
     startLoop(): void;
@@ -135,7 +136,8 @@ export declare class GameGateway {
     maintainWorldItems(room: any, zoneRadius: any, now: any): void;
     updateWinCondition(room: any, now: any): void;
     updateBattleRoyaleOnlineWinCondition(room: any, now: any): void;
-    finishZonePvpMatch(room: any, winner: any, now?: number): void;
+    finishZonePvpMatch(room: any, winner: any, now?: number, reason?: string): void;
+    private closeZonePvpRoom;
     updateZonePvpWinCondition(room: any, now: any): void;
     broadcastRoomState(room: any, now: any): void;
     serializePlayer(player: any): {
@@ -210,9 +212,12 @@ export declare class GameGateway {
     cleanupBattleRoyaleOnlineRoom(room: any, now: any): void;
     getBattleRoyaleOnlineZoneRadius(room: any): number;
     broadcastBattleRoyaleOnlineRoomState(room: any, now: any): void;
-    findOrCreateZonePvpRoom(): any;
+    findOrCreateZonePvpRoom(participantId?: string | null, userId?: string | null): any;
     getZonePvpRoomBySocket(socketId: any): any;
-    removeZonePvpPlayer(socketId: any): void;
+    removeZonePvpPlayer(socketId: string, options?: {
+        explicit?: boolean;
+        participantId?: string | null;
+    }): void;
     cleanupZonePvpRoom(room: any, now: any): void;
     getZonePvpZoneRadius(room: any): number;
     private broadcastZonePvpTransforms;
