@@ -203,15 +203,17 @@ function getRendererConfig(forceLowQuality) {
   const lightMobile = device.forcedMobileQuality && !device.weakMobile;
   const visualFirstDesktop = device.visualFirstWeakDesktop;
 
-  // Older PCs now start visually close to a good desktop: same terrain,
-  // nearby premium drones and readable loot. The adaptive tier reacts to
-  // actual sustained frame pressure instead of pre-emptively showing dots.
+  // Weak integrated GPUs are normally fill-rate limited. Keep the same drone
+  // artwork and terrain, but render them in a slightly smaller internal
+  // framebuffer and disable MSAA (the premium outlines already provide their
+  // own anti-aliased vector edges). This is much cheaper than removing models,
+  // props or the world background.
   const resolution = device.lowSpecDesktop
     ? 0.72
     : device.weakMobile
       ? 0.70
       : visualFirstDesktop
-        ? Math.min(0.78, device.dpr)
+        ? Math.min(0.74, device.dpr)
         : lightMobile
           ? 0.84
           : Math.min(1.35, device.dpr);
@@ -219,21 +221,22 @@ function getRendererConfig(forceLowQuality) {
   return {
     ...device,
     resolution,
-    antialias: !lowSpec && !lightMobile,
-    // Weak laptops keep the same recognizable drones, engines and spinning
-    // propellers. The savings come from lower internal resolution, smaller
-    // nearby premium pool and fewer static pickups, not from turning enemies
-    // into points or freezing their animations.
-    maxStaticItems: device.lowSpecDesktop ? 50 : device.weakMobile ? 46 : visualFirstDesktop ? 68 : lightMobile ? 54 : 120,
+    // MSAA is especially expensive on Intel/older Radeon iGPUs. The weak
+    // desktop profile keeps all geometry but avoids paying the extra render
+    // target resolve every frame.
+    antialias: !lowSpec && !lightMobile && !visualFirstDesktop,
+    // Nearby drones remain premium. Distant drones retain their full bodies,
+    // rotors, propulsion and escort count; only the amount of static loot and
+    // decoration work is budgeted for older desktop GPUs.
+    maxStaticItems: device.lowSpecDesktop ? 50 : device.weakMobile ? 46 : visualFirstDesktop ? 80 : lightMobile ? 54 : 120,
     maxPlayers: device.lowSpecDesktop ? 4 : device.weakMobile ? 3 : visualFirstDesktop ? 7 : lightMobile ? 5 : MAX_RENDERED_PLAYERS,
     maxSimplePlayers: 60,
     maxProjectiles: device.lowSpecDesktop ? 5 : device.weakMobile ? 4 : visualFirstDesktop ? 8 : lightMobile ? 6 : MAX_RENDERED_PROJECTILES,
     maxSimpleProjectiles: device.lowSpecDesktop ? 28 : device.weakMobile ? 24 : visualFirstDesktop ? 30 : lightMobile ? 26 : 48,
-    staticSyncInterval: device.lowSpecDesktop ? 500 : device.weakMobile ? 560 : visualFirstDesktop ? 340 : lightMobile ? 400 : STATIC_SYNC_INTERVAL_MS,
-    animateStaticEvery: device.lowSpecDesktop ? 8 : device.weakMobile ? 9 : visualFirstDesktop ? 4 : lightMobile ? 5 : 1,
-    // Weak desktops keep the same premium space terrain. Only mobile/manual
-    // low quality begins without it. Under real sustained load the adaptive
-    // tier hides the terrain last-resort and restores it automatically.
+    staticSyncInterval: device.lowSpecDesktop ? 500 : device.weakMobile ? 560 : visualFirstDesktop ? 420 : lightMobile ? 400 : STATIC_SYNC_INTERVAL_MS,
+    animateStaticEvery: device.lowSpecDesktop ? 8 : device.weakMobile ? 9 : visualFirstDesktop ? 5 : lightMobile ? 5 : 1,
+    // Weak desktops keep the same premium space terrain. Only explicit low
+    // quality/mobile profiles start without it.
     disableExpensiveTerrain: Boolean(device.weakMobile || device.lowSpecDesktop || lightMobile),
   };
 }
@@ -862,6 +865,7 @@ function createUnitVisual(resources) {
     shieldMix: 0,
     lastFrameAt: 0,
     hoverSeed: Math.random() * Math.PI * 2,
+    lastDecorAt: 0,
     lastSeenAt: 0,
   };
 }
@@ -923,8 +927,10 @@ function createSimpleVisual(resources) {
     skin: "",
     facing: 0,
     facingReady: false,
+    unitId: "",
     hoverSeed: Math.random() * Math.PI * 2,
     lastFrameAt: 0,
+    lastDecorAt: 0,
     lastSeenAt: 0,
   };
 }
@@ -1197,7 +1203,10 @@ function isVisibleInBounds(item, bounds, radius = 150) {
 }
 
 function upsertStaticLayer({ map, items, prefix, contexts, parent, now, maxItems, bounds, getContext }) {
-  const active = new Set();
+  // Reuse the active-id set across syncs. On weak desktop hardware this avoids
+  // three short-lived Set allocations every static refresh.
+  const active = map.__activeScratch || (map.__activeScratch = new Set());
+  active.clear();
   let rendered = 0;
 
   for (const item of items || []) {
@@ -1263,7 +1272,7 @@ function updateLaggedTrail(trail, targetX, targetY, response, scale, alpha, delt
 }
 
 
-function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = false, effectTier = 0) {
+function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = false, effectTier = 0, animateDecor = true) {
   const skin = normalizeSkin(unit.skin);
   if (visual.skin !== skin) {
     visual.skin = skin;
@@ -1345,6 +1354,17 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
     subtleStretch * (1 + bankAmount * 0.035),
     subtleStretch * (1 - bankAmount * 0.022),
   );
+
+  // The drone body, position, turn and bank stay at the display refresh rate.
+  // On a weak desktop only the decorative children below update at a lower
+  // cadence. This preserves full visual identity while removing hundreds of
+  // tiny property writes from the hot render path.
+  const shouldAnimateDecor = Boolean(isPlayer || animateDecor || unitChanged);
+  if (!shouldAnimateDecor) {
+    visual.lastSeenAt = now;
+    return;
+  }
+  visual.lastDecorAt = now;
 
   // Premium color glow and crisp engine plasma. There are no lagged smoke
   // puffs: all effects are attached directly to each drone so spectator view
@@ -1481,7 +1501,7 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
   visual.lastSeenAt = now;
 }
 
-function updateSimpleVisual(visual, unit, resources, now) {
+function updateSimpleVisual(visual, unit, resources, now, animateDecor = true) {
   const skin = normalizeSkin(unit.skin);
   if (visual.skin !== skin) {
     visual.skin = skin;
@@ -1494,6 +1514,10 @@ function updateSimpleVisual(visual, unit, resources, now) {
       rotor.context = resources.rotorSpinContexts[skin] || resources.rotorSpinContexts.cyan;
     });
   }
+
+  const unitId = String(unit.id || "");
+  const unitChanged = visual.unitId !== unitId;
+  if (unitChanged) visual.unitId = unitId;
 
   const deltaSeconds = clamp((now - (visual.lastFrameAt || now)) / 1000, 1 / 240, 0.05);
   visual.lastFrameAt = now;
@@ -1519,6 +1543,14 @@ function updateSimpleVisual(visual, unit, resources, now) {
   visual.root.rotation = visual.facing;
   visual.root.scale.set(0.96);
   visual.root.alpha = unit.alive === false ? 0.32 : 0.98;
+
+  // Keep root transform/facing at 60 Hz. Rotor, engine and escort transforms
+  // may be stepped on weak desktop hardware, without hiding a single model.
+  if (!animateDecor && !unitChanged) {
+    visual.lastSeenAt = now;
+    return;
+  }
+  visual.lastDecorAt = now;
 
   // Cheap transform-only propulsion: one engine scale/alpha plus four rotor
   // rotations. This costs far less than the premium aura/shield/escort layer.
@@ -1637,7 +1669,7 @@ function updateProjectileVisual(visual, projectile, resources, now, compact = fa
   visual.lastSeenAt = now;
 }
 
-function syncUnitPool({ pool, source, resources, parent, bounds, max, now, isPlayer = false, compact = false, effectTier = 0, preCulled = false }) {
+function syncUnitPool({ pool, source, resources, parent, bounds, max, now, isPlayer = false, compact = false, effectTier = 0, animateDecor = true, preCulled = false }) {
   const visible = pool.__visibleScratch || (pool.__visibleScratch = []);
   const ids = pool.__idsScratch || (pool.__idsScratch = new Set());
   visible.length = 0;
@@ -1657,12 +1689,12 @@ function syncUnitPool({ pool, source, resources, parent, bounds, max, now, isPla
       visual.root.visible = false;
       continue;
     }
-    updateUnitVisual(visual, unit, resources, now, isPlayer, compact, effectTier);
+    updateUnitVisual(visual, unit, resources, now, isPlayer, compact, effectTier, animateDecor);
   }
   return ids;
 }
 
-function syncSimplePool({ pool, source, resources, parent, bounds, max, now, excludeIds = null, preCulled = false }) {
+function syncSimplePool({ pool, source, resources, parent, bounds, max, now, excludeIds = null, animateDecor = true, preCulled = false }) {
   const visible = pool.__visibleScratch || (pool.__visibleScratch = []);
   const seen = pool.__seenScratch || (pool.__seenScratch = new Set());
   visible.length = 0;
@@ -1683,7 +1715,7 @@ function syncSimplePool({ pool, source, resources, parent, bounds, max, now, exc
       visual.root.visible = false;
       continue;
     }
-    updateSimpleVisual(visual, unit, resources, now);
+    updateSimpleVisual(visual, unit, resources, now, animateDecor);
   }
 }
 
@@ -2334,7 +2366,9 @@ function PixiArenaRenderer({
       hostRef.current.appendChild(canvas);
       app.stage.eventMode = "none";
       app.stage.interactiveChildren = false;
-      app.stage.sortableChildren = true;
+      // Layers are added once in their final draw order, so per-frame child
+      // sorting only wastes CPU on older desktop browsers.
+      app.stage.sortableChildren = false;
 
       const resources = createResources(coreTypes);
       const background = new PIXI.Graphics();
@@ -2344,7 +2378,9 @@ function PixiArenaRenderer({
       const world = new PIXI.Container();
       world.eventMode = "none";
       world.interactiveChildren = false;
-      world.sortableChildren = true;
+      // terrain -> zone -> items -> projectiles -> entities -> combat is
+      // inserted in this exact order below; zIndex sorting is unnecessary.
+      world.sortableChildren = false;
       world.zIndex = 1;
 
       const terrainLayer = new PIXI.Container();
@@ -2429,6 +2465,7 @@ function PixiArenaRenderer({
       let appliedResolutionTier = 0;
       let dynamicResolution = config.resolution;
       let terrainVisibility = null;
+      let visualFrameIndex = 0;
       // Reused only inside this mounted Pixi instance. Zone PvP sends already
       // culled arrays, so these avoid building spread-array copies every frame.
       const combinedEntityScratch = [];
@@ -2559,6 +2596,18 @@ function PixiArenaRenderer({
           animateStaticPickups(staticMap, now);
         }
 
+        // Root motion stays at the monitor refresh rate. Only decorative
+        // children (rotor spins, engine pulse, escort orbit) are stepped on
+        // weak desktop hardware. This drastically reduces transform writes
+        // without removing any player/bot/drone from the scene.
+        visualFrameIndex += 1;
+        const remoteDecorEvery = config.visualFirstWeakDesktop
+          ? (adaptiveTier >= 2 ? 4 : adaptiveTier === 1 ? 3 : 2)
+          : config.lowSpecDesktop || config.weakMobile
+            ? (adaptiveTier >= 2 ? 5 : 3)
+            : 1;
+        const animateRemoteDecor = visualFrameIndex % remoteDecorEvery === 0;
+
         const zoneRadius = Number(data.safeZoneRadius || 0);
         const shouldShowZone = Boolean(data.showZone && zoneRadius > 0 && zoneRadius < Math.max(Number(data.worldWidth || 0), Number(data.worldHeight || 0)));
         if (shouldShowZone !== lastZoneVisible || Math.abs(zoneRadius - (lastZoneRadius || 0)) > 4) {
@@ -2579,7 +2628,17 @@ function PixiArenaRenderer({
           const rawStaticItemBudget = data.staticItemBudget;
           const hasRequestedStaticBudget = rawStaticItemBudget !== null && rawStaticItemBudget !== undefined && Number.isFinite(Number(rawStaticItemBudget));
           const requestedStaticBudget = hasRequestedStaticBudget ? Number(rawStaticItemBudget) : null;
-          const staticBudgetCeiling = config.mobile ? 190 : 300;
+          // Zone can request a high desktop budget. Clamp that request on weak
+          // integrated GPUs before the static layer is built; models/background
+          // stay identical while off-screen/decorative pickups stop consuming
+          // the frame budget.
+          const staticBudgetCeiling = config.mobile
+            ? 190
+            : config.visualFirstWeakDesktop
+              ? 80
+              : config.lowSpecDesktop
+                ? 60
+                : 300;
           const baseItemBudget = hasRequestedStaticBudget
             ? clamp(Math.round(requestedStaticBudget), 0, staticBudgetCeiling)
             : config.maxStaticItems;
@@ -2645,6 +2704,7 @@ function PixiArenaRenderer({
           max: 1,
           now,
           isPlayer: true,
+          animateDecor: true,
           preCulled: Boolean(data.zonePreCulled),
         });
         const fullUnitCap = adaptiveTier === 2
@@ -2662,6 +2722,7 @@ function PixiArenaRenderer({
           now,
           compact: adaptiveTier > 0,
           effectTier: remoteEffectTier,
+          animateDecor: animateRemoteDecor,
           preCulled: Boolean(data.zonePreCulled),
         });
         const fullBotIds = syncUnitPool({
@@ -2674,6 +2735,7 @@ function PixiArenaRenderer({
           now,
           compact: adaptiveTier > 0,
           effectTier: remoteEffectTier,
+          animateDecor: animateRemoteDecor,
           preCulled: Boolean(data.zonePreCulled),
         });
         const fullEntityIds = data.zonePreCulled ? null : new Set([...fullRemoteIds, ...fullBotIds]);
@@ -2697,6 +2759,7 @@ function PixiArenaRenderer({
           max: config.maxSimplePlayers,
           now,
           excludeIds: fullEntityIds,
+          animateDecor: animateRemoteDecor,
           preCulled: Boolean(data.zonePreCulled),
         });
         const fullProjectileCap = adaptiveTier === 2
