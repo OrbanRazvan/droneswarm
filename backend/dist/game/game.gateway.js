@@ -356,6 +356,43 @@ let GameGateway = class GameGateway {
         }
         return { room, player };
     }
+    enforceZonePvpDeparture(roomId, participantId, userId, resumeToken) {
+        const room = this.zonePvpRooms.get(String(roomId || ""));
+        if (!room || room.closedAt)
+            return;
+        if (participantId) {
+            if (!(room.departedParticipantIds instanceof Set)) {
+                room.departedParticipantIds = new Set();
+            }
+            room.departedParticipantIds.add(String(participantId));
+        }
+        if (userId) {
+            if (!(room.departedUserIds instanceof Set)) {
+                room.departedUserIds = new Set();
+            }
+            room.departedUserIds.add(String(userId));
+        }
+        let departedPlayer = null;
+        if (resumeToken) {
+            const seat = this.findZonePvpResumeSeat(resumeToken);
+            if (seat?.room?.id === room.id)
+                departedPlayer = seat.player;
+        }
+        if (!departedPlayer && participantId) {
+            departedPlayer = [...room.players.values()].find((candidate) => !candidate?.isBot &&
+                String(candidate?.participantId || "") === String(participantId));
+        }
+        if (departedPlayer && !departedPlayer.isBot) {
+            const departedSocketId = String(departedPlayer.id);
+            if (!this.zonePvpSocketRoom.has(departedSocketId)) {
+                this.zonePvpSocketRoom.set(departedSocketId, room.id);
+            }
+            this.removeZonePvpPlayer(departedSocketId, {
+                explicit: true,
+                participantId,
+            });
+        }
+    }
     detachZonePvpSocket(socketId, now = Date.now()) {
         const roomId = this.zonePvpSocketRoom.get(socketId);
         if (!roomId)
@@ -413,7 +450,6 @@ let GameGateway = class GameGateway {
             const previousSocket = this.server.sockets.sockets.get(previousSocketId);
             if (previousSocket?.connected) {
                 previousSocket.leave(room.id);
-                previousSocket.disconnect(true);
             }
         }
         const now = Date.now();
@@ -1026,7 +1062,12 @@ let GameGateway = class GameGateway {
         this.removePlayer(client.id);
         this.removeNormalPlayer(client.id);
         this.removeBattleRoyaleOnlinePlayer(client.id);
-        this.detachZonePvpSocket(client.id);
+        if (this.zonePvpSocketRoom.has(client.id)) {
+            this.removeZonePvpPlayer(client.id, { explicit: true });
+        }
+        else {
+            this.zonePvpSocketResumeToken.delete(client.id);
+        }
     }
     handlePvpJoin(client, data) {
         this.removePlayer(client.id);
@@ -1382,44 +1423,47 @@ let GameGateway = class GameGateway {
         const resumeToken = this.normalizeZonePvpResumeToken(data?.resumeToken);
         const participantId = this.normalizeZonePvpParticipantId(data?.participantId);
         const applicantUserId = data?.isGuest ? null : String(data?.userId || "").trim() || null;
+        const departedRoomId = String(data?.departedRoomId || "").trim();
+        const departedResumeToken = this.normalizeZonePvpResumeToken(data?.departedResumeToken);
+        if (departedRoomId) {
+            this.enforceZonePvpDeparture(departedRoomId, participantId, applicantUserId, departedResumeToken);
+        }
         const resumeSeat = this.findZonePvpResumeSeat(resumeToken);
         if (resumeSeat && resumeToken) {
             const { room, player } = resumeSeat;
-            if (room.status === "finished" || room.closingAt || room.closedAt) {
-                client.emit("zone-pvp:round-closed", {
-                    roomId: room.id,
-                    roundId: room.roundId || null,
-                    winnerId: room.winnerId || null,
-                    winnerName: room.winnerName || null,
-                    reason: room.finishReason || "finished",
-                    serverNow: now,
-                });
+            if (String(player.id) === String(client.id)) {
+                player.lastSeenAt = now;
+                player.lastInputReceivedAt = now;
+                player.disconnectedAt = 0;
+                this.markRoomOccupied(room);
+                client.join(room.id);
+                this.emitZonePvpJoined(client, room, player, true);
+                this.broadcastZonePvpRoomState(room, now, true);
                 return;
             }
-            if (player.participantId &&
-                participantId &&
-                String(player.participantId) !== String(participantId)) {
-                client.emit("zone-pvp:error", "Sesiunea Zone PvP nu poate fi restaurată din alt tab.");
-                return;
+            if (!this.zonePvpSocketRoom.has(String(player.id))) {
+                this.zonePvpSocketRoom.set(String(player.id), room.id);
             }
-            this.rebindZonePvpResumeSeat(room, player, client, resumeToken);
-            player.userId = data?.isGuest ? null : data?.userId;
-            player.isGuest = Boolean(data?.isGuest);
-            player.username = String(data?.username || (data?.isGuest ? "Guest" : "Player")).slice(0, 18);
-            player.skin = normalizeSkin(data?.isGuest ? "cyan" : data?.skin);
-            if (participantId)
-                player.participantId = participantId;
-            this.emitZonePvpJoined(client, room, player, true);
-            this.broadcastZonePvpRoomState(room, now, true);
+            this.removeZonePvpPlayer(String(player.id), {
+                explicit: true,
+                participantId: player.participantId || participantId,
+            });
+            client.emit("zone-pvp:round-closed", {
+                roomId: room.id,
+                roundId: room.roundId || null,
+                reason: "left-room",
+                serverNow: now,
+            });
             return;
         }
         const requestedResumeRoomId = String(data?.resumeRoomId || data?.roomId || "").trim();
         const requestedResumePlayerId = String(data?.resumePlayerId || data?.playerId || "").trim();
         const strictResume = Boolean(data?.resumeOnly && requestedResumeRoomId && requestedResumePlayerId);
         if (strictResume) {
-            client.emit("zone-pvp:resume-missing", {
+            client.emit("zone-pvp:round-closed", {
                 roomId: requestedResumeRoomId,
                 playerId: requestedResumePlayerId,
+                reason: "left-room",
                 serverNow: now,
             });
             return;
@@ -1554,31 +1598,37 @@ let GameGateway = class GameGateway {
             });
             return;
         }
-        const resumeToken = this.normalizeZonePvpResumeToken(data?.resumeToken);
-        const seat = this.findZonePvpResumeSeat(resumeToken);
-        const terminal = Boolean(seat?.room && seat?.player && seat.room.status === "finished");
-        const resumable = Boolean(seat?.room && seat?.player && seat.room.status !== "finished");
         client.emit("zone-pvp:session-check:result", {
             ok: true,
             active: false,
-            resumable,
-            terminal,
-            roomId: (resumable || terminal) ? seat.room.id : null,
-            playerId: (resumable || terminal) ? seat.player.id : null,
-            status: terminal ? "finished" : resumable ? seat.room.status : "missing",
-            winnerId: terminal ? seat.room.winnerId || null : null,
-            winnerName: terminal ? seat.room.winnerName || null : null,
+            resumable: false,
+            terminal: true,
+            roomId: null,
+            playerId: null,
+            status: "left",
+            winnerId: null,
+            winnerName: null,
             serverNow: now,
         });
     }
-    handleZonePvpResync(client, data) {
-        this.handleZonePvpJoin(client, {
-            ...(data || {}),
-            resumeOnly: Boolean(data?.resumeOnly),
-            resumeRoomId: data?.resumeRoomId || data?.roomId || null,
-            resumePlayerId: data?.resumePlayerId || data?.playerId || null,
-        });
-        return { ok: true, serverNow: Date.now() };
+    handleZonePvpResync(client) {
+        const room = this.getZonePvpRoomBySocket(client.id);
+        const player = room?.players?.get(client.id);
+        const now = Date.now();
+        if (!room || !player || room.closedAt || room.status === "finished") {
+            client.emit("zone-pvp:round-closed", {
+                roomId: room?.id || null,
+                roundId: room?.roundId || null,
+                reason: "left-room",
+                serverNow: now,
+            });
+            return { ok: false, serverNow: now };
+        }
+        player.lastSeenAt = now;
+        player.lastInputReceivedAt = now;
+        this.emitZonePvpJoined(client, room, player, true);
+        this.broadcastZonePvpRoomState(room, now, true);
+        return { ok: true, serverNow: now };
     }
     handleZonePvpLeave(client, data) {
         const roomId = this.zonePvpSocketRoom.get(client.id) || null;
@@ -1586,11 +1636,13 @@ let GameGateway = class GameGateway {
             explicit: true,
             participantId: this.normalizeZonePvpParticipantId(data?.participantId),
         });
+        const serverNow = Date.now();
         client.emit("zone-pvp:left", {
             roomId,
             playerId: client.id,
-            serverNow: Date.now(),
+            serverNow,
         });
+        return { ok: true, roomId, playerId: client.id, serverNow };
     }
     handleZonePvpInput(client, input) {
         const room = this.getZonePvpRoomBySocket(client.id);
@@ -4478,9 +4530,8 @@ __decorate([
 __decorate([
     (0, websockets_1.SubscribeMessage)("zone-pvp:resync"),
     __param(0, (0, websockets_1.ConnectedSocket)()),
-    __param(1, (0, websockets_1.MessageBody)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:paramtypes", [socket_io_1.Socket]),
     __metadata("design:returntype", void 0)
 ], GameGateway.prototype, "handleZonePvpResync", null);
 __decorate([

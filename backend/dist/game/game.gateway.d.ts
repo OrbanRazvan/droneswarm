@@ -30,6 +30,7 @@ export declare class GameGateway {
     private normalizeZonePvpParticipantId;
     private rememberZonePvpResumeSeat;
     private findZonePvpResumeSeat;
+    private enforceZonePvpDeparture;
     private detachZonePvpSocket;
     private remapZonePvpPlayerReferences;
     private rebindZonePvpResumeSeat;
@@ -75,11 +76,16 @@ export declare class GameGateway {
     handleBattleRoyaleOnlineInput(client: Socket, input: any): void;
     handleZonePvpJoin(client: Socket, data: any): void;
     handleZonePvpSessionCheck(client: Socket, data: any): void;
-    handleZonePvpResync(client: Socket, data: any): {
+    handleZonePvpResync(client: Socket): {
         ok: boolean;
         serverNow: number;
     };
-    handleZonePvpLeave(client: Socket, data: any): void;
+    handleZonePvpLeave(client: Socket, data: any): {
+        ok: boolean;
+        roomId: string;
+        playerId: string;
+        serverNow: number;
+    };
     handleZonePvpInput(client: Socket, input: any): void;
     handleZonePvpInputStop(client: Socket, payload: any): void;
     startLoop(): void;

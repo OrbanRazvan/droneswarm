@@ -498,6 +498,63 @@ export class GameGateway {
     return { room, player };
   }
 
+  // A client writes this departure marker before it disconnects. It covers the
+  // narrow case where a Wi-Fi/proxy drop prevents the normal leave packet from
+  // reaching the server. The next join request then still cannot be admitted to
+  // the abandoned room.
+  private enforceZonePvpDeparture(
+    roomId: string,
+    participantId: string | null,
+    userId: string | null,
+    resumeToken: string | null,
+  ) {
+    const room = this.zonePvpRooms.get(String(roomId || ""));
+    if (!room || room.closedAt) return;
+
+    if (participantId) {
+      if (!(room.departedParticipantIds instanceof Set)) {
+        room.departedParticipantIds = new Set<string>();
+      }
+      room.departedParticipantIds.add(String(participantId));
+    }
+
+    if (userId) {
+      if (!(room.departedUserIds instanceof Set)) {
+        room.departedUserIds = new Set<string>();
+      }
+      room.departedUserIds.add(String(userId));
+    }
+
+    let departedPlayer: any = null;
+    if (resumeToken) {
+      const seat = this.findZonePvpResumeSeat(resumeToken);
+      if (seat?.room?.id === room.id) departedPlayer = seat.player;
+    }
+
+    if (!departedPlayer && participantId) {
+      departedPlayer = [...room.players.values()].find(
+        (candidate: any) =>
+          !candidate?.isBot &&
+          String(candidate?.participantId || "") === String(participantId),
+      );
+    }
+
+    // Reuse the authoritative leave function so the main drone, projectiles,
+    // spectator links and any last-human room cleanup are all handled in one
+    // place. A disconnected old socket does not normally have a map entry, so
+    // restore that pointer only for this one cleanup call.
+    if (departedPlayer && !departedPlayer.isBot) {
+      const departedSocketId = String(departedPlayer.id);
+      if (!this.zonePvpSocketRoom.has(departedSocketId)) {
+        this.zonePvpSocketRoom.set(departedSocketId, room.id);
+      }
+      this.removeZonePvpPlayer(departedSocketId, {
+        explicit: true,
+        participantId,
+      });
+    }
+  }
+
   private detachZonePvpSocket(socketId: string, now = Date.now()) {
     const roomId = this.zonePvpSocketRoom.get(socketId);
     if (!roomId) return;
@@ -564,8 +621,11 @@ export class GameGateway {
 
       const previousSocket = this.server.sockets.sockets.get(previousSocketId);
       if (previousSocket?.connected) {
+        // Do not force a server-side disconnect here. It can surface as a
+        // client-visible Connection lost event while a new socket is already
+        // bound. Leaving the old room is enough; it has no Zone seat or input
+        // mapping after the remap above.
         previousSocket.leave(room.id);
-        previousSocket.disconnect(true);
       }
     }
 
@@ -1336,9 +1396,18 @@ export class GameGateway {
     this.removePlayer(client.id);
     this.removeNormalPlayer(client.id);
     this.removeBattleRoyaleOnlinePlayer(client.id);
-    // Zone PvP has resumable seats. A transport disconnect is not an explicit
-    // exit and must never reset a live round or create a duplicate lobby.
-    this.detachZonePvpSocket(client.id);
+
+    // Zone PvP deliberately has NO reconnect/resume path. A browser that leaves
+    // the transport is treated exactly like EXIT TO MENU: its drone/projectiles
+    // disappear now, the participant is barred from this exact room, and a later
+    // browser connection can only enter a different fresh matchmaking room.
+    // This prevents the old room from being restored after a visible connection
+    // error or an Engine.IO socket-id change.
+    if (this.zonePvpSocketRoom.has(client.id)) {
+      this.removeZonePvpPlayer(client.id, { explicit: true });
+    } else {
+      this.zonePvpSocketResumeToken.delete(client.id);
+    }
   }
   @SubscribeMessage("pvp:join")
   handlePvpJoin(@ConnectedSocket() client: Socket, @MessageBody() data: any) {
@@ -1781,57 +1850,68 @@ export class GameGateway {
     const resumeToken = this.normalizeZonePvpResumeToken(data?.resumeToken);
     const participantId = this.normalizeZonePvpParticipantId(data?.participantId);
     const applicantUserId = data?.isGuest ? null : String(data?.userId || "").trim() || null;
+    const departedRoomId = String(data?.departedRoomId || "").trim();
+    const departedResumeToken = this.normalizeZonePvpResumeToken(data?.departedResumeToken);
 
-    // First try to restore this tab's exact existing human seat. Rebinding the
-    // player object preserves HP, drones, projectiles, phase and spectator state.
+    // The browser persists this marker before EXIT TO MENU. Apply it before any
+    // matchmaking selection, so a leave packet lost during a network drop can
+    // never allow this participant back into the same room.
+    if (departedRoomId) {
+      this.enforceZonePvpDeparture(
+        departedRoomId,
+        participantId,
+        applicantUserId,
+        departedResumeToken,
+      );
+    }
+
+    // Zone PvP does not restore abandoned seats. A duplicate join from the
+    // same live socket is still idempotent (the client uses bounded retries for
+    // the very first admission packet), but a different socket is never allowed
+    // to take over the old participant after any disconnect.
     const resumeSeat = this.findZonePvpResumeSeat(resumeToken);
     if (resumeSeat && resumeToken) {
       const { room, player } = resumeSeat;
 
-      // A finished round is terminal. Never turn a reconnect/retry packet into
-      // a fresh lobby: the client receives a terminal event and returns to menu.
-      if (room.status === "finished" || room.closingAt || room.closedAt) {
-        client.emit("zone-pvp:round-closed", {
-          roomId: room.id,
-          roundId: room.roundId || null,
-          winnerId: room.winnerId || null,
-          winnerName: room.winnerName || null,
-          reason: room.finishReason || "finished",
-          serverNow: now,
-        });
+      if (String(player.id) === String(client.id)) {
+        player.lastSeenAt = now;
+        player.lastInputReceivedAt = now;
+        player.disconnectedAt = 0;
+        this.markRoomOccupied(room);
+        client.join(room.id);
+        this.emitZonePvpJoined(client, room, player, true);
+        this.broadcastZonePvpRoomState(room, now, true);
         return;
       }
 
-      if (
-        player.participantId &&
-        participantId &&
-        String(player.participantId) !== String(participantId)
-      ) {
-        client.emit("zone-pvp:error", "Sesiunea Zone PvP nu poate fi restaurată din alt tab.");
-        return;
+      // The old socket has gone away. Make its departure irreversible instead
+      // of rebinding it to this new transport.
+      if (!this.zonePvpSocketRoom.has(String(player.id))) {
+        this.zonePvpSocketRoom.set(String(player.id), room.id);
       }
-
-      this.rebindZonePvpResumeSeat(room, player, client, resumeToken);
-      player.userId = data?.isGuest ? null : data?.userId;
-      player.isGuest = Boolean(data?.isGuest);
-      player.username = String(data?.username || (data?.isGuest ? "Guest" : "Player")).slice(0, 18);
-      player.skin = normalizeSkin(data?.isGuest ? "cyan" : data?.skin);
-      if (participantId) player.participantId = participantId;
-      this.emitZonePvpJoined(client, room, player, true);
-      this.broadcastZonePvpRoomState(room, now, true);
+      this.removeZonePvpPlayer(String(player.id), {
+        explicit: true,
+        participantId: player.participantId || participantId,
+      });
+      client.emit("zone-pvp:round-closed", {
+        roomId: room.id,
+        roundId: room.roundId || null,
+        reason: "left-room",
+        serverNow: now,
+      });
       return;
     }
 
-    // A reconnect with a known room/player is allowed to restore only that
-    // exact seat. Never silently create a second room when a token is delayed,
-    // stale or the server is briefly resynchronising.
+    // A stale resume request is terminal by design. Never turn it into a new
+    // lobby and never emit a reconnect error panel to the browser.
     const requestedResumeRoomId = String(data?.resumeRoomId || data?.roomId || "").trim();
     const requestedResumePlayerId = String(data?.resumePlayerId || data?.playerId || "").trim();
     const strictResume = Boolean(data?.resumeOnly && requestedResumeRoomId && requestedResumePlayerId);
     if (strictResume) {
-      client.emit("zone-pvp:resume-missing", {
+      client.emit("zone-pvp:round-closed", {
         roomId: requestedResumeRoomId,
         playerId: requestedResumePlayerId,
+        reason: "left-room",
         serverNow: now,
       });
       return;
@@ -1987,39 +2067,44 @@ export class GameGateway {
       return;
     }
 
-    const resumeToken = this.normalizeZonePvpResumeToken(data?.resumeToken);
-    const seat = this.findZonePvpResumeSeat(resumeToken);
-    const terminal = Boolean(seat?.room && seat?.player && seat.room.status === "finished");
-    const resumable = Boolean(seat?.room && seat?.player && seat.room.status !== "finished");
-
+    // A Zone PvP seat is intentionally non-resumable. Once this socket is no
+    // longer active, the client returns quietly to the menu and cannot reopen
+    // the previous room.
     client.emit("zone-pvp:session-check:result", {
       ok: true,
       active: false,
-      resumable,
-      terminal,
-      roomId: (resumable || terminal) ? seat.room.id : null,
-      playerId: (resumable || terminal) ? seat.player.id : null,
-      status: terminal ? "finished" : resumable ? seat.room.status : "missing",
-      winnerId: terminal ? seat.room.winnerId || null : null,
-      winnerName: terminal ? seat.room.winnerName || null : null,
+      resumable: false,
+      terminal: true,
+      roomId: null,
+      playerId: null,
+      status: "left",
+      winnerId: null,
+      winnerName: null,
       serverNow: now,
     });
   }
 
   @SubscribeMessage("zone-pvp:resync")
-  handleZonePvpResync(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    // Reuse the exact join/rebind path. It is idempotent for an already-bound
-    // socket and emits a reliable full state, without allocating a new lobby.
-    this.handleZonePvpJoin(client, {
-      ...(data || {}),
-      resumeOnly: Boolean(data?.resumeOnly),
-      resumeRoomId: data?.resumeRoomId || data?.roomId || null,
-      resumePlayerId: data?.resumePlayerId || data?.playerId || null,
-    });
-    return { ok: true, serverNow: Date.now() };
+  handleZonePvpResync(@ConnectedSocket() client: Socket) {
+    const room = this.getZonePvpRoomBySocket(client.id);
+    const player = room?.players?.get(client.id);
+    const now = Date.now();
+
+    if (!room || !player || room.closedAt || room.status === "finished") {
+      client.emit("zone-pvp:round-closed", {
+        roomId: room?.id || null,
+        roundId: room?.roundId || null,
+        reason: "left-room",
+        serverNow: now,
+      });
+      return { ok: false, serverNow: now };
+    }
+
+    player.lastSeenAt = now;
+    player.lastInputReceivedAt = now;
+    this.emitZonePvpJoined(client, room, player, true);
+    this.broadcastZonePvpRoomState(room, now, true);
+    return { ok: true, serverNow: now };
   }
 
   @SubscribeMessage("zone-pvp:leave")
@@ -2036,11 +2121,13 @@ export class GameGateway {
     // Explicit exit is different from a transient Socket.IO disconnect.
     // Acknowledging it lets the client discard its resume token only after the
     // authoritative seat is gone, so it cannot re-enter this exact round.
+    const serverNow = Date.now();
     client.emit("zone-pvp:left", {
       roomId,
       playerId: client.id,
-      serverNow: Date.now(),
+      serverNow,
     });
+    return { ok: true, roomId, playerId: client.id, serverNow };
   }
 
   @SubscribeMessage("zone-pvp:input")

@@ -1185,6 +1185,9 @@ function shouldAcceptZonePhase(current, incoming = {}, allowFreshRoom = false) {
 
 const ZONE_PVP_RESUME_STORAGE_KEY = "drone-swarm:zone-pvp-resume-v1";
 const ZONE_PVP_PARTICIPANT_STORAGE_KEY = "drone-swarm:zone-pvp-participant-v1";
+// Persisted before disconnecting. It prevents the next Zone PvP mount from
+// being admitted back into a room whose leave packet was lost mid-flight.
+const ZONE_PVP_DEPARTED_ROOM_STORAGE_KEY = "drone-swarm:zone-pvp-departed-room-v1";
 
 function createZonePvpResumeToken() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -1234,6 +1237,50 @@ function getZonePvpParticipantId() {
     return next;
   } catch {
     return createZonePvpResumeToken();
+  }
+}
+
+function getZonePvpDepartedRoom() {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const raw = window.sessionStorage.getItem(ZONE_PVP_DEPARTED_ROOM_STORAGE_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw);
+    const roomId = String(value?.roomId || "").trim();
+    const participantId = String(value?.participantId || "").trim();
+    const resumeToken = String(value?.resumeToken || "").trim();
+    if (!roomId || !/^[A-Za-z0-9_-]{20,160}$/.test(participantId)) return null;
+    return {
+      roomId,
+      roundId: String(value?.roundId || "").trim() || null,
+      participantId,
+      resumeToken: /^[A-Za-z0-9_-]{20,160}$/.test(resumeToken) ? resumeToken : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function rememberZonePvpDepartedRoom({ roomId, roundId, participantId, resumeToken }) {
+  if (typeof window === "undefined" || !roomId || !participantId) return;
+  try {
+    window.sessionStorage.setItem(
+      ZONE_PVP_DEPARTED_ROOM_STORAGE_KEY,
+      JSON.stringify({ roomId, roundId: roundId || null, participantId, resumeToken: resumeToken || null }),
+    );
+  } catch {
+    // The backend still receives the normal explicit leave packet when storage
+    // is unavailable (private mode / blocked storage).
+  }
+}
+
+function clearZonePvpDepartedRoom() {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(ZONE_PVP_DEPARTED_ROOM_STORAGE_KEY);
+  } catch {
+    // no-op
   }
 }
 
@@ -1445,19 +1492,16 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     // loot/HUD traffic and is the main cause of slow-motion remote drones.
     const socket = io(API_URL, {
       autoConnect: false,
-      // WebSocket stays the fast path. Polling is only a recovery fallback
-      // for a browser returning after long sleep or a proxy/Render cold start.
-      transports: ["websocket", "polling"],
-      upgrade: true,
+      // Zone PvP has one authoritative seat per match. Use direct WebSocket
+      // only and do not reconnect this arena instance after a transport closes:
+      // the server removes the drone permanently and the UI returns to menu.
+      transports: ["websocket"],
+      upgrade: false,
       forceNew: true,
       multiplex: false,
       withCredentials: false,
       timeout: 12000,
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 500,
-      reconnectionDelayMax: 2500,
-      randomizationFactor: 0.25,
+      reconnection: false,
     });
 
     socketRef.current = socket;
@@ -1480,6 +1524,19 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     const markZoneJoinAccepted = (confirmation = {}) => {
       const confirmedPlayerId = confirmation?.playerId || confirmation?.you?.id;
       if (confirmedPlayerId && socket.id && String(confirmedPlayerId) !== String(socket.id)) return;
+
+      const departedRoom = getZonePvpDepartedRoom();
+      const confirmedRoomId = String(confirmation?.roomId || confirmation?.room?.id || "");
+      if (departedRoom && confirmedRoomId) {
+        if (confirmedRoomId === String(departedRoom.roomId)) {
+          // Defensive client guard: the server should already deny this, but no
+          // stale state may ever put the tab back in the room it left.
+          leaveZoneSilentlyToMenu();
+          return;
+        }
+        clearZonePvpDepartedRoom();
+      }
+
       zoneJoinAcceptedRef.current = true;
       zoneJoinAttemptRef.current = 0;
       clearZoneJoinRetry();
@@ -1487,6 +1544,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const getZoneJoinPayload = () => {
       const currentUser = userRef.current;
+      const departedRoom = getZonePvpDepartedRoom();
+      const sameParticipant =
+        departedRoom &&
+        String(departedRoom.participantId || "") === String(participantIdRef.current || "");
+
       return {
         userId: currentUser?.isGuest ? null : currentUser?.id,
         isGuest: Boolean(currentUser?.isGuest),
@@ -1494,6 +1556,11 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         skin: getSelectedSkin(currentUser),
         resumeToken: resumeTokenRef.current,
         participantId: participantIdRef.current,
+        // The backend marks this old room as departed before selecting any
+        // joinable room, even if the earlier leave acknowledgement was lost.
+        departedRoomId: sameParticipant ? departedRoom.roomId : null,
+        departedRoundId: sameParticipant ? departedRoom.roundId : null,
+        departedResumeToken: sameParticipant ? departedRoom.resumeToken : null,
       };
     };
 
@@ -1576,6 +1643,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     let zoneSessionCheckTimer = null;
     let zoneForcedReconnectTimer = null;
     let zoneSessionCheckInFlight = false;
+    let quietTerminalExitQueued = false;
 
     const clearZoneSessionCheck = () => {
       if (zoneSessionCheckTimer !== null) {
@@ -1585,41 +1653,43 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       zoneSessionCheckInFlight = false;
     };
 
-    const forceZoneTransportReconnect = () => {
-      if (disposed || intentionalExitRef.current) return;
-
-      // A missed volatile transform/state packet is not proof that the socket
-      // itself is dead. The old implementation disconnected a healthy socket
-      // here, which could create the visible "Connection lost" cascade during
-      // a busy 60-seat fight. Keep the transport/seat intact and retry only the
-      // reliable session check. Socket.IO still reconnects on a real transport
-      // failure by itself.
+    const leaveZoneSilentlyToMenu = () => {
+      if (disposed || intentionalExitRef.current || quietTerminalExitQueued) return;
+      quietTerminalExitQueued = true;
+      intentionalExitRef.current = true;
+      explicitLeaveSentRef.current = true;
+      zoneJoinAcceptedRef.current = true;
+      zoneJoinAttemptRef.current = 0;
+      clearZoneJoinRetry();
       clearZoneSessionCheck();
-      setConnectionError("Se verifică și se sincronizează sesiunea PvP...");
-      if (!socket.connected) {
-        socket.connect();
-        return;
-      }
-
-      if (zoneForcedReconnectTimer !== null) window.clearTimeout(zoneForcedReconnectTimer);
-      zoneForcedReconnectTimer = window.setTimeout(() => {
+      if (zoneForcedReconnectTimer !== null) {
+        window.clearTimeout(zoneForcedReconnectTimer);
         zoneForcedReconnectTimer = null;
-        if (!disposed && !intentionalExitRef.current) verifyZoneSession();
-      }, 900);
+      }
+      setConnectionError("");
+      clearZonePvpResumeToken();
+      resumeTokenRef.current = createZonePvpResumeToken();
+      socket.disconnect();
+      window.setTimeout(() => {
+        if (!disposed) onExitToMenu?.();
+      }, 0);
+    };
+
+    const forceZoneTransportReconnect = () => {
+      // No visible Connection lost state and no automatic resume/rejoin. A
+      // missing authoritative stream ends only this local arena instance.
+      leaveZoneSilentlyToMenu();
     };
 
     const verifyZoneSession = () => {
       if (disposed || intentionalExitRef.current || document.visibilityState === "hidden") return;
-      if (!socket.connected) {
-        socket.connect();
+      if (!socket.connected || zoneSessionCheckInFlight) {
+        forceZoneTransportReconnect();
         return;
       }
-      if (zoneSessionCheckInFlight) return;
 
       zoneSessionCheckInFlight = true;
-      socket.emit("zone-pvp:session-check", {
-        resumeToken: resumeTokenRef.current,
-      });
+      socket.emit("zone-pvp:session-check", { resumeToken: resumeTokenRef.current });
       zoneSessionCheckTimer = window.setTimeout(() => {
         if (zoneSessionCheckInFlight) forceZoneTransportReconnect();
       }, ZONE_SESSION_CHECK_TIMEOUT_MS);
@@ -2024,7 +2094,6 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       setConnectionError("");
       combatEventMapRef.current.clear();
       selfCombatSnapshotRef.current = null;
-      // A new Engine.IO session has a new socket id and must be admitted again.
       zoneJoinAcceptedRef.current = false;
       zoneJoinAttemptRef.current = 0;
       clearZoneJoinRetry();
@@ -2032,28 +2101,19 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
 
     const handleConnectError = () => {
-      if (disposed || intentionalExitRef.current) return;
-      setConnectionError("Nu ma pot conecta la serverul PvP. Se reincerca automat...");
+      // Never show Connection lost / Connection error in the arena. A failed
+      // initial transport simply returns to the hangar; the user can start a
+      // completely new matchmaking request explicitly.
+      leaveZoneSilentlyToMenu();
     };
 
-    const handleDisconnect = (reason) => {
+    const handleDisconnect = () => {
       zoneJoinAcceptedRef.current = false;
       zoneJoinAttemptRef.current = 0;
       clearZoneJoinRetry();
-
-      if (!disposed && !intentionalExitRef.current && reason !== "io client disconnect") {
-        setConnectionError("Se restabilește conexiunea la sesiunea Zone PvP...");
-
-        // Socket.IO does not automatically reconnect after a server-initiated
-        // disconnect. Reopen the same client instance so its resume token can
-        // restore the exact live seat rather than creating another lobby.
-        if (reason === "io server disconnect") {
-          window.setTimeout(() => {
-            if (!disposed && !intentionalExitRef.current && !socket.connected) {
-              socket.connect();
-            }
-          }, 250);
-        }
+      if (!disposed && !intentionalExitRef.current) {
+        // No Socket.IO resume and no automatic join of the previous room.
+        leaveZoneSilentlyToMenu();
       }
     };
 
@@ -2091,72 +2151,28 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }, 0);
     };
 
-    const stopAutomaticFreshLobbyForLiveRound = (message) => {
-      zoneJoinAcceptedRef.current = true;
-      zoneJoinAttemptRef.current = 0;
-      clearZoneJoinRetry();
-      setConnectionError(message);
+    const stopAutomaticFreshLobbyForLiveRound = () => {
+      leaveZoneSilentlyToMenu();
     };
 
     const handleZoneSessionCheckResult = (result = {}) => {
       clearZoneSessionCheck();
-      if (disposed) return;
+      if (disposed || intentionalExitRef.current) return;
       lastZoneServerPacketAtRef.current = Date.now();
 
-      if (result?.terminal) {
-        handleZoneRoundClosed({
-          roomId: result.roomId,
-          winnerId: result.winnerId,
-          winnerName: result.winnerName,
-          reason: "finished",
-        });
+      if (result?.active) {
+        socket.emit("zone-pvp:resync");
         return;
       }
 
-      if (result?.active || result?.resumable) {
-        zoneJoinAcceptedRef.current = false;
-        zoneJoinAttemptRef.current = 0;
-        requestZoneJoin();
-        return;
-      }
-
-      const wasLiveRound =
-        zonePhaseRef.current?.status === "playing" ||
-        zonePhaseRef.current?.status === "finished" ||
-        Boolean(zonePhaseRef.current?.lockedRoomId);
-
-      if (wasLiveRound) {
-        // A server restart cannot preserve an in-memory match. Do not silently
-        // place this user into a replacement lobby, because that looks like the
-        // live round restarted. The player can explicitly return to the menu.
-        stopAutomaticFreshLobbyForLiveRound(
-          "Sesiunea Zone PvP nu mai este disponibilă. Camera nu va fi restartată automat.",
-        );
-        return;
-      }
-
-      resetZoneAfterExpiredSession();
-      requestZoneJoin();
+      // A non-active session is not revived. Return silently rather than
+      // recreating a room or showing an error banner.
+      leaveZoneSilentlyToMenu();
     };
 
     const handleZoneResumeMissing = () => {
       clearZoneSessionCheck();
-      if (disposed) return;
-
-      const wasLiveRound =
-        zonePhaseRef.current?.status === "playing" ||
-        zonePhaseRef.current?.status === "finished" ||
-        Boolean(zonePhaseRef.current?.lockedRoomId);
-
-      if (wasLiveRound) {
-        stopAutomaticFreshLobbyForLiveRound(
-          "Sesiunea Zone PvP nu mai este disponibilă. Camera nu va fi restartată automat.",
-        );
-        return;
-      }
-
-      resetZoneAfterExpiredSession();
-      requestZoneJoin();
+      leaveZoneSilentlyToMenu();
     };
 
     const recoverVisibleZoneSession = () => {
@@ -2624,7 +2640,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     socket.on("zone-pvp:world-delta", applyWorldItemDelta);
     socket.on("zone-pvp:entity-removed", applyEntityRemoved);
     socket.on("zone-pvp:eliminated", applyEliminated);
-    socket.on("zone-pvp:error", (message) => setConnectionError(typeof message === "string" ? message : "Eroare Zone PvP."));
+    socket.on("zone-pvp:error", () => leaveZoneSilentlyToMenu());
 
     // All listeners are attached before transport starts, avoiding a fast
     // join/state race on mobile browsers.
@@ -3666,6 +3682,21 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     // room, then the local resumable token is discarded.
     const departingResumeToken = resumeTokenRef.current;
     const departingParticipantId = participantIdRef.current;
+    const departingRoomId = String(zonePhaseRef.current?.roomId || worldRef.current?.roomId || "");
+    const departingRoundId = String(zonePhaseRef.current?.roundId || worldRef.current?.roundId || "");
+
+    // Write this BEFORE emitting/disconnecting. If the browser loses the leave
+    // packet, the next mount still tells the backend to permanently deny this
+    // participant from the old room.
+    if (departingRoomId) {
+      rememberZonePvpDepartedRoom({
+        roomId: departingRoomId,
+        roundId: departingRoundId || null,
+        participantId: departingParticipantId,
+        resumeToken: departingResumeToken,
+      });
+    }
+
     intentionalExitRef.current = true;
     zoneJoinAcceptedRef.current = true;
     clearZonePvpResumeToken();
@@ -3700,16 +3731,18 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     socket.once("zone-pvp:left", finishExit);
     if (!explicitLeaveSentRef.current) {
       explicitLeaveSentRef.current = true;
-      socket.emit("zone-pvp:leave", {
+      const leavePayload = {
         resumeToken: departingResumeToken,
         participantId: departingParticipantId,
-      });
+        departedRoomId: departingRoomId || null,
+      };
+      // The ACK and the event are both accepted. The longer timeout gives the
+      // server enough time to remove the drone first; the persisted departure
+      // marker remains the final guard if the transport drops mid-leave.
+      socket.timeout(2500).emit("zone-pvp:leave", leavePayload, () => finishExit());
     }
 
-    // Do not strand the UI if a proxy drops the acknowledgement. The server
-    // still receives the leave packet on a healthy socket; this short fallback
-    // only guarantees the menu remains responsive.
-    explicitExitTimerRef.current = window.setTimeout(finishExit, 700);
+    explicitExitTimerRef.current = window.setTimeout(finishExit, 2800);
   };
 
   const matchStartedAt = hudData.matchStartedAt || renderData.matchStartedAt;
@@ -3898,12 +3931,8 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         <div className="battle-royale-begin-flash zone-pvp-begin-flash">BATTLE BEGIN</div>
       )}
 
-      {connectionError && (
-        <div className="pvp-waiting-panel">
-          <h1>Connection error</h1>
-          <p className="pvp-error">{connectionError}</p>
-        </div>
-      )}
+      {/* Zone PvP intentionally has no Connection lost/error overlay. A closed
+          transport returns to the hangar and never resumes this room. */}
 
       {isDead && !isFinished && (
         <div className="normal-pvp-death-panel">
