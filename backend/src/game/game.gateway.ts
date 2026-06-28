@@ -1799,16 +1799,14 @@ export class GameGateway {
     this.removeNormalPlayer(client.id);
     this.removeBattleRoyaleOnlinePlayer(client.id);
 
-    // A transport disconnect is NOT an EXIT TO MENU. Under a server CPU spike,
-    // Wi-Fi handoff or a browser waking from sleep, removing the seat here made
-    // every real player disappear at once and then closed the whole 60-seat room.
-    //
-    // Only `zone-pvp:leave` is an explicit / irreversible departure. A transient
-    // disconnect freezes this participant's input, keeps the authoritative drone
-    // and resume token in the live round, then lets the next Socket.IO transport
-    // rebind to exactly the same seat.
+    // Zone PvP deliberately has NO reconnect/resume path. A browser that leaves
+    // the transport is treated exactly like EXIT TO MENU: its drone/projectiles
+    // disappear now, the participant is barred from this exact room, and a later
+    // browser connection can only enter a different fresh matchmaking room.
+    // This prevents the old room from being restored after a visible connection
+    // error or an Engine.IO socket-id change.
     if (this.zonePvpSocketRoom.has(client.id)) {
-      this.detachZonePvpSocket(client.id, Date.now());
+      this.removeZonePvpPlayer(client.id, { explicit: true });
     } else {
       this.zonePvpSocketResumeToken.delete(client.id);
     }
@@ -2269,22 +2267,41 @@ export class GameGateway {
       );
     }
 
-    // Reconnects resume the exact authoritative seat. This is deliberately
-    // separate from EXIT TO MENU: explicit leave deletes the resume token first,
-    // while a transport loss preserves it. Rebinding prevents a socket-id change
-    // from deleting the drone / bots / entire live room during a brief lag spike.
+    // Zone PvP does not restore abandoned seats. A duplicate join from the
+    // same live socket is still idempotent (the client uses bounded retries for
+    // the very first admission packet), but a different socket is never allowed
+    // to take over the old participant after any disconnect.
     const resumeSeat = this.findZonePvpResumeSeat(resumeToken);
     if (resumeSeat && resumeToken) {
       const { room, player } = resumeSeat;
 
-      if (!room.closedAt) {
-        this.rebindZonePvpResumeSeat(room, player, client, resumeToken);
+      if (String(player.id) === String(client.id)) {
+        player.lastSeenAt = now;
+        player.lastInputReceivedAt = now;
+        player.disconnectedAt = 0;
+        this.markRoomOccupied(room);
+        client.join(room.id);
         this.emitZonePvpJoined(client, room, player, true);
         this.broadcastZonePvpRoomState(room, now, true);
         return;
       }
 
-      this.zonePvpResumeSeats.delete(resumeToken);
+      // The old socket has gone away. Make its departure irreversible instead
+      // of rebinding it to this new transport.
+      if (!this.zonePvpSocketRoom.has(String(player.id))) {
+        this.zonePvpSocketRoom.set(String(player.id), room.id);
+      }
+      this.removeZonePvpPlayer(String(player.id), {
+        explicit: true,
+        participantId: player.participantId || participantId,
+      });
+      client.emit("zone-pvp:round-closed", {
+        roomId: room.id,
+        roundId: room.roundId || null,
+        reason: "left-room",
+        serverNow: now,
+      });
+      return;
     }
 
     // A stale resume request is terminal by design. Never turn it into a new
@@ -2475,7 +2492,7 @@ export class GameGateway {
     const player = room?.players?.get(client.id);
     const now = Date.now();
 
-    if (!room || !player || room.closedAt) {
+    if (!room || !player || room.closedAt || room.status === "finished") {
       client.emit("zone-pvp:round-closed", {
         roomId: room?.id || null,
         roundId: room?.roundId || null,
@@ -4293,12 +4310,9 @@ export class GameGateway {
     room.winnerName = winner?.username || null;
     room.finishedAt = now;
     room.finishReason = reason;
-    // Keep the finished result authoritative until participants explicitly
-    // leave. Closing after a fixed 2.8 seconds was the direct reason every
-    // device was thrown back to Dashboard even though nobody pressed EXIT.
-    // Finished rooms are never matchmaking candidates, but they remain
-    // resumable/viewable for the live participants.
-    room.closingAt = null;
+    // Display the final authoritative result briefly, then delete the room.
+    // This terminal state is never eligible for matchmaking or reconnection.
+    room.closingAt = now + ZONE_PVP_FINISH_DISPLAY_MS;
     room.phaseVersion = Number(room.phaseVersion || 0) + 1;
     room.projectiles = [];
 
@@ -5401,29 +5415,13 @@ export class GameGateway {
     }
 
     if (room.status === "finished") {
-      // A match result must remain visible. Never turn a finished game into an
-      // automatic Dashboard redirect while any real participant still owns a
-      // seat. Explicit EXIT TO MENU removes that seat and the last exit closes
-      // the room immediately through removeZonePvpPlayer.
-      const realPlayerCount = this.getZoneHumanPlayerCount(room);
-      const connectedRealPlayerCount = this.getZoneConnectedHumanPlayerCount(room);
-
-      if (realPlayerCount === 0) {
+      if (!room.closingAt) {
+        room.closingAt = now + ZONE_PVP_FINISH_DISPLAY_MS;
+      }
+      if (now >= room.closingAt) {
         this.closeZonePvpRoom(room, now, room.finishReason || "finished");
         return;
       }
-
-      // If every browser vanished without an explicit leave, keep the terminal
-      // result through the same reconnect grace as a live round. Cleanup above
-      // removes expired transient seats first, so this is only a final fallback.
-      if (
-        connectedRealPlayerCount === 0 &&
-        room.finishedAt &&
-        now - Number(room.finishedAt) >= ZONE_PVP_RECONNECT_GRACE_MS
-      ) {
-        this.closeZonePvpRoom(room, now, room.finishReason || "finished");
-      }
-      return;
     }
 
     if (this.shouldDeleteEmptyRoom(room, now)) {
