@@ -279,10 +279,11 @@ let GameGateway = class GameGateway {
     getZoneConnectedHumanPlayerCount(room) {
         let count = 0;
         for (const player of room?.players?.values?.() || []) {
-            if (player?.isBot || Number(player?.disconnectedAt || 0) > 0)
+            if (!player || player.isBot)
                 continue;
-            if (this.server?.sockets?.sockets?.has(String(player.id)))
-                count += 1;
+            if (Number(player.disconnectedAt || 0) > 0)
+                continue;
+            count += 1;
         }
         return count;
     }

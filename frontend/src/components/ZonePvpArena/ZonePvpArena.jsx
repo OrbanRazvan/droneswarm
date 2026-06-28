@@ -3808,11 +3808,18 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     status === "playing" ? 1 : 0,
   );
   const minPlayers = hudData.minPlayers || renderData.minPlayers || 3;
+  // A volatile matchmaking packet can briefly contain 0 while a reliable
+  // state packet already knows the real players in the room. Never let that
+  // stale zero overwrite the visible lobby count.
+  const getReliableMatchmakingCount = (data) => Math.max(
+    Number(data?.matchmakingPlayerCount || 0),
+    Number(data?.realPlayerCount || 0),
+  );
   const matchmakingPlayerCount = Math.min(
     minPlayers,
     Math.max(
-      Number(hudData.matchmakingPlayerCount ?? hudData.realPlayerCount ?? 0),
-      Number(renderData.matchmakingPlayerCount ?? renderData.realPlayerCount ?? 0),
+      getReliableMatchmakingCount(hudData),
+      getReliableMatchmakingCount(renderData),
       0,
     ),
   );

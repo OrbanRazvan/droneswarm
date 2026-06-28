@@ -416,15 +416,18 @@ export class GameGateway {
     return this.getZoneHumanPlayers(room).length;
   }
 
-  // Matchmaking must count actively connected real browsers, not a reserved
-  // reconnect seat that lost its transport while the lobby is still waiting.
-  // Live rounds deliberately keep using getZoneHumanPlayerCount so a brief
-  // reconnect does not end an already-started match.
+  // Matchmaking counts real seats that are currently attached to this room.
+  // `disconnectedAt` is the authoritative disconnect marker set by the Zone
+  // transport lifecycle. Do not query Socket.IO's internal socket map here:
+  // depending on adapter/recovery timing it can temporarily be empty while the
+  // join handler has already admitted a real browser, which incorrectly showed
+  // 0/3 and cancelled the countdown for everybody.
   private getZoneConnectedHumanPlayerCount(room: any) {
     let count = 0;
     for (const player of room?.players?.values?.() || []) {
-      if (player?.isBot || Number(player?.disconnectedAt || 0) > 0) continue;
-      if (this.server?.sockets?.sockets?.has(String(player.id))) count += 1;
+      if (!player || player.isBot) continue;
+      if (Number(player.disconnectedAt || 0) > 0) continue;
+      count += 1;
     }
     return count;
   }
