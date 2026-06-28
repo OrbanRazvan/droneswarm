@@ -43,16 +43,14 @@ const REMOTE_HARD_SNAP_DISTANCE = 900;
 const REMOTE_MAX_EXTRAPOLATE_MS = 220;
 const REMOTE_PRESENTATION_LEAD_MS = 26;
 const REMOTE_FOLLOW_RESPONSE = 92;
-// Every desktop consumes only the newest socket transform once per display
-// frame. Good PCs no longer execute multiple packet callbacks inside one
-// render frame; weak PCs keep their larger concealment lead.
-const DESKTOP_REMOTE_PRESENTATION_LEAD_MS = 38;
+// Weak desktops coalesce socket bursts to one newest transform per display
+// frame. A small extra visual lead hides that one-frame batching cost while
+// velocity-based prediction keeps the authoritative path continuous.
 const WEAK_DESKTOP_REMOTE_PRESENTATION_LEAD_MS = 46;
 // Attack drones are rendered from their newest authoritative velocity with a
 // tiny presentation lead. This removes the old "one packet behind" feel even
 // when an older laptop skips an animation frame.
 const PROJECTILE_PRESENTATION_LEAD_MS = 30;
-const DESKTOP_PROJECTILE_PRESENTATION_LEAD_MS = 42;
 const WEAK_DESKTOP_PROJECTILE_PRESENTATION_LEAD_MS = 50;
 const WEAK_DESKTOP_RENDER_SELECTION_REFRESH_MS = 90;
 const PROJECTILE_MAX_EXTRAPOLATE_MS = 180;
@@ -172,6 +170,34 @@ function getSelectedSkin(user) {
 
 function getDisplayName(user) {
   return user?.username || user?.firstName || user?.email?.split("@")?.[0] || "Player";
+}
+
+// Guest-ul nu are GameUser/Player în PostgreSQL. Această cheie anonimă este
+// însă stabilă pe durata browserului și leagă recordul lui de Top 10 global.
+const GUEST_STATS_KEY_STORAGE = "drone-swarm-guest-leaderboard-key";
+
+function createGuestStatsKey() {
+  const generated =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+
+  return `guest_${generated}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 160);
+}
+
+function getGuestStatsKey() {
+  try {
+    const existing = sessionStorage.getItem(GUEST_STATS_KEY_STORAGE);
+    if (existing && /^[A-Za-z0-9_-]{16,160}$/.test(existing)) {
+      return existing;
+    }
+
+    const next = createGuestStatsKey();
+    sessionStorage.setItem(GUEST_STATS_KEY_STORAGE, next);
+    return next;
+  } catch {
+    return createGuestStatsKey();
+  }
 }
 
 function isRealMobileDevice() {
@@ -1643,12 +1669,14 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         departedRoom &&
         String(departedRoom.participantId || "") === String(participantIdRef.current || "");
 
+      const isGuest = Boolean(currentUser?.isGuest);
+
       return {
-        userId: currentUser?.isGuest ? null : currentUser?.id,
-        isGuest: Boolean(currentUser?.isGuest),
-        // Same anonymous key as Normal PvP. It is used only for a Guest that
-        // reaches a global Top 10; no GameUser or Player row is created.
-        guestStatsKey: currentUser?.isGuest ? currentUser?.guestStatsKey || null : null,
+        userId: isGuest ? null : currentUser?.id,
+        isGuest,
+        // Cheie anonimă stabilă: permite record live pentru Guest în Top 10,
+        // fără să creeze GameUser sau Player în baza de date.
+        guestStatsKey: isGuest ? getGuestStatsKey() : null,
         username: getDisplayName(currentUser),
         skin: getSelectedSkin(currentUser),
         resumeToken: resumeTokenRef.current,
@@ -2512,12 +2540,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     const applyMovementFrame = (packet = {}) => {
       lastZoneServerPacketAtRef.current = Date.now();
 
-      // PvE never has socket callbacks in the middle of a render frame. Use
-      // the same latest-wins handoff for every desktop: a good PC now renders
-      // one coherent transform set per frame instead of occasionally applying
-      // two 50 Hz packets between its WebGL updates. Phones retain immediate
-      // handling because background timer throttling is more common there.
-      if (!mobilePerformanceRef.current) {
+      // PvE never has socket callbacks in the middle of a render frame. On an
+      // older desktop, up to 40–50 Zone transform callbacks/sec can otherwise
+      // split the JS frame and make the local camera/projectile feel uneven.
+      // Consume only the newest tuple packet on the next display frame. The
+      // motion resolver below extrapolates velocity by a small fixed lead, so
+      // the player sees continuous 60 Hz motion rather than delayed steps.
+      if (constrainedDesktopRef.current && !mobilePerformanceRef.current) {
         latestMovementPacketRef.current = packet;
         if (!movementFlushRafRef.current) {
           movementFlushRafRef.current = window.requestAnimationFrame(() => {
@@ -2530,6 +2559,7 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         return;
       }
 
+      // Good desktops and phones keep the existing immediate behavior.
       consumeMovementFrame(packet);
     };
 
@@ -3052,18 +3082,13 @@ function ZonePvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         spectatorTargetRef.current = currentSpectatorTarget;
       }
 
-      const desktopMotion = !mobilePerformanceRef.current;
-      const weakDesktopMotion = constrainedDesktopRef.current && desktopMotion;
+      const weakDesktopMotion = constrainedDesktopRef.current && !mobilePerformanceRef.current;
       const remotePresentationLead = weakDesktopMotion
         ? WEAK_DESKTOP_REMOTE_PRESENTATION_LEAD_MS
-        : desktopMotion
-          ? DESKTOP_REMOTE_PRESENTATION_LEAD_MS
-          : REMOTE_PRESENTATION_LEAD_MS;
+        : REMOTE_PRESENTATION_LEAD_MS;
       const projectilePresentationLead = weakDesktopMotion
         ? WEAK_DESKTOP_PROJECTILE_PRESENTATION_LEAD_MS
-        : desktopMotion
-          ? DESKTOP_PROJECTILE_PRESENTATION_LEAD_MS
-          : PROJECTILE_PRESENTATION_LEAD_MS;
+        : PROJECTILE_PRESENTATION_LEAD_MS;
       const motions = remoteMotionRef.current;
       const activeRemoteIds = new Set();
 
