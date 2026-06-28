@@ -17,11 +17,16 @@ export declare class GameGateway {
     constructor();
     private normalizeGameStatsMode;
     private normalizeGameStatsUserId;
+    private normalizeGameStatsGuestKey;
     private getGameStatsDisplayName;
     private emptyGameModeStat;
+    private getGameStatsLeaderboardOrder;
+    private pruneGuestStatsOutsideTop;
+    private notifyGameStatsLeaderboardsChanged;
     private persistGameModeStat;
     private getGameStatsPayload;
     private emitGameStatsPayload;
+    private recordLivePvpLeaderboardScore;
     private recordNormalPvpBest;
     private recordZonePvpParticipant;
     private recordZonePvpMatch;
@@ -229,6 +234,7 @@ export declare class GameGateway {
         x: number;
         y: number;
     };
+    private broadcastNormalPvpTransforms;
     broadcastNormalRoomState(room: any, now: any): void;
     findOrCreateBattleRoyaleOnlineRoom(): any;
     getBattleRoyaleOnlineRoomBySocket(socketId: any): any;

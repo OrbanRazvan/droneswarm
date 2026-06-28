@@ -88,7 +88,14 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 // latest input. It cuts mobile/network pressure roughly in half vs 60 Hz.
 const INPUT_SEND_INTERVAL_MS = 20;
 const INPUT_HEARTBEAT_MS = 240;
-const SNAPSHOT_INTERPOLATION_DELAY_MS = 70;
+// Desktop presentation stays close to the newest transform. Mobile keeps the
+// larger jitter cushion it already needed on slower browsers.
+const NORMAL_DESKTOP_SNAPSHOT_INTERPOLATION_DELAY_MS = 28;
+const NORMAL_MOBILE_SNAPSHOT_INTERPOLATION_DELAY_MS = 70;
+const NORMAL_REMOTE_MAX_EXTRAPOLATE_MS = 170;
+const NORMAL_REMOTE_PRESENTATION_LEAD_MS = 14;
+const NORMAL_PROJECTILE_PRESENTATION_LEAD_MS = 28;
+const NORMAL_PROJECTILE_STREAM_MISSING_MS = 220;
 const SNAPSHOT_BUFFER_TTL_MS = 520;
 
 // Keep PvP desktop framing exactly locked to BattleRoyaleMode.
@@ -1138,19 +1145,100 @@ function reconcileHeldInputUnit(local, server, now = performance.now(), lastLoca
   };
 }
 
+function getNormalRemoteVelocity(snapshot) {
+  const fallbackSpeed =
+    CLIENT_SPEED *
+    NORMAL_BASE_MOVE_SPEED_MULTIPLIER *
+    Math.max(1, Number(snapshot?.moveSpeedMultiplier || 1));
+
+  return {
+    x: Number.isFinite(Number(snapshot?.velocityX))
+      ? Number(snapshot.velocityX)
+      : Number(snapshot?.moveX || 0) * fallbackSpeed,
+    y: Number.isFinite(Number(snapshot?.velocityY))
+      ? Number(snapshot.velocityY)
+      : Number(snapshot?.moveY || 0) * fallbackSpeed,
+  };
+}
+
+function extrapolateNormalRemoteSnapshot(snapshot, aheadMs = 0) {
+  if (!snapshot) return snapshot;
+
+  const safeAheadMs = clamp(
+    Number(aheadMs || 0) + NORMAL_REMOTE_PRESENTATION_LEAD_MS,
+    0,
+    NORMAL_REMOTE_MAX_EXTRAPOLATE_MS,
+  );
+  if (!snapshot.isMoving || safeAheadMs <= 0) return snapshot;
+
+  const velocity = getNormalRemoteVelocity(snapshot);
+  const seconds = safeAheadMs / 1000;
+  return {
+    ...snapshot,
+    x: Number(snapshot.x || 0) + velocity.x * seconds,
+    y: Number(snapshot.y || 0) + velocity.y * seconds,
+  };
+}
+
+function cubicHermiteNormal(p0, v0, p1, v1, t, durationSeconds) {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  const h00 = 2 * t3 - 3 * t2 + 1;
+  const h10 = t3 - 2 * t2 + t;
+  const h01 = -2 * t3 + 3 * t2;
+  const h11 = t3 - t2;
+  return h00 * p0 + h10 * durationSeconds * v0 + h01 * p1 + h11 * durationSeconds * v1;
+}
+
+function appendNormalRemoteSnapshot(buffer = [], snapshot, receivedAt, serverAt = 0) {
+  if (!snapshot?.id) return buffer;
+
+  const previous = buffer[buffer.length - 1] || null;
+  const previousServerAt = Number(previous?.__serverAt || 0);
+  const incomingServerAt = Number(serverAt || snapshot?.__serverAt || 0);
+
+  // Full state packets can arrive after the faster transform lane. Never let
+  // an older snapshot pull a remote drone backwards.
+  if (incomingServerAt > 0 && previousServerAt > incomingServerAt) return buffer;
+
+  const merged = {
+    ...(previous || {}),
+    ...snapshot,
+    __receivedAt: receivedAt,
+    __serverAt: incomingServerAt || previousServerAt || 0,
+  };
+
+  if (incomingServerAt > 0 && previousServerAt > 0 && incomingServerAt === previousServerAt) {
+    return [...buffer.slice(0, -1), {
+      ...merged,
+      __receivedAt: previous.__receivedAt,
+      __serverAt: previousServerAt,
+    }];
+  }
+
+  return [...buffer, merged]
+    .filter((entry) => receivedAt - Number(entry?.__receivedAt || receivedAt) <= SNAPSHOT_BUFFER_TTL_MS)
+    .slice(-10);
+}
+
 function interpolateSnapshotBuffer(buffer = [], renderTime) {
   if (!buffer.length) return null;
-  if (buffer.length === 1) return buffer[0];
+
+  const newest = buffer[buffer.length - 1];
+  const newestTime = Number(newest?.__receivedAt || renderTime);
+  if (buffer.length === 1 || renderTime >= newestTime) {
+    return extrapolateNormalRemoteSnapshot(newest, renderTime - newestTime);
+  }
 
   let older = buffer[0];
-  let newer = buffer[buffer.length - 1];
+  let newer = newest;
 
   for (let i = 0; i < buffer.length - 1; i += 1) {
     const a = buffer[i];
     const b = buffer[i + 1];
     if (
-      (a.__receivedAt || 0) <= renderTime &&
-      (b.__receivedAt || 0) >= renderTime
+      Number(a?.__receivedAt || 0) <= renderTime &&
+      Number(b?.__receivedAt || 0) >= renderTime
     ) {
       older = a;
       newer = b;
@@ -1158,19 +1246,67 @@ function interpolateSnapshotBuffer(buffer = [], renderTime) {
     }
   }
 
-  const aTime = older.__receivedAt || renderTime;
-  const bTime = newer.__receivedAt || aTime;
+  const aTime = Number(older?.__receivedAt || renderTime);
+  const bTime = Number(newer?.__receivedAt || aTime);
   const span = Math.max(1, bTime - aTime);
   const t = clamp((renderTime - aTime) / span, 0, 1);
+  const durationSeconds = span / 1000;
+  const oldVelocity = getNormalRemoteVelocity(older);
+  const newVelocity = getNormalRemoteVelocity(newer);
 
   return {
     ...newer,
-    x: lerp(older.x ?? newer.x, newer.x ?? older.x, t),
-    y: lerp(older.y ?? newer.y, newer.y ?? older.y, t),
+    x: cubicHermiteNormal(Number(older.x ?? newer.x ?? 0), oldVelocity.x, Number(newer.x ?? older.x ?? 0), newVelocity.x, t, durationSeconds),
+    y: cubicHermiteNormal(Number(older.y ?? newer.y ?? 0), oldVelocity.y, Number(newer.y ?? older.y ?? 0), newVelocity.y, t, durationSeconds),
     hp: newer.hp,
     energy: newer.energy,
     drones: newer.drones,
     alive: newer.alive,
+  };
+}
+
+function upsertNormalProjectileMotion(map, incoming, receivedAt, serverAt = 0) {
+  if (!incoming?.id) return null;
+
+  const id = String(incoming.id);
+  const previous = map.get(id);
+  const incomingServerAt = Number(serverAt || incoming?.__serverAt || incoming?.serverTime || 0);
+  const previousServerAt = Number(previous?.serverAt || 0);
+
+  if (previous && incomingServerAt > 0 && previousServerAt > incomingServerAt) {
+    return previous;
+  }
+
+  const next = {
+    ...(previous || {}),
+    ...incoming,
+    id,
+    skin: normalizeSkin(incoming.skin || previous?.skin || "cyan"),
+    sourceX: Number(incoming.x ?? previous?.sourceX ?? previous?.x ?? 0),
+    sourceY: Number(incoming.y ?? previous?.sourceY ?? previous?.y ?? 0),
+    vx: Number(incoming.vx ?? previous?.vx ?? 0),
+    vy: Number(incoming.vy ?? previous?.vy ?? 0),
+    serverAt: incomingServerAt || previousServerAt || 0,
+    receivedAt,
+    lastSeenAt: receivedAt,
+  };
+  map.set(id, next);
+  return next;
+}
+
+function resolveNormalProjectileMotion(motion, now) {
+  if (!motion) return null;
+
+  const ageMs = clamp(
+    now - Number(motion.receivedAt || now) + NORMAL_PROJECTILE_PRESENTATION_LEAD_MS,
+    0,
+    PROJECTILE_MAX_EXTRAPOLATE_MS,
+  );
+  const frameScale = (ageMs / 1000) * PROJECTILE_FRAME_SCALE;
+  return {
+    ...motion,
+    x: Number(motion.sourceX ?? motion.x ?? 0) + Number(motion.vx || 0) * frameScale,
+    y: Number(motion.sourceY ?? motion.y ?? 0) + Number(motion.vy || 0) * frameScale,
   };
 }
 
@@ -1238,7 +1374,15 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const lastInputSentAtRef = useRef(performance.now());
   const lastLocalMovementAtRef = useRef(performance.now());
   const lastInputSignatureRef = useRef("");
+  // State and transform packets are coalesced to one newest packet per
+  // display frame on desktop. This prevents two Socket.IO callbacks from
+  // splitting a 60/144 Hz WebGL frame while keeping local prediction instant.
+  const latestNormalStateRef = useRef(null);
+  const normalStateFlushRafRef = useRef(0);
+  const latestNormalMovementRef = useRef(null);
+  const normalMovementFlushRafRef = useRef(0);
   const remoteSnapshotBufferRef = useRef(new Map());
+  const normalProjectileMotionRef = useRef(new Map());
   const lastConfirmedHpRef = useRef(null);
   const lastCollectionSeqRef = useRef(0);
   const combatEventMapRef = useRef(new Map());
@@ -1349,7 +1493,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     socketRef.current = socket;
 
-    const applyState = (state) => {
+    const applyStateNow = (state) => {
       lastNormalServerPacketAtRef.current = Date.now();
       const now = performance.now();
       const wallNow = Date.now();
@@ -1543,26 +1687,38 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         ? state.players
         : [];
       const activeRemoteIds = new Set();
+      const stateServerTime = Number(state?.serverTime || 0);
       incomingForSnapshots.forEach((player) => {
         if (!player?.id) return;
         activeRemoteIds.add(player.id);
         const buffer = snapshotsById.get(player.id) || [];
-        buffer.push({ ...player, __receivedAt: now });
-
-        while (
-          buffer.length > 0 &&
-          now - (buffer[0].__receivedAt || now) > SNAPSHOT_BUFFER_TTL_MS
-        ) {
-          buffer.shift();
-        }
-        if (buffer.length > 12) {
-          buffer.splice(0, buffer.length - 12);
-        }
-        snapshotsById.set(player.id, buffer);
+        snapshotsById.set(
+          player.id,
+          appendNormalRemoteSnapshot(buffer, player, now, stateServerTime),
+        );
       });
 
-      for (const id of snapshotsById.keys()) {
-        if (!activeRemoteIds.has(id)) snapshotsById.delete(id);
+      for (const [id, buffer] of snapshotsById.entries()) {
+        const newest = buffer?.[buffer.length - 1];
+        // The transform lane has a slightly larger view range than the full
+        // HUD packet. Keep a fresh hot transform instead of deleting it just
+        // because this state snapshot did not include that edge-of-camera unit.
+        if (!activeRemoteIds.has(id) && now - Number(newest?.__receivedAt || 0) > 900) {
+          snapshotsById.delete(id);
+        }
+      }
+
+      // State is a reliable fallback for attack drones. The compact transform
+      // lane below refreshes these records much more often during a fight.
+      if (Array.isArray(state.projectiles)) {
+        for (const projectile of state.projectiles) {
+          upsertNormalProjectileMotion(
+            normalProjectileMotionRef.current,
+            projectile,
+            now,
+            stateServerTime,
+          );
+        }
       }
 
       if (state.you?.alive === false) {
@@ -1604,6 +1760,109 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       if (!predictedYouRef.current && state.you) {
         predictedYouRef.current = { ...state.you };
+      }
+    };
+
+    const applyState = (state, immediate = false) => {
+      // Packet receipt itself counts as liveness even if the payload waits for
+      // the next render frame.
+      lastNormalServerPacketAtRef.current = Date.now();
+
+      if (immediate || mobilePerformanceRef.current) {
+        applyStateNow(state);
+        return;
+      }
+
+      latestNormalStateRef.current = state;
+      if (!normalStateFlushRafRef.current) {
+        normalStateFlushRafRef.current = window.requestAnimationFrame(() => {
+          normalStateFlushRafRef.current = 0;
+          const newest = latestNormalStateRef.current;
+          latestNormalStateRef.current = null;
+          if (newest) applyStateNow(newest);
+        });
+      }
+    };
+
+    const consumeNormalMovement = (packet = {}) => {
+      const now = performance.now();
+      const serverAt = Number(packet?.t || packet?.serverTime || 0);
+      const snapshotBuffers = remoteSnapshotBufferRef.current;
+      const knownPlayers = worldRef.current.players || [];
+      const localId = String(worldRef.current.you?.id || socket.id || "");
+
+      for (const row of packet?.p || []) {
+        if (!Array.isArray(row)) continue;
+        const id = String(row[0] || "");
+        if (!id || id === localId) continue;
+
+        const flags = Number(row[6] || 0);
+        const known =
+          remotePlayersRef.current.get(id) ||
+          knownPlayers.find((player) => String(player?.id || "") === id) ||
+          {};
+        const snapshot = {
+          ...known,
+          id,
+          x: Number(row[1] || 0),
+          y: Number(row[2] || 0),
+          velocityX: Number(row[3] || 0),
+          velocityY: Number(row[4] || 0),
+          moveAngle: Number(row[5] || 0),
+          isMoving: Boolean(flags & 1),
+          attacking: Boolean(flags & 2),
+          shieldActive: Boolean(flags & 4),
+          alive: Boolean(flags & 8),
+          isBot: Boolean(flags & 16) || Boolean(known?.isBot),
+          drones: Number(row[7] ?? known?.drones ?? 0),
+          skin: normalizeSkin(row[8] || known?.skin || "cyan"),
+        };
+        const buffer = snapshotBuffers.get(id) || [];
+        snapshotBuffers.set(id, appendNormalRemoteSnapshot(buffer, snapshot, now, serverAt));
+      }
+
+      for (const row of packet?.q || []) {
+        if (!Array.isArray(row)) continue;
+        const id = String(row[0] || "");
+        if (!id) continue;
+        const flags = Number(row[7] || 0);
+        upsertNormalProjectileMotion(
+          normalProjectileMotionRef.current,
+          {
+            id,
+            ownerId: String(row[1] || ""),
+            x: Number(row[2] || 0),
+            y: Number(row[3] || 0),
+            vx: Number(row[4] || 0),
+            vy: Number(row[5] || 0),
+            angle: Number(row[6] || 0),
+            pierceLeft: flags & 1 ? 2 : 1,
+            shieldBreaker: Boolean(flags & 2),
+            piercesShield: Boolean(flags & 4),
+            createdAt: Number(row[8] || Date.now()),
+            skin: normalizeSkin(row[9] || "cyan"),
+          },
+          now,
+          serverAt,
+        );
+      }
+    };
+
+    const applyNormalMovement = (packet = {}) => {
+      lastNormalServerPacketAtRef.current = Date.now();
+      if (mobilePerformanceRef.current) {
+        consumeNormalMovement(packet);
+        return;
+      }
+
+      latestNormalMovementRef.current = packet;
+      if (!normalMovementFlushRafRef.current) {
+        normalMovementFlushRafRef.current = window.requestAnimationFrame(() => {
+          normalMovementFlushRafRef.current = 0;
+          const newest = latestNormalMovementRef.current;
+          latestNormalMovementRef.current = null;
+          if (newest) consumeNormalMovement(newest);
+        });
       }
     };
 
@@ -1974,7 +2233,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
 
     socket.on("normal-pvp:joined", (state) => {
-      applyState(state);
+      applyState(state, true);
       if (state?.you?.id === socket.id) {
         joinAttempts = 0;
         clearJoinRetry();
@@ -1982,6 +2241,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     });
     socket.on("normal-pvp:session-check:result", handleNormalSessionCheckResult);
     socket.on("normal-pvp:state", applyState);
+    socket.on("normal-pvp:movement", applyNormalMovement);
     socket.on("normal-pvp:collision", applyNormalCollisionImpulse);
     socket.on("normal-pvp:combat", applyPrivateCombatEvent);
     socket.on("normal-pvp:eliminated", applyEliminated);
@@ -2129,6 +2389,15 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       socket.off("connect", handleConnect);
       socket.off("disconnect", handleNormalDisconnect);
       socket.off("normal-pvp:session-check:result", handleNormalSessionCheckResult);
+      socket.off("normal-pvp:movement", applyNormalMovement);
+      if (normalStateFlushRafRef.current) {
+        window.cancelAnimationFrame(normalStateFlushRafRef.current);
+        normalStateFlushRafRef.current = 0;
+      }
+      if (normalMovementFlushRafRef.current) {
+        window.cancelAnimationFrame(normalMovementFlushRafRef.current);
+        normalMovementFlushRafRef.current = 0;
+      }
       socket.off("normal-pvp:collision", applyNormalCollisionImpulse);
       socket.off("normal-pvp:combat", applyPrivateCombatEvent);
       socket.off("normal-pvp:world-delta", applyWorldItemDelta);
@@ -2276,7 +2545,11 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         spectatorTargetRef.current = currentSpectatorTarget;
       }
 
-      const renderTime = now - SNAPSHOT_INTERPOLATION_DELAY_MS;
+      const renderTime = now - (
+        isMobilePerformance
+          ? NORMAL_MOBILE_SNAPSHOT_INTERPOLATION_DELAY_MS
+          : NORMAL_DESKTOP_SNAPSHOT_INTERPOLATION_DELAY_MS
+      );
       const snapshotBuffers = remoteSnapshotBufferRef.current;
       const activeRemoteIds = new Set();
 
@@ -2299,37 +2572,57 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
 
       const projectileMap = projectilesRef.current;
-      const incomingProjectiles = new Map(
-        (data.projectiles || []).filter((p) => p?.id).map((p) => [p.id, p]),
-      );
+      const projectileMotionMap = normalProjectileMotionRef.current;
 
-      for (const [id, current] of projectileMap.entries()) {
-        projectileMap.set(id, advanceProjectile(current, dt));
-      }
+      // Remote attack drones are derived directly from their latest
+      // authoritative source + velocity. They no longer damp toward a 30 Hz
+      // state snapshot, which was the visible source of "one packet behind"
+      // movement on otherwise fast desktops.
+      for (const [id, motion] of projectileMotionMap.entries()) {
+        // Omitted from several transform frames means the drone hit something
+        // or left this viewer's camera. Remove its motion record before it can
+        // keep a stale visual alive off-screen.
+        if (now - Number(motion?.lastSeenAt || now) > NORMAL_PROJECTILE_STREAM_MISSING_MS) {
+          projectileMotionMap.delete(id);
+          projectileMap.delete(id);
+          continue;
+        }
 
-      for (const [id, target] of incomingProjectiles.entries()) {
-        const current = projectileMap.get(id) || target;
+        const target = resolveNormalProjectileMotion(motion, now);
+        if (!target) continue;
 
-        if (target.ownerId && target.ownerId === me?.id) {
+        if (String(target.ownerId || "") === String(me?.id || "")) {
+          if (!String(id).startsWith("local-")) projectileMap.delete(id);
           continue;
         }
 
         projectileMap.set(id, {
+          ...(projectileMap.get(id) || {}),
           ...target,
           localOnly: false,
           __seenAt: now,
-          x: damp(current.x ?? target.x, target.x, PROJECTILE_SMOOTHING, dt),
-          y: damp(current.y ?? target.y, target.y, PROJECTILE_SMOOTHING, dt),
+          __authoritativeSeenAt: Number(motion.lastSeenAt || now),
+          x: target.x,
+          y: target.y,
         });
+      }
+
+      // Only the local attack drone needs client-side integration. Remote
+      // drones are already resolved to display time above.
+      for (const [id, current] of projectileMap.entries()) {
+        if (current?.localOnly) {
+          projectileMap.set(id, advanceProjectile(current, dt));
+        }
       }
 
       const projectileTargets = [me, ...remoteMap.values()].filter(Boolean);
 
       for (const [id, projectile] of projectileMap.entries()) {
-        const isIncoming = incomingProjectiles.has(id);
         const age = now - (projectile.createdAt || projectile.__seenAt || now);
-        const missingAge = now - (projectile.__seenAt || now);
         const traveled = getProjectileTravelDistance(projectile);
+        const authoritativeSeenAt = Number(projectile.__authoritativeSeenAt || projectile.__seenAt || now);
+        const streamExpired = !projectileMotionMap.has(id) &&
+          now - authoritativeSeenAt > NORMAL_PROJECTILE_STREAM_MISSING_MS;
 
         const visuallyHitTarget = projectileHitsAnyTarget(
           projectile,
@@ -2352,7 +2645,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           visuallyHitTarget ||
           age > PROJECTILE_VISUAL_TTL ||
           traveled > LOCAL_PROJECTILE_MAX_DISTANCE ||
-          (!isIncoming && missingAge > SERVER_PROJECTILE_FADE_TTL)
+          streamExpired
         ) {
           projectileMap.delete(id);
         }

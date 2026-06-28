@@ -142,6 +142,13 @@ const NORMAL_STATE_INTERVAL_MS = 33; // 30 Hz in small PvP rooms
 const NORMAL_STATE_INTERVAL_SOLO_MS = 33; // 30 Hz authoritative snapshots; local prediction remains 60 Hz
 const NORMAL_STATE_INTERVAL_CROWDED_MS = 33; // 30 Hz at 12+ players
 const NORMAL_STATE_INTERVAL_HEAVY_MS = 50; // 20 Hz at 28+ players
+// Normal PvP now mirrors Zone's split replication: compact transforms arrive
+// independently from HUD, loot and minimap state, so remote drones remain
+// smooth even in heavy rooms.
+const NORMAL_TRANSFORM_INTERVAL_MS = 20;
+const NORMAL_TRANSFORM_PLAYER_LIMIT = 60;
+const NORMAL_TRANSFORM_PROJECTILE_LIMIT = 48;
+const NORMAL_TRANSFORM_RANGE_PADDING = 820;
 const BATTLE_ROYALE_STATE_INTERVAL_MS = 33;
 const BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS = 50;
 // Zone PvP has two lanes. Movement is a small latest-wins JSON packet at 30 Hz;
@@ -349,8 +356,9 @@ export class GameGateway {
 
   // -------------------------------------------------------------------------
   // Persistent player records / global leaderboards.
-  // GameUser remains the source of identity; GameModeStat only aggregates
-  // public records, so a Dashboard lookup never touches live room state.
+  // Authenticated pilots are linked to GameUser. Guests never create a
+  // GameUser/Player row: only a short anonymous leaderboard record exists
+  // when it actually reaches the global Top 10.
   // -------------------------------------------------------------------------
   private normalizeGameStatsMode(value: any) {
     const mode = String(value || "").trim().toLowerCase();
@@ -367,6 +375,18 @@ export class GameGateway {
   private normalizeGameStatsUserId(value: any) {
     const userId = Number(value);
     return Number.isSafeInteger(userId) && userId > 0 ? userId : null;
+  }
+
+  private normalizeGameStatsGuestKey(value: any) {
+    const guestKey = String(value || "").trim();
+    if (
+      guestKey.length < 16 ||
+      guestKey.length > 160 ||
+      !/^[A-Za-z0-9_-]+$/.test(guestKey)
+    ) {
+      return null;
+    }
+    return guestKey;
   }
 
   private getGameStatsDisplayName(user: any, fallback = "Player") {
@@ -388,21 +408,136 @@ export class GameGateway {
     };
   }
 
+  private getGameStatsLeaderboardOrder(gameMode: string) {
+    if (gameMode === GAME_STATS_MODE_BATTLE_ROYALE_PVP) {
+      return [
+        { wins: "desc" },
+        { bestKills: "desc" },
+        { updatedAt: "asc" },
+      ];
+    }
+
+    return [
+      { bestKills: "desc" },
+      { updatedAt: "asc" },
+    ];
+  }
+
+  private async pruneGuestStatsOutsideTop(gameMode: string) {
+    const db: any = this.prisma as any;
+
+    try {
+      const leaders = await db.gameModeStat.findMany({
+        where: { gameMode },
+        orderBy: this.getGameStatsLeaderboardOrder(gameMode),
+        take: GAME_STATS_LEADERBOARD_LIMIT,
+        select: { id: true },
+      });
+
+      const keptIds = (leaders || [])
+        .map((row: any) => Number(row?.id || 0))
+        .filter((id: number) => id > 0);
+
+      await db.gameModeStat.deleteMany({
+        where: keptIds.length
+          ? {
+              gameMode,
+              isGuest: true,
+              id: { notIn: keptIds },
+            }
+          : {
+              gameMode,
+              isGuest: true,
+            },
+      });
+    } catch (error) {
+      console.warn("[game-stats] guest leaderboard prune skipped", error);
+    }
+  }
+
+  // Dashboard tabs receive only an invalidation signal; each client then asks
+  // for its own payload (personal record + the shared Top 10). This keeps the
+  // global leaderboard live without accidentally exposing one pilot's private
+  // stats to any other connected browser.
+  private notifyGameStatsLeaderboardsChanged() {
+    this.server?.emit("game-stats:leaderboards-updated", {
+      serverNow: Date.now(),
+    });
+  }
+
   private async persistGameModeStat(input: {
-    userId: any;
+    userId?: any;
+    guestKey?: any;
+    username?: any;
+    isGuest?: any;
     gameMode: any;
     kills?: any;
     won?: any;
   }) {
-    const userId = this.normalizeGameStatsUserId(input?.userId);
     const gameMode = this.normalizeGameStatsMode(input?.gameMode);
-    if (!userId || !gameMode) return null;
+    const isGuest = Boolean(input?.isGuest);
+    const userId = isGuest ? null : this.normalizeGameStatsUserId(input?.userId);
+    const guestKey = isGuest
+      ? this.normalizeGameStatsGuestKey(input?.guestKey)
+      : null;
+
+    // Guests are allowed only in the two global PvP leaderboards. PvE remains
+    // account-only and is hidden from the guest Dashboard as well.
+    if (
+      !gameMode ||
+      (!isGuest && !userId) ||
+      (isGuest && (!guestKey || gameMode === GAME_STATS_MODE_BATTLE_ROYALE_PVE))
+    ) {
+      return null;
+    }
 
     const kills = Math.max(0, Math.floor(Number(input?.kills || 0)));
     const won = Boolean(input?.won);
     const db: any = this.prisma as any;
 
     try {
+      if (isGuest) {
+        const username = this.getGameStatsDisplayName(
+          { username: input?.username },
+          "Guest",
+        );
+
+        const existing = await db.gameModeStat.findFirst({
+          where: {
+            guestKey,
+            gameMode,
+            isGuest: true,
+          },
+        });
+
+        const stat = existing
+          ? await db.gameModeStat.update({
+              where: { id: existing.id },
+              data: {
+                username,
+                bestKills: Math.max(Number(existing.bestKills || 0), kills),
+                wins: won ? { increment: 1 } : undefined,
+              },
+            })
+          : await db.gameModeStat.create({
+              data: {
+                userId: null,
+                guestKey,
+                isGuest: true,
+                username,
+                gameMode,
+                bestKills: kills,
+                wins: won ? 1 : 0,
+              },
+            });
+
+        // A guest has no persistent player profile. Keep only anonymous guest
+        // rows that are currently in the global Top 10 of their mode.
+        await this.pruneGuestStatsOutsideTop(gameMode);
+        this.notifyGameStatsLeaderboardsChanged();
+        return stat;
+      }
+
       const user = await db.gameUser.findUnique({
         where: { id: userId },
         select: {
@@ -413,7 +548,6 @@ export class GameGateway {
         },
       });
 
-      // Guests and stale/deleted browser sessions never create public records.
       if (!user) return null;
 
       const username = this.getGameStatsDisplayName(user);
@@ -427,25 +561,33 @@ export class GameGateway {
       });
 
       if (!existing) {
-        return await db.gameModeStat.create({
+        const stat = await db.gameModeStat.create({
           data: {
             userId,
+            guestKey: null,
+            isGuest: false,
             username,
             gameMode,
             bestKills: kills,
             wins: won ? 1 : 0,
           },
         });
+        this.notifyGameStatsLeaderboardsChanged();
+        return stat;
       }
 
-      return await db.gameModeStat.update({
+      const stat = await db.gameModeStat.update({
         where: { id: existing.id },
         data: {
           username,
+          guestKey: null,
+          isGuest: false,
           bestKills: Math.max(Number(existing.bestKills || 0), kills),
           wins: won ? { increment: 1 } : undefined,
         },
       });
+      this.notifyGameStatsLeaderboardsChanged();
+      return stat;
     } catch (error) {
       // Stats must never interrupt an active arena if a migration has not yet
       // been applied or PostgreSQL is temporarily unavailable.
@@ -462,37 +604,31 @@ export class GameGateway {
       battleRoyalePvp: this.emptyGameModeStat(GAME_STATS_MODE_BATTLE_ROYALE_PVP),
     };
 
-    if (!userId) {
-      return {
-        personal: empty,
-        leaderboards: {
-          normalPvp: [],
-          battleRoyalePvp: [],
-        },
-      };
-    }
-
     const db: any = this.prisma as any;
 
     try {
       const [personalRows, normalPvp, battleRoyalePvp] = await Promise.all([
-        db.gameModeStat.findMany({
-          where: { userId },
-          select: {
-            gameMode: true,
-            bestKills: true,
-            wins: true,
-          },
-        }),
+        userId
+          ? db.gameModeStat.findMany({
+              where: {
+                userId,
+                isGuest: false,
+              },
+              select: {
+                gameMode: true,
+                bestKills: true,
+                wins: true,
+              },
+            })
+          : Promise.resolve([]),
         db.gameModeStat.findMany({
           where: { gameMode: GAME_STATS_MODE_NORMAL_PVP },
-          orderBy: [
-            { bestKills: "desc" },
-            { updatedAt: "asc" },
-          ],
+          orderBy: this.getGameStatsLeaderboardOrder(GAME_STATS_MODE_NORMAL_PVP),
           take: GAME_STATS_LEADERBOARD_LIMIT,
           select: {
             userId: true,
+            guestKey: true,
+            isGuest: true,
             username: true,
             bestKills: true,
             wins: true,
@@ -500,14 +636,12 @@ export class GameGateway {
         }),
         db.gameModeStat.findMany({
           where: { gameMode: GAME_STATS_MODE_BATTLE_ROYALE_PVP },
-          orderBy: [
-            { wins: "desc" },
-            { bestKills: "desc" },
-            { updatedAt: "asc" },
-          ],
+          orderBy: this.getGameStatsLeaderboardOrder(GAME_STATS_MODE_BATTLE_ROYALE_PVP),
           take: GAME_STATS_LEADERBOARD_LIMIT,
           select: {
             userId: true,
+            guestKey: true,
+            isGuest: true,
             username: true,
             bestKills: true,
             wins: true,
@@ -552,12 +686,40 @@ export class GameGateway {
     return payload;
   }
 
+  // Save the current kill count immediately after every PvP kill. That makes
+  // a qualifying Guest appear in the shared Top 10 while the match is still
+  // running; it never creates GameUser or Player records for that Guest.
+  private recordLivePvpLeaderboardScore(player: any, room: any) {
+    if (
+      !player ||
+      player?.isBot ||
+      (!room?.normalMode && !room?.zonePvpMode)
+    ) {
+      return;
+    }
+
+    void this.persistGameModeStat({
+      userId: player.userId,
+      guestKey: player.guestStatsKey,
+      username: player.username,
+      isGuest: player.isGuest,
+      gameMode: room.normalMode
+        ? GAME_STATS_MODE_NORMAL_PVP
+        : GAME_STATS_MODE_BATTLE_ROYALE_PVP,
+      kills: player.kills,
+      won: false,
+    });
+  }
+
   private recordNormalPvpBest(player: any) {
-    if (!player || player?.isGuest || player?.isBot || player?.normalStatsRecorded) return;
+    if (!player || player?.isBot || player?.normalStatsRecorded) return;
     player.normalStatsRecorded = true;
 
     void this.persistGameModeStat({
       userId: player.userId,
+      guestKey: player.guestStatsKey,
+      username: player.username,
+      isGuest: player.isGuest,
       gameMode: GAME_STATS_MODE_NORMAL_PVP,
       kills: player.kills,
       won: false,
@@ -565,11 +727,14 @@ export class GameGateway {
   }
 
   private recordZonePvpParticipant(player: any, winnerId: any = null) {
-    if (!player || player?.isGuest || player?.isBot || player?.zoneStatsRecorded) return;
+    if (!player || player?.isBot || player?.zoneStatsRecorded) return;
     player.zoneStatsRecorded = true;
 
     void this.persistGameModeStat({
       userId: player.userId,
+      guestKey: player.guestStatsKey,
+      username: player.username,
+      isGuest: player.isGuest,
       gameMode: GAME_STATS_MODE_BATTLE_ROYALE_PVP,
       kills: player.kills,
       won: winnerId !== null && String(player.id) === String(winnerId),
@@ -603,6 +768,9 @@ export class GameGateway {
   ) {
     const stat = await this.persistGameModeStat({
       userId: data?.userId,
+      guestKey: data?.guestKey,
+      username: data?.username,
+      isGuest: Boolean(data?.isGuest),
       gameMode: GAME_STATS_MODE_BATTLE_ROYALE_PVE,
       kills: data?.kills,
       won: data?.won,
@@ -2115,6 +2283,9 @@ export class GameGateway {
       id: client.id,
       userId: data?.isGuest ? null : data?.userId,
       isGuest: Boolean(data?.isGuest),
+      guestStatsKey: data?.isGuest
+        ? this.normalizeGameStatsGuestKey(data?.guestStatsKey)
+        : null,
       username: String(
         data?.username || (data?.isGuest ? "Guest" : "Player"),
       ).slice(0, 18),
@@ -2259,6 +2430,9 @@ export class GameGateway {
     if (existingRoom && existingPlayer) {
       existingPlayer.userId = data?.isGuest ? null : data?.userId;
       existingPlayer.isGuest = Boolean(data?.isGuest);
+      existingPlayer.guestStatsKey = data?.isGuest
+        ? this.normalizeGameStatsGuestKey(data?.guestStatsKey)
+        : null;
       existingPlayer.username = String(
         data?.username || (data?.isGuest ? "Guest" : "Player"),
       ).slice(0, 18);
@@ -2281,6 +2455,9 @@ export class GameGateway {
       id: client.id,
       userId: data?.isGuest ? null : data?.userId,
       isGuest: Boolean(data?.isGuest),
+      guestStatsKey: data?.isGuest
+        ? this.normalizeGameStatsGuestKey(data?.guestStatsKey)
+        : null,
       username: String(
         data?.username || (data?.isGuest ? "Guest" : "Player"),
       ).slice(0, 18),
@@ -2434,6 +2611,9 @@ export class GameGateway {
       id: client.id,
       userId: data?.isGuest ? null : data?.userId,
       isGuest: Boolean(data?.isGuest),
+      guestStatsKey: data?.isGuest
+        ? this.normalizeGameStatsGuestKey(data?.guestStatsKey)
+        : null,
       username: String(
         data?.username || (data?.isGuest ? "Guest" : "Player"),
       ).slice(0, 18),
@@ -2620,6 +2800,9 @@ export class GameGateway {
     if (existingZoneRoom && existingZonePlayer) {
       existingZonePlayer.userId = data?.isGuest ? null : data?.userId;
       existingZonePlayer.isGuest = Boolean(data?.isGuest);
+      existingZonePlayer.guestStatsKey = data?.isGuest
+        ? this.normalizeGameStatsGuestKey(data?.guestStatsKey)
+        : null;
       existingZonePlayer.username = String(data?.username || (data?.isGuest ? "Guest" : "Player")).slice(0, 18);
       existingZonePlayer.skin = normalizeSkin(data?.isGuest ? "cyan" : data?.skin);
       existingZonePlayer.disconnectedAt = 0;
@@ -2958,6 +3141,17 @@ export class GameGateway {
         ) {
           room.lastBroadcastAt = now;
           this.broadcastNormalRoomState(room, now);
+        }
+
+        // Keep movement out of the larger HUD/loot packet. It is volatile and
+        // latest-wins by design, therefore it cannot build a TCP queue in
+        // front of remote drones or attack drones.
+        if (
+          !room.lastNormalTransformBroadcastAt ||
+          now - room.lastNormalTransformBroadcastAt >= NORMAL_TRANSFORM_INTERVAL_MS
+        ) {
+          room.lastNormalTransformBroadcastAt = now;
+          this.broadcastNormalPvpTransforms(room, now);
         }
 
         this.cleanupNormalRoom(room, now);
@@ -3310,6 +3504,10 @@ export class GameGateway {
     );
 
     killer.kills = (killer.kills || 0) + 1;
+    // PvP/Zone record is persisted asynchronously, never in the simulation
+    // critical path. The global Top 10 therefore updates immediately without
+    // adding database latency to hit registration or movement.
+    this.recordLivePvpLeaderboardScore(killer, room);
     killer.killStreak = (killer.killStreak || 0) + 1;
     killer.drones = Math.min(MAX_DRONES, previousDrones + 1);
     killer.progress = 0;
@@ -5003,6 +5201,95 @@ export class GameGateway {
         NORMAL_WORLD_HEIGHT - PLAYER_RADIUS,
       ),
     };
+  }
+
+  private broadcastNormalPvpTransforms(room: any, now: number) {
+    if (!room?.normalMode || room.status !== "playing") return;
+
+    const units = [...room.players.values()];
+    const unitSpatialIndex = this.buildSpatialIndex(units);
+    const sequence = Number(room.normalTransformSequence || 0) + 1;
+    room.normalTransformSequence = sequence;
+
+    for (const viewer of units) {
+      const socket = this.server.sockets.sockets.get(viewer.id);
+      if (!socket?.connected) continue;
+
+      const spectatorTarget = viewer.alive === false
+        ? this.getStableSpectatorTarget(room, viewer)
+        : null;
+      const viewAnchor = spectatorTarget || viewer;
+      const range = viewer.alive === false
+        ? VIEW_DISTANCE + 1700
+        : VIEW_DISTANCE + NORMAL_TRANSFORM_RANGE_PADDING;
+
+      const nearbyUnits = this.querySpatialIndex(
+        unitSpatialIndex,
+        viewAnchor.x,
+        viewAnchor.y,
+        range,
+      ).filter(
+        (other: any) =>
+          other.id !== viewer.id &&
+          (viewer.alive !== false || other.alive !== false),
+      );
+
+      const playerRows = this.filterNear(
+        viewAnchor,
+        nearbyUnits,
+        range,
+        NORMAL_TRANSFORM_PLAYER_LIMIT,
+      ).map((unit: any) => {
+        const flags =
+          (unit.isMoving ? 1 : 0) |
+          (unit.input?.attacking ? 2 : 0) |
+          (unit.shieldActive ? 4 : 0) |
+          (unit.alive !== false ? 8 : 0) |
+          (unit.isBot ? 16 : 0);
+        return [
+          String(unit.id),
+          Math.round(Number(unit.x || 0) * 10) / 10,
+          Math.round(Number(unit.y || 0) * 10) / 10,
+          Math.round(Number(unit.velocityX || 0) * 10) / 10,
+          Math.round(Number(unit.velocityY || 0) * 10) / 10,
+          Math.round(Number(unit.moveAngle || 0) * 10000) / 10000,
+          flags,
+          Math.max(0, Math.min(MAX_DRONES, Number(unit.drones || 0))),
+          normalizeSkin(unit.skin || "cyan"),
+        ];
+      });
+
+      const projectileRows = this.filterNear(
+        viewAnchor,
+        room.projectiles || [],
+        range + 460,
+        NORMAL_TRANSFORM_PROJECTILE_LIMIT,
+      ).map((projectile: any) => {
+        const flags =
+          (Number(projectile.pierceLeft || 1) > 1 ? 1 : 0) |
+          (projectile.shieldBreaker ? 2 : 0) |
+          (projectile.piercesShield ? 4 : 0);
+        return [
+          String(projectile.id),
+          String(projectile.ownerId || ""),
+          Math.round(Number(projectile.x || 0) * 10) / 10,
+          Math.round(Number(projectile.y || 0) * 10) / 10,
+          Math.round(Number(projectile.vx || 0) * 10) / 10,
+          Math.round(Number(projectile.vy || 0) * 10) / 10,
+          Math.round(Number(projectile.angle || 0) * 10000) / 10000,
+          flags,
+          Number(projectile.createdAt || now),
+          normalizeSkin(projectile.skin || "cyan"),
+        ];
+      });
+
+      socket.volatile.compress(false).emit("normal-pvp:movement", {
+        t: now,
+        s: sequence,
+        p: playerRows,
+        q: projectileRows,
+      });
+    }
   }
 
   broadcastNormalRoomState(room, now) {

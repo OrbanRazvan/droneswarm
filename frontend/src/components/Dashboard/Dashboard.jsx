@@ -521,6 +521,7 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
     gameStatsSocketRef.current = socket;
 
     const requestStats = () => {
+      if (!socket.connected) return;
       socket.emit("game-stats:get", {
         userId: isGuestUser ? null : user?.userId || user?.id || null,
         isGuest: isGuestUser,
@@ -538,9 +539,17 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
       setGameStatsLoading(false);
     };
 
+    // Global topurile trebuie să se actualizeze pentru orice pilot — inclusiv
+    // Guest — fără refresh. Serverul trimite invalidarea imediat ce un record
+    // nou intră/iese din Top 10, iar polling-ul scurt este fallback-ul sigur
+    // pentru un tab care a pierdut un eveniment Socket.IO în background.
+    const refreshLeaderboards = () => requestStats();
+    const refreshTimer = window.setInterval(requestStats, 2500);
+
     socket.on("connect", requestStats);
     socket.on("game-stats:payload", applyStats);
     socket.on("game-stats:updated", applyStats);
+    socket.on("game-stats:leaderboards-updated", refreshLeaderboards);
 
     timeoutId = window.setTimeout(() => {
       if (!disposed) setGameStatsLoading(false);
@@ -549,9 +558,11 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
     return () => {
       disposed = true;
       if (timeoutId) window.clearTimeout(timeoutId);
+      window.clearInterval(refreshTimer);
       socket.off("connect", requestStats);
       socket.off("game-stats:payload", applyStats);
       socket.off("game-stats:updated", applyStats);
+      socket.off("game-stats:leaderboards-updated", refreshLeaderboards);
       socket.disconnect();
       if (gameStatsSocketRef.current === socket) {
         gameStatsSocketRef.current = null;
