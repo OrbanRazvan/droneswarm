@@ -58,7 +58,7 @@ const BR_ONLINE_ZONE_DAMAGE = 10;
 const BR_ONLINE_ZONE_DAMAGE_INTERVAL = 1000;
 const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 60;
 const ZONE_PVP_ROOM_MAX_PLAYERS = 60;
-const ZONE_PVP_ROOM_MIN_PLAYERS = 2;
+const ZONE_PVP_ROOM_MIN_PLAYERS = 3;
 const ZONE_PVP_START_COUNTDOWN_MS = 5000;
 const ZONE_PVP_BATTLE_PREPARE_DURATION = 10000;
 const ZONE_PVP_ZONE_SHRINK_DURATION = 420000;
@@ -258,6 +258,16 @@ let GameGateway = class GameGateway {
     }
     getZoneHumanPlayerCount(room) {
         return this.getZoneHumanPlayers(room).length;
+    }
+    getZoneConnectedHumanPlayerCount(room) {
+        let count = 0;
+        for (const player of room?.players?.values?.() || []) {
+            if (player?.isBot || Number(player?.disconnectedAt || 0) > 0)
+                continue;
+            if (this.server?.sockets?.sockets?.has(String(player.id)))
+                count += 1;
+        }
+        return count;
     }
     getZoneBotCount(room) {
         let count = 0;
@@ -761,6 +771,9 @@ let GameGateway = class GameGateway {
             battleBeginFlashUntil: room.battleBeginFlashUntil || null,
             playerCount: this.getAlivePlayers(room).length,
             realPlayerCount: this.getZoneHumanPlayerCount(room),
+            matchmakingPlayerCount: room.status === "waiting" || room.status === "countdown"
+                ? this.getZoneConnectedHumanPlayerCount(room)
+                : this.getZoneHumanPlayerCount(room),
             botCount: this.getZoneBotCount(room),
             minPlayers: ZONE_PVP_ROOM_MIN_PLAYERS,
             maxPlayers: ZONE_PVP_ROOM_MAX_PLAYERS,
@@ -1469,7 +1482,7 @@ let GameGateway = class GameGateway {
         if (resumeToken)
             this.rememberZonePvpResumeSeat(room, player, resumeToken);
         client.join(room.id);
-        if (this.getZoneHumanPlayerCount(room) >= ZONE_PVP_ROOM_MIN_PLAYERS &&
+        if (this.getZoneConnectedHumanPlayerCount(room) >= ZONE_PVP_ROOM_MIN_PLAYERS &&
             room.status === "waiting") {
             room.status = "countdown";
             room.countdownStartedAt = now;
@@ -1707,7 +1720,7 @@ let GameGateway = class GameGateway {
             return;
         if (room.status !== "countdown")
             return;
-        if (this.getZoneHumanPlayerCount(room) < ZONE_PVP_ROOM_MIN_PLAYERS) {
+        if (this.getZoneConnectedHumanPlayerCount(room) < ZONE_PVP_ROOM_MIN_PLAYERS) {
             room.status = "waiting";
             room.locked = false;
             room.countdownStartedAt = null;
@@ -1891,28 +1904,19 @@ let GameGateway = class GameGateway {
             ? candidate
             : null;
     }
-    getStableSpectatorTarget(room, victim, preferred = null) {
+    getStableSpectatorTarget(room, victim, _preferred = null) {
         if (!room || !victim)
             return null;
-        const alive = [...room.players.values()]
-            .filter((player) => player.id !== victim.id && player.alive !== false)
-            .sort((a, b) => {
-            const aDistance = Math.hypot((a.x || 0) - (victim.x || 0), (a.y || 0) - (victim.y || 0));
-            const bDistance = Math.hypot((b.x || 0) - (victim.x || 0), (b.y || 0) - (victim.y || 0));
-            return aDistance - bDistance || String(a.id).localeCompare(String(b.id));
-        });
         const isValid = (candidate) => candidate && candidate.id !== victim.id && candidate.alive !== false;
-        if (isValid(preferred))
-            return preferred;
-        const killer = victim.killedById ? room.players.get(victim.killedById) : null;
-        if (isValid(killer))
-            return killer;
         const lockedTarget = victim.spectatorTargetId
             ? room.players.get(victim.spectatorTargetId)
             : null;
         if (isValid(lockedTarget))
             return lockedTarget;
-        return alive[0] || null;
+        const candidates = [...room.players.values()].filter(isValid);
+        if (!candidates.length)
+            return null;
+        return candidates[Math.floor(Math.random() * candidates.length)] || null;
     }
     eliminatePlayer(room, victim, killer = null, now = Date.now(), reason = "unknown", forceEmit = false) {
         if (!room || !victim)
@@ -3510,24 +3514,47 @@ let GameGateway = class GameGateway {
         if (!roomId)
             return;
         const room = this.zonePvpRooms.get(roomId);
+        const now = Date.now();
         if (room) {
             const player = room.players.get(socketId);
             const resumeToken = String(player?.resumeToken || this.zonePvpSocketResumeToken.get(socketId) || "");
             if (resumeToken)
                 this.zonePvpResumeSeats.delete(resumeToken);
             room.players.delete(socketId);
+            room.projectiles = (room.projectiles || []).filter((projectile) => String(projectile?.ownerId || "") !== String(socketId));
+            room.projectileSpatialIndex = null;
+            for (const key of room.collisionCooldowns?.keys?.() || []) {
+                if (String(key).includes(String(socketId))) {
+                    room.collisionCooldowns.delete(key);
+                }
+            }
+            for (const viewer of room.players.values()) {
+                if (viewer?.alive !== false)
+                    continue;
+                if (String(viewer?.spectatorTargetId || "") !== String(socketId))
+                    continue;
+                viewer.spectatorTargetId = null;
+                const replacementTarget = this.getStableSpectatorTarget(room, viewer);
+                viewer.spectatorTargetId = replacementTarget?.id || null;
+            }
             this.server.sockets.sockets.get(socketId)?.leave(roomId);
             this.zonePvpSocketRoom.delete(socketId);
             this.zonePvpSocketResumeToken.delete(socketId);
-            this.markRoomEmptyIfNeeded(room);
+            this.markRoomEmptyIfNeeded(room, now);
+            this.server.to(roomId).emit("zone-pvp:entity-removed", {
+                roomId,
+                playerId: socketId,
+                projectileOwnerId: socketId,
+                serverNow: now,
+            });
             const humanCount = this.getZoneHumanPlayerCount(room);
-            if (room.status === "countdown" && humanCount < ZONE_PVP_ROOM_MIN_PLAYERS) {
+            const connectedHumanCount = this.getZoneConnectedHumanPlayerCount(room);
+            if (room.status === "countdown" && connectedHumanCount < ZONE_PVP_ROOM_MIN_PLAYERS) {
                 room.status = "waiting";
                 room.locked = false;
                 room.countdownStartedAt = null;
                 room.roundId = null;
                 room.phaseVersion = Number(room.phaseVersion || 0) + 1;
-                this.broadcastZonePvpRoomState(room, Date.now(), true);
             }
             else if (room.status === "playing") {
                 if (humanCount === 0) {
@@ -3537,15 +3564,17 @@ let GameGateway = class GameGateway {
                     room.battlePrepareUntil = null;
                     room.winnerId = null;
                     room.winnerName = null;
-                    room.finishedAt = Date.now();
-                    room.abandonedByAllHumansAt = room.finishedAt;
+                    room.finishedAt = now;
+                    room.abandonedByAllHumansAt = now;
                     room.projectiles = [];
                     room.phaseVersion = Number(room.phaseVersion || 0) + 1;
                 }
                 else {
-                    this.updateZonePvpWinCondition(room, Date.now());
+                    this.updateZonePvpWinCondition(room, now);
                 }
             }
+            room.lastStaticStateAt = 0;
+            this.broadcastZonePvpRoomState(room, now, true);
         }
         this.zonePvpSocketRoom.delete(socketId);
         this.zonePvpSocketResumeToken.delete(socketId);
@@ -3756,6 +3785,9 @@ let GameGateway = class GameGateway {
                 winnerName: room.winnerName,
                 playerCount: alivePlayers.length,
                 realPlayerCount: this.getZoneHumanPlayerCount(room),
+                matchmakingPlayerCount: room.status === "waiting" || room.status === "countdown"
+                    ? this.getZoneConnectedHumanPlayerCount(room)
+                    : this.getZoneHumanPlayerCount(room),
                 botCount: this.getZoneBotCount(room),
                 minPlayers: ZONE_PVP_ROOM_MIN_PLAYERS,
                 maxPlayers: ZONE_PVP_ROOM_MAX_PLAYERS,

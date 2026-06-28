@@ -21,6 +21,7 @@ export declare class GameGateway {
     private usesProgressionPvpCombat;
     private getZoneHumanPlayers;
     private getZoneHumanPlayerCount;
+    private getZoneConnectedHumanPlayerCount;
     private getZoneBotCount;
     private ensureZonePvpNetId;
     private serializeZonePvpStatePlayer;
@@ -88,7 +89,7 @@ export declare class GameGateway {
     resetDroneProgress(player: any): void;
     applyKillReward(killer: any, room?: any, now?: number): void;
     getRecentKiller(room: any, victim: any, now?: number): any;
-    getStableSpectatorTarget(room: any, victim: any, preferred?: any): any;
+    getStableSpectatorTarget(room: any, victim: any, _preferred?: any): any;
     eliminatePlayer(room: any, victim: any, killer?: any, now?: number, reason?: string, forceEmit?: boolean): any;
     getCollisionKey(a: any, b: any): string;
     getBodyCollisionOutcome(a: any, b: any): {

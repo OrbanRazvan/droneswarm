@@ -83,7 +83,9 @@ const BR_ONLINE_VISIBLE_PLAYERS_LIMIT = 60;
 const ZONE_PVP_ROOM_MAX_PLAYERS = 60;
 // A Zone PvP lobby starts only after three real browser players have joined.
 // Bots never unlock the lobby; they are created only when the admission window ends.
-const ZONE_PVP_ROOM_MIN_PLAYERS = 2; // TEST: revert to 3 before public launch.
+// Zone PvP opens only when three *real connected* browser players are present.
+// Bots are added only after the five-second admission window expires.
+const ZONE_PVP_ROOM_MIN_PLAYERS = 3;
 const ZONE_PVP_START_COUNTDOWN_MS = 5000;
 const ZONE_PVP_BATTLE_PREPARE_DURATION = 10000; // 10 seconds: movement/loot allowed, combat locked.
 const ZONE_PVP_ZONE_SHRINK_DURATION = 420000;
@@ -381,6 +383,19 @@ export class GameGateway {
 
   private getZoneHumanPlayerCount(room: any) {
     return this.getZoneHumanPlayers(room).length;
+  }
+
+  // Matchmaking must count actively connected real browsers, not a reserved
+  // reconnect seat that lost its transport while the lobby is still waiting.
+  // Live rounds deliberately keep using getZoneHumanPlayerCount so a brief
+  // reconnect does not end an already-started match.
+  private getZoneConnectedHumanPlayerCount(room: any) {
+    let count = 0;
+    for (const player of room?.players?.values?.() || []) {
+      if (player?.isBot || Number(player?.disconnectedAt || 0) > 0) continue;
+      if (this.server?.sockets?.sockets?.has(String(player.id))) count += 1;
+    }
+    return count;
   }
 
   private getZoneBotCount(room: any) {
@@ -948,6 +963,10 @@ export class GameGateway {
       battleBeginFlashUntil: room.battleBeginFlashUntil || null,
       playerCount: this.getAlivePlayers(room).length,
       realPlayerCount: this.getZoneHumanPlayerCount(room),
+      matchmakingPlayerCount:
+        room.status === "waiting" || room.status === "countdown"
+          ? this.getZoneConnectedHumanPlayerCount(room)
+          : this.getZoneHumanPlayerCount(room),
       botCount: this.getZoneBotCount(room),
       minPlayers: ZONE_PVP_ROOM_MIN_PLAYERS,
       maxPlayers: ZONE_PVP_ROOM_MAX_PLAYERS,
@@ -1862,7 +1881,7 @@ export class GameGateway {
     // Only real people decide admission. Once the fifth-second window opens it
     // remains open for additional humans; bots are added strictly at start.
     if (
-      this.getZoneHumanPlayerCount(room) >= ZONE_PVP_ROOM_MIN_PLAYERS &&
+      this.getZoneConnectedHumanPlayerCount(room) >= ZONE_PVP_ROOM_MIN_PLAYERS &&
       room.status === "waiting"
     ) {
       room.status = "countdown";
@@ -2180,7 +2199,7 @@ export class GameGateway {
     if (room.roundStarted || room.status === "playing" || room.status === "finished") return;
     if (room.status !== "countdown") return;
 
-    if (this.getZoneHumanPlayerCount(room) < ZONE_PVP_ROOM_MIN_PLAYERS) {
+    if (this.getZoneConnectedHumanPlayerCount(room) < ZONE_PVP_ROOM_MIN_PLAYERS) {
       room.status = "waiting";
       room.locked = false;
       room.countdownStartedAt = null;
@@ -2432,31 +2451,24 @@ export class GameGateway {
       : null;
   }
 
-  getStableSpectatorTarget(room, victim, preferred = null) {
+  getStableSpectatorTarget(room, victim, _preferred = null) {
     if (!room || !victim) return null;
-
-    const alive = [...room.players.values()]
-      .filter((player) => player.id !== victim.id && player.alive !== false)
-      .sort((a, b) => {
-        const aDistance = Math.hypot((a.x || 0) - (victim.x || 0), (a.y || 0) - (victim.y || 0));
-        const bDistance = Math.hypot((b.x || 0) - (victim.x || 0), (b.y || 0) - (victim.y || 0));
-        return aDistance - bDistance || String(a.id).localeCompare(String(b.id));
-      });
 
     const isValid = (candidate) =>
       candidate && candidate.id !== victim.id && candidate.alive !== false;
 
-    if (isValid(preferred)) return preferred;
-
-    const killer = victim.killedById ? room.players.get(victim.killedById) : null;
-    if (isValid(killer)) return killer;
-
+    // Keep the currently selected subject until it disappears. This prevents
+    // the spectator camera from hopping every state packet.
     const lockedTarget = victim.spectatorTargetId
       ? room.players.get(victim.spectatorTargetId)
       : null;
     if (isValid(lockedTarget)) return lockedTarget;
 
-    return alive[0] || null;
+    // The first target (or replacement after its death/exit) is deliberately
+    // random among living participants, as requested for spectator mode.
+    const candidates = [...room.players.values()].filter(isValid);
+    if (!candidates.length) return null;
+    return candidates[Math.floor(Math.random() * candidates.length)] || null;
   }
 
   eliminatePlayer(room, victim, killer = null, now = Date.now(), reason = "unknown", forceEmit = false) {
@@ -4539,32 +4551,70 @@ export class GameGateway {
     if (!roomId) return;
 
     const room = this.zonePvpRooms.get(roomId);
+    const now = Date.now();
+
     if (room) {
       const player = room.players.get(socketId);
-      const resumeToken = String(player?.resumeToken || this.zonePvpSocketResumeToken.get(socketId) || "");
+      const resumeToken = String(
+        player?.resumeToken || this.zonePvpSocketResumeToken.get(socketId) || "",
+      );
       if (resumeToken) this.zonePvpResumeSeats.delete(resumeToken);
 
+      // An explicit EXIT TO MENU is authoritative: remove the main drone,
+      // every active attack drone it owns and all stale collision links now.
+      // Do not wait for the next simulation/state interval.
       room.players.delete(socketId);
+      room.projectiles = (room.projectiles || []).filter(
+        (projectile: any) => String(projectile?.ownerId || "") !== String(socketId),
+      );
+      room.projectileSpatialIndex = null;
+
+      for (const key of room.collisionCooldowns?.keys?.() || []) {
+        if (String(key).includes(String(socketId))) {
+          room.collisionCooldowns.delete(key);
+        }
+      }
+
+      // Dead spectators watching the departed player immediately receive a
+      // new random living target. The target remains locked afterwards until
+      // that new participant is eliminated or explicitly leaves.
+      for (const viewer of room.players.values()) {
+        if (viewer?.alive !== false) continue;
+        if (String(viewer?.spectatorTargetId || "") !== String(socketId)) continue;
+        viewer.spectatorTargetId = null;
+        const replacementTarget = this.getStableSpectatorTarget(room, viewer);
+        viewer.spectatorTargetId = replacementTarget?.id || null;
+      }
+
       this.server.sockets.sockets.get(socketId)?.leave(roomId);
       this.zonePvpSocketRoom.delete(socketId);
       this.zonePvpSocketResumeToken.delete(socketId);
-      this.markRoomEmptyIfNeeded(room);
+      this.markRoomEmptyIfNeeded(room, now);
+
+      // Reliable direct removal makes every browser drop the drone and its
+      // projectiles immediately, even if an older volatile movement packet is
+      // still queued behind it.
+      this.server.to(roomId).emit("zone-pvp:entity-removed", {
+        roomId,
+        playerId: socketId,
+        projectileOwnerId: socketId,
+        serverNow: now,
+      });
 
       const humanCount = this.getZoneHumanPlayerCount(room);
+      const connectedHumanCount = this.getZoneConnectedHumanPlayerCount(room);
 
-      // Only the pre-match lobby may fall back to waiting. A live game is
-      // irreversible: a creator leaving never starts another countdown.
-      if (room.status === "countdown" && humanCount < ZONE_PVP_ROOM_MIN_PLAYERS) {
+      // Only the pre-match lobby may go back to waiting. A live round stays
+      // one-way and never becomes a new lobby after somebody exits.
+      if (room.status === "countdown" && connectedHumanCount < ZONE_PVP_ROOM_MIN_PLAYERS) {
         room.status = "waiting";
         room.locked = false;
         room.countdownStartedAt = null;
         room.roundId = null;
         room.phaseVersion = Number(room.phaseVersion || 0) + 1;
-        this.broadcastZonePvpRoomState(room, Date.now(), true);
       } else if (room.status === "playing") {
-        // Once the final real browser player explicitly exits, stop the
-        // abandoned simulation. Until that point bots and remaining humans keep
-        // fighting and the room never restarts.
+        // Stop an abandoned round only when its final real browser leaves.
+        // Until then remaining humans and bots continue normally.
         if (humanCount === 0) {
           room.status = "finished";
           room.locked = true;
@@ -4572,14 +4622,19 @@ export class GameGateway {
           room.battlePrepareUntil = null;
           room.winnerId = null;
           room.winnerName = null;
-          room.finishedAt = Date.now();
-          room.abandonedByAllHumansAt = room.finishedAt;
+          room.finishedAt = now;
+          room.abandonedByAllHumansAt = now;
           room.projectiles = [];
           room.phaseVersion = Number(room.phaseVersion || 0) + 1;
         } else {
-          this.updateZonePvpWinCondition(room, Date.now());
+          this.updateZonePvpWinCondition(room, now);
         }
       }
+
+      // Push one authoritative full state immediately so all players, HUDs and
+      // minimaps agree before the next scheduled state broadcast.
+      room.lastStaticStateAt = 0;
+      this.broadcastZonePvpRoomState(room, now, true);
     }
 
     this.zonePvpSocketRoom.delete(socketId);
@@ -4879,6 +4934,10 @@ export class GameGateway {
         winnerName: room.winnerName,
         playerCount: alivePlayers.length,
         realPlayerCount: this.getZoneHumanPlayerCount(room),
+        matchmakingPlayerCount:
+          room.status === "waiting" || room.status === "countdown"
+            ? this.getZoneConnectedHumanPlayerCount(room)
+            : this.getZoneHumanPlayerCount(room),
         botCount: this.getZoneBotCount(room),
         minPlayers: ZONE_PVP_ROOM_MIN_PLAYERS,
         maxPlayers: ZONE_PVP_ROOM_MAX_PLAYERS,
