@@ -74,11 +74,14 @@ const COMBAT_EVENT_MAX_RENDERED = 32;
 // sampling. It is visual-only: no collision, spawn, loot or game-rule code
 // reads this layer.
 const PIXEL_TERRAIN_THEME = "battle-royale-pixel-terrain";
+const ADVENTURE_DEEP_SPACE_THEME = "adventure-deep-space";
 // Battle Royale keeps the legacy name; Normal / Zone use the explicit alias.
-// Both resolve to the same cached premium space-battle visual.
+// Adventure uses its own procedural background, but it shares the same safe
+// cached terrain lifecycle so it never flashes while panning the huge world.
 const SPACE_BATTLE_THEMES = new Set([
   PIXEL_TERRAIN_THEME,
   "premium-space-battle",
+  ADVENTURE_DEEP_SPACE_THEME,
 ]);
 const WORLD_TERRAIN_TEXTURE_CACHE = new Map();
 const PIXEL_TERRAIN_TEXTURE_SIZE = 1536;
@@ -631,6 +634,2527 @@ function createOrbContext(color) {
   ctx.moveTo(0, -15.2).lineTo(0, -10.8).stroke({ color: 0xffffff, width: 1.25, alpha: 0.35 });
   ctx.moveTo(0, 10.8).lineTo(0, 15.2).stroke({ color: 0xffffff, width: 1.25, alpha: 0.35 });
   return ctx;
+}
+
+
+// Adventure mode uses only these opt-in arrays. Existing PvE/PvP modes leave
+// them empty, so their renderer path and visuals stay untouched.
+const ADVENTURE_STAR_COLORS = {
+  cyan: 0x72edff,
+  gold: 0xffdf76,
+  violet: 0xc9a4ff,
+  mint: 0x8cffc4,
+};
+
+const ADVENTURE_ASTEROID_CONTEXT_CACHE = new Map();
+
+function createAdventureStarContext(color) {
+  const ctx = new PIXI.GraphicsContext();
+  const points = [];
+  const outer = 21;
+  const inner = 8.5;
+
+  for (let index = 0; index < 10; index += 1) {
+    const angle = -Math.PI / 2 + index * Math.PI / 5;
+    const radius = index % 2 === 0 ? outer : inner;
+    points.push(Math.cos(angle) * radius, Math.sin(angle) * radius);
+  }
+
+  ctx.circle(0, 0, 28).fill({ color, alpha: 0.07 });
+  ctx.circle(0, 0, 23).stroke({ color, width: 1.5, alpha: 0.18 });
+  ctx.poly(points).fill({ color, alpha: 0.96 });
+  ctx.poly(points).stroke({ color: 0xffffff, width: 1.25, alpha: 0.72 });
+  ctx.circle(-5, -7, 4.3).fill({ color: 0xffffff, alpha: 0.78 });
+  ctx.circle(0, 0, 12.5).stroke({ color: 0xffffff, width: 0.9, alpha: 0.34 });
+  return ctx;
+}
+
+function createAdventureAsteroidContext(tone = 0) {
+  const normalizedTone = Math.max(0, Math.min(3, Math.floor(Number(tone || 0))));
+  const cacheKey = String(normalizedTone);
+
+  if (ADVENTURE_ASTEROID_CONTEXT_CACHE.has(cacheKey)) {
+    return ADVENTURE_ASTEROID_CONTEXT_CACHE.get(cacheKey);
+  }
+
+  // Layered mineral palettes: deep shadow, basalt body, sunlit ridges,
+  // cold dust and a small amount of luminous ore exposed by each strike.
+  const palettes = [
+    [0x202a33, 0x425867, 0x7f99a5, 0xc7e0e6, 0x77e7ff],
+    [0x2b2830, 0x574e60, 0x947f9c, 0xe3d0eb, 0xd592ff],
+    [0x30271e, 0x635044, 0xa98c69, 0xe2c59b, 0xffca78],
+    [0x18312f, 0x365d59, 0x77aaa0, 0xc9eee4, 0x72ffd1],
+  ];
+  const [deep, body, ridge, dust, ore] = palettes[normalizedTone];
+  const ctx = new PIXI.GraphicsContext();
+
+  const outer = [
+    -78, -16,
+    -63, -55,
+    -27, -78,
+    16, -70,
+    60, -45,
+    81, -7,
+    67, 36,
+    31, 75,
+    -18, 79,
+    -62, 47,
+    -83, 14,
+  ];
+  const bodyShape = [
+    -72, -13,
+    -58, -50,
+    -25, -70,
+    14, -63,
+    53, -39,
+    72, -6,
+    58, 31,
+    26, 66,
+    -17, 70,
+    -55, 42,
+    -75, 12,
+  ];
+
+  // Soft halo + an offset shadow make the rock feel thick rather than flat.
+  ctx.circle(4, 7, 92).fill({ color: 0x00060b, alpha: 0.18 });
+  ctx.poly(outer).fill({ color: deep, alpha: 0.98 });
+  ctx.poly(outer).stroke({ color: 0x050b10, width: 7.5, alpha: 0.76 });
+  ctx.poly(bodyShape).fill({ color: body, alpha: 1 });
+
+  // Faceted faces: these act as procedural texture and create a hard-rock
+  // silhouette even without external image assets.
+  ctx.poly([-58, -50, -25, -70, -7, -21, -39, -8]).fill({ color: ridge, alpha: 0.30 });
+  ctx.poly([-7, -21, 14, -63, 53, -39, 26, -5]).fill({ color: ridge, alpha: 0.18 });
+  ctx.poly([26, -5, 72, -6, 58, 31, 13, 28]).fill({ color: deep, alpha: 0.28 });
+  ctx.poly([-39, -8, -7, -21, 13, 28, -21, 45, -56, 18]).fill({ color: 0x6a7880, alpha: 0.13 });
+  ctx.poly([-21, 45, 13, 28, 58, 31, 26, 66, -17, 70]).fill({ color: deep, alpha: 0.34 });
+  ctx.poly([-75, 12, -56, 18, -21, 45, -55, 42]).fill({ color: 0x101d25, alpha: 0.38 });
+
+  // Weathered ridges and mineral seams.
+  ctx.poly([-60, -39, -39, -48, -14, -39, 8, -50]).stroke({ color: dust, width: 2.2, alpha: 0.25 });
+  ctx.poly([7, -52, 21, -32, 47, -24, 58, -5]).stroke({ color: ridge, width: 1.8, alpha: 0.24 });
+  ctx.poly([-67, 13, -42, 7, -17, 16, 11, 7, 41, 12]).stroke({ color: dust, width: 1.4, alpha: 0.15 });
+  ctx.poly([-33, 56, -7, 43, 24, 52, 47, 33]).stroke({ color: ridge, width: 2.1, alpha: 0.20 });
+
+  // Craters: dark bowls, thin lit rims and a tiny dust highlight.
+  const craters = [
+    [-30, -25, 16, 0.78],
+    [29, -1, 20, 0.72],
+    [-6, 34, 12, 0.64],
+    [44, 34, 8, 0.58],
+  ];
+  for (const [x, y, radius, alpha] of craters) {
+    ctx.circle(x, y, radius).fill({ color: deep, alpha });
+    ctx.circle(x - 2.5, y - 3.5, radius * 0.72).fill({ color: 0x091116, alpha: 0.34 });
+    ctx.circle(x - 1.5, y - 2, radius * 0.86).stroke({ color: dust, width: 1.45, alpha: 0.22 });
+    ctx.circle(x - radius * 0.34, y - radius * 0.38, Math.max(1.6, radius * 0.14)).fill({ color: dust, alpha: 0.25 });
+  }
+
+  // Granular speckles, intentionally static/cached so they do not cost the frame.
+  const grains = [
+    [-49, -13, 3.2], [-42, 30, 2.4], [-17, -55, 2.8], [3, -42, 2.1],
+    [17, 51, 2.7], [52, -24, 2.4], [62, 11, 1.8], [-4, 58, 1.9],
+    [-58, 6, 1.7], [10, 12, 1.45], [38, -47, 1.65], [-24, 60, 1.8],
+  ];
+  for (const [x, y, radius] of grains) {
+    ctx.circle(x, y, radius).fill({ color: dust, alpha: 0.16 });
+  }
+
+  // Asteroids keep their natural rock texture after hits. The impact burst and
+  // detached debris happen around the boulder, without drawing glowing fissures on it.
+
+  // Crisp upper-left light catches the outline like a real rotating boulder.
+  ctx.poly([-58, -50, -25, -70, 14, -63, 53, -39]).stroke({ color: dust, width: 3.2, alpha: 0.48 });
+  ctx.poly([72, -6, 58, 31, 26, 66]).stroke({ color: deep, width: 3.8, alpha: 0.62 });
+
+  ADVENTURE_ASTEROID_CONTEXT_CACHE.set(cacheKey, ctx);
+  return ctx;
+}
+
+function createAdventureAsteroidImpactContext() {
+  const ctx = new PIXI.GraphicsContext();
+  ctx.circle(0, 0, 26).fill({ color: 0xffffff, alpha: 0.86 });
+  ctx.circle(0, 0, 42).stroke({ color: 0xffd28d, width: 2.6, alpha: 0.86 });
+  ctx.circle(0, 0, 64).stroke({ color: 0xff9c5d, width: 1.5, alpha: 0.54 });
+  ctx.poly([0, -74, 8, -17, 74, 0, 8, 17, 0, 74, -8, 17, -74, 0, -8, -17]).fill({ color: 0xffc073, alpha: 0.24 });
+  return ctx;
+}
+
+const ADVENTURE_DEBRIS_CONTEXT_CACHE = new Map();
+
+function createAdventureDebrisContext(tone = 0, variant = 0, sparkle = false) {
+  const key = `${tone}:${variant}:${sparkle ? 1 : 0}`;
+  if (ADVENTURE_DEBRIS_CONTEXT_CACHE.has(key)) return ADVENTURE_DEBRIS_CONTEXT_CACHE.get(key);
+
+  const palettes = [
+    [0x202a33, 0x526b79, 0xc7e0e6, 0x77e7ff],
+    [0x2b2830, 0x695d72, 0xe3d0eb, 0xd592ff],
+    [0x30271e, 0x725b48, 0xe2c59b, 0xffca78],
+    [0x18312f, 0x48766f, 0xc9eee4, 0x72ffd1],
+  ];
+  const [deep, body, light, ore] = palettes[Math.max(0, Math.min(3, Number(tone || 0)))];
+  const ctx = new PIXI.GraphicsContext();
+  const variants = [
+    [-1, -0.7, 1, -0.48, 0.76, 0.9, -0.63, 0.65],
+    [-0.9, -0.82, 0.96, -0.2, 0.57, 0.92, -0.74, 0.52],
+    [-0.72, -0.96, 0.86, -0.58, 0.98, 0.5, 0.2, 0.98, -0.82, 0.42],
+    [-0.98, -0.18, -0.3, -0.88, 0.9, -0.42, 0.72, 0.76, -0.45, 0.92],
+  ];
+  const points = variants[Math.max(0, Math.min(3, Number(variant || 0)))];
+  ctx.poly(points).fill({ color: deep, alpha: 0.92 });
+  ctx.poly(points.map((point, index) => point * (index % 2 === 0 ? 0.8 : 0.8))).fill({ color: body, alpha: 0.86 });
+  ctx.poly(points).stroke({ color: light, width: 0.12, alpha: 0.50 });
+  if (sparkle) {
+    ctx.circle(-0.12, -0.18, 0.22).fill({ color: ore, alpha: 0.92 });
+    ctx.circle(-0.12, -0.18, 0.46).stroke({ color: ore, width: 0.08, alpha: 0.46 });
+  }
+  ADVENTURE_DEBRIS_CONTEXT_CACHE.set(key, ctx);
+  return ctx;
+}
+
+// Adventure structures are opt-in and never run in PvE/PvP. The wall now reads
+// as a true deep-space military bulkhead: armored graphite plating, heavy side
+// pylons, recessed vents, warm white status strips and subtle animated beacons.
+const ADVENTURE_WALL_CONTEXT_CACHE = new Map();
+const ADVENTURE_WALL_BASE_LENGTH = 480;
+// The build footprint is deliberately slimmer than the original station block.
+// Collision uses the same thinner profile in Adventure.jsx.
+const ADVENTURE_WALL_VISUAL_DEPTH_SCALE = 0.66;
+
+function createAdventureWallShellContext(mode = "placed", snapped = false) {
+  const preview = mode === "preview";
+  const key = `shell:${preview ? "preview" : "placed"}:${snapped ? 1 : 0}`;
+  if (ADVENTURE_WALL_CONTEXT_CACHE.has(key)) return ADVENTURE_WALL_CONTEXT_CACHE.get(key);
+
+  const outer = preview ? (snapped ? 0x223a36 : 0x202d35) : 0x131a21;
+  const body = preview ? (snapped ? 0x425a54 : 0x42505a) : 0x36424c;
+  const plate = preview ? (snapped ? 0x5b746b : 0x586873) : 0x586773;
+  const dark = 0x0b1117;
+  const edge = preview ? (snapped ? 0xd4fff0 : 0xd8e8ef) : 0xa4b5bf;
+  const highlight = preview ? (snapped ? 0xf1fff8 : 0xf3f8fb) : 0xd9e2e8;
+  const alpha = preview ? (snapped ? 0.80 : 0.62) : 1;
+  const ctx = new PIXI.GraphicsContext();
+  const half = ADVENTURE_WALL_BASE_LENGTH * 0.5;
+
+  // Wide starbase foundation — read as a building wall, not a thin rail.
+  const foundation = [
+    -half - 14, -56,
+    -half + 18, -96,
+    half - 18, -96,
+    half + 14, -56,
+    half + 14, 56,
+    half - 18, 96,
+    -half + 18, 96,
+    -half - 14, 56,
+  ];
+  ctx.poly(foundation).fill({ color: 0x000000, alpha: preview ? 0.14 : 0.30 });
+  ctx.poly(foundation).stroke({ color: edge, width: 4.4, alpha: preview ? 0.48 : 0.78 });
+
+  const shell = [
+    -half + 4, -46,
+    -half + 30, -80,
+    half - 30, -80,
+    half - 4, -46,
+    half - 4, 46,
+    half - 30, 80,
+    -half + 30, 80,
+    -half + 4, 46,
+  ];
+  ctx.poly(shell).fill({ color: outer, alpha });
+  ctx.poly(shell).stroke({ color: 0x212b33, width: 2.6, alpha: preview ? 0.44 : 0.82 });
+
+  // Three broad armored station bays. Their size gives a proper defensive-base silhouette.
+  const bays = [-150, 0, 150];
+  bays.forEach((centerX, bayIndex) => {
+    const bayWidth = bayIndex === 1 ? 126 : 116;
+    const x = centerX - bayWidth * 0.5;
+    const bay = [
+      x + 16, -58,
+      x + bayWidth - 16, -58,
+      x + bayWidth, -42,
+      x + bayWidth, 42,
+      x + bayWidth - 16, 58,
+      x + 16, 58,
+      x, 42,
+      x, -42,
+    ];
+    ctx.poly(bay).fill({ color: body, alpha });
+    ctx.poly(bay).stroke({ color: edge, width: 2.1, alpha: preview ? 0.28 : 0.46 });
+
+    // Layered roof/armor shape, facing up from the top-down camera.
+    ctx.poly([
+      x + 18, -50,
+      x + bayWidth - 18, -50,
+      x + bayWidth - 30, -24,
+      x + 30, -24,
+    ]).fill({ color: plate, alpha: preview ? 0.38 : 0.92 });
+    ctx.poly([
+      x + 24, 24,
+      x + bayWidth - 24, 24,
+      x + bayWidth - 36, 47,
+      x + 36, 47,
+    ]).fill({ color: 0x222d36, alpha: preview ? 0.38 : 0.94 });
+
+    // Central recessed hangar / blast-door block.
+    ctx.roundRect(x + 22, -17, bayWidth - 44, 34, 8).fill({ color: dark, alpha: preview ? 0.56 : 1 });
+    ctx.roundRect(x + 26, -13, bayWidth - 52, 26, 6).stroke({ color: highlight, width: 1.25, alpha: preview ? 0.16 : 0.20 });
+    ctx.poly([
+      x + 34, -9,
+      x + bayWidth - 34, -9,
+      x + bayWidth - 44, 0,
+      x + bayWidth - 34, 9,
+      x + 34, 9,
+      x + 44, 0,
+    ]).fill({ color: 0x19232b, alpha: preview ? 0.46 : 0.90 });
+
+    // Mechanical roof vents / panels.
+    [-1, 1].forEach((side) => {
+      const ventY = side < 0 ? -38 : 36;
+      for (let i = 0; i < 3; i += 1) {
+        const ventX = x + 25 + i * ((bayWidth - 50) / 2);
+        ctx.roundRect(ventX, ventY, 16, 5.5, 2.5).fill({ color: 0x10171d, alpha: preview ? 0.50 : 0.86 });
+      }
+    });
+
+    // Outer braces make the modules look bolted into a larger station.
+    ctx.poly([x + 6, -32, x + 27, -14, x + 18, 8, x + 5, -2]).fill({ color: plate, alpha: preview ? 0.26 : 0.68 });
+    ctx.poly([x + bayWidth - 6, 32, x + bayWidth - 27, 14, x + bayWidth - 18, -8, x + bayWidth - 5, 2]).fill({ color: plate, alpha: preview ? 0.26 : 0.68 });
+  });
+
+  // Thick perimeter buttresses at both connection ends. These are visually strong but not wheel-like.
+  [-half, half].forEach((x, index) => {
+    const inward = index === 0 ? 1 : -1;
+    ctx.poly([
+      x - 12, -70,
+      x + inward * 30, -52,
+      x + inward * 40, -18,
+      x + inward * 40, 18,
+      x + inward * 30, 52,
+      x - 12, 70,
+      x - inward * 26, 42,
+      x - inward * 26, -42,
+    ]).fill({ color: 0x232f38, alpha: preview ? 0.52 : 1 });
+    ctx.poly([
+      x - 12, -70,
+      x + inward * 30, -52,
+      x + inward * 40, -18,
+      x + inward * 40, 18,
+      x + inward * 30, 52,
+      x - 12, 70,
+      x - inward * 26, 42,
+      x - inward * 26, -42,
+    ]).stroke({ color: edge, width: 2.6, alpha: preview ? 0.42 : 0.70 });
+    ctx.roundRect(x - 13, -25, 26, 50, 7).fill({ color: 0x11191f, alpha: preview ? 0.62 : 1 });
+    ctx.roundRect(x - 10, -21, 20, 42, 5).stroke({ color: highlight, width: 1.1, alpha: preview ? 0.18 : 0.24 });
+  });
+
+  // Long defensive top/bottom rails with subtle angular cut-outs.
+  ctx.poly([-half + 42, -75, half - 42, -75, half - 66, -61, -half + 66, -61]).fill({ color: 0x4a5863, alpha: preview ? 0.28 : 0.74 });
+  ctx.poly([-half + 66, 61, half - 66, 61, half - 42, 75, -half + 42, 75]).fill({ color: 0x202a32, alpha: preview ? 0.30 : 0.90 });
+  ctx.poly([-half + 60, -68, half - 60, -68]).stroke({ color: highlight, width: 1.1, alpha: preview ? 0.12 : 0.18 });
+
+  ADVENTURE_WALL_CONTEXT_CACHE.set(key, ctx);
+  return ctx;
+}
+
+function createAdventureWallLightContext(mode = "placed", snapped = false) {
+  const preview = mode === "preview";
+  const key = `light:${preview ? "preview" : "placed"}:${snapped ? 1 : 0}`;
+  if (ADVENTURE_WALL_CONTEXT_CACHE.has(key)) return ADVENTURE_WALL_CONTEXT_CACHE.get(key);
+
+  const amber = preview ? (snapped ? 0xd9fff0 : 0xe4edf6) : 0xffca81;
+  const white = preview ? 0xf5fbff : 0xfff8e9;
+  const red = preview ? (snapped ? 0xbaffdf : 0xdce8ee) : 0xff826a;
+  const ctx = new PIXI.GraphicsContext();
+  const half = ADVENTURE_WALL_BASE_LENGTH * 0.5;
+
+  // Thin warm command lights embedded in the three blast-door bays.
+  [-150, 0, 150].forEach((centerX, bayIndex) => {
+    const width = bayIndex === 1 ? 126 : 116;
+    [-22, 0, 22].forEach((offset, lightIndex) => {
+      const color = lightIndex === 1 ? white : amber;
+      ctx.roundRect(centerX + offset - 4.2, -2.8, 8.4, 5.6, 2.8).fill({ color, alpha: preview ? 0.34 : 0.42 });
+    });
+  });
+
+  // Navigation beacons only — no cyan strips.
+  [-205, -120, -40, 40, 120, 205].forEach((x, index) => {
+    const color = index % 2 === 0 ? amber : red;
+    ctx.circle(x, -72, 3.6).fill({ color, alpha: preview ? 0.30 : 0.46 });
+    ctx.circle(x, -72, 8.6).stroke({ color, width: 0.9, alpha: preview ? 0.16 : 0.16 });
+  });
+
+  // Docking lights at the ends, used as subtle visual snap endpoints.
+  [-half, half].forEach((x) => {
+    ctx.roundRect(x - 3.2, -14, 6.4, 28, 3.2).fill({ color: white, alpha: preview ? 0.34 : 0.40 });
+    ctx.circle(x, 0, 10).stroke({ color: amber, width: 1.15, alpha: preview ? 0.20 : 0.20 });
+  });
+
+  ADVENTURE_WALL_CONTEXT_CACHE.set(key, ctx);
+  return ctx;
+}
+
+function createAdventureWallSweepContext(mode = "placed", snapped = false) {
+  const preview = mode === "preview";
+  const key = `sweep:${preview ? "preview" : "placed"}:${snapped ? 1 : 0}`;
+  if (ADVENTURE_WALL_CONTEXT_CACHE.has(key)) return ADVENTURE_WALL_CONTEXT_CACHE.get(key);
+
+  const warm = preview ? (snapped ? 0xe8fff7 : 0xeaf3ff) : 0xffe3a6;
+  const ctx = new PIXI.GraphicsContext();
+  // Narrow scan glint travelling through the center gate. It is intentionally
+  // subtle, so the wall feels powered without turning into a neon prop.
+  ctx.poly([-28, -35, 4, -35, 30, 0, 4, 35, -28, 35, -8, 0]).fill({ color: warm, alpha: preview ? 0.09 : 0.075 });
+  ctx.roundRect(-3, -42, 6, 84, 3).fill({ color: warm, alpha: preview ? 0.30 : 0.24 });
+  ADVENTURE_WALL_CONTEXT_CACHE.set(key, ctx);
+  return ctx;
+}
+
+function createAdventureWallShieldContext() {
+  const ctx = new PIXI.GraphicsContext();
+  const hex = [];
+  for (let index = 0; index < 6; index += 1) {
+    const angle = -Math.PI / 2 + index * Math.PI / 3;
+    hex.push(Math.cos(angle) * 34, Math.sin(angle) * 34);
+  }
+
+  ctx.circle(0, 0, 18).fill({ color: 0x5df2ff, alpha: 0.15 });
+  ctx.circle(0, 0, 26).stroke({ color: 0x9af8ff, width: 2.6, alpha: 0.92 });
+  ctx.poly(hex).stroke({ color: 0x59dfff, width: 2.2, alpha: 0.86 });
+  ctx.circle(0, 0, 42).stroke({ color: 0xa57cff, width: 1.4, alpha: 0.52 });
+  ctx.moveTo(-54, 0).lineTo(54, 0).stroke({ color: 0xe9ffff, width: 1.25, alpha: 0.62 });
+  ctx.moveTo(0, -54).lineTo(0, 54).stroke({ color: 0x72eaff, width: 1.1, alpha: 0.46 });
+  return ctx;
+}
+
+function createAdventureWallDamageContext(level = 0) {
+  const safeLevel = Math.max(0, Math.min(4, Math.floor(Number(level || 0))));
+  const ctx = new PIXI.GraphicsContext();
+  if (safeLevel <= 0) return ctx;
+
+  // This layer deliberately covers and removes large armor sections. It is not
+  // a cosmetic scratch pass: each step makes the station segment read as less
+  // structurally intact while the collision footprint remains stable.
+  const voidBlack = 0x05080b;
+  const innerMetal = 0x111920;
+  const char = 0x1c252d;
+  const brokenEdge = 0x84919a;
+  const exposed = 0x4d5962;
+  const ember = 0xffa45f;
+
+  // Stage 1 (81–60 HP): obvious cratered armor and a partially torn bay.
+  ctx.poly([
+    -178, -47,
+    -134, -58,
+    -98, -38,
+    -112, -8,
+    -148, -2,
+    -184, -18,
+  ]).fill({ color: char, alpha: 0.94 });
+  ctx.poly([
+    -172, -43,
+    -137, -51,
+    -108, -35,
+    -119, -13,
+    -149, -8,
+    -174, -20,
+  ]).fill({ color: voidBlack, alpha: 0.82 });
+  ctx.poly([-176, -44, -145, -25, -119, -29, -99, -10]).stroke({ color: brokenEdge, width: 2.4, alpha: 0.52 });
+  ctx.poly([-116, 15, -76, 6, -58, 22, -96, 38, -130, 30]).fill({ color: innerMetal, alpha: 0.72 });
+  ctx.poly([-118, 15, -92, 0, -61, 20, -92, 38]).stroke({ color: 0x070a0d, width: 4.0, alpha: 0.62 });
+  ctx.circle(-142, -27, 4.5).fill({ color: ember, alpha: 0.40 });
+
+  if (safeLevel >= 2) {
+    // Stage 2 (59–36 HP): left command bay is visibly blown open.
+    ctx.poly([
+      -214, -34,
+      -182, -66,
+      -116, -52,
+      -86, -22,
+      -100, 28,
+      -150, 48,
+      -204, 24,
+    ]).fill({ color: voidBlack, alpha: 0.96 });
+    ctx.poly([
+      -202, -30,
+      -178, -56,
+      -126, -45,
+      -103, -19,
+      -115, 20,
+      -153, 37,
+      -192, 18,
+    ]).fill({ color: innerMetal, alpha: 0.94 });
+    ctx.poly([
+      -204, -31,
+      -177, -57,
+      -125, -45,
+      -101, -17,
+      -116, 21,
+      -153, 38,
+      -191, 18,
+    ]).stroke({ color: brokenEdge, width: 3.0, alpha: 0.62 });
+    // Jagged edge / missing roof plates.
+    ctx.poly([-165, -67, -137, -46, -150, -23, -180, -38]).fill({ color: exposed, alpha: 0.66 });
+    ctx.poly([-104, 30, -130, 48, -159, 38, -143, 12]).fill({ color: exposed, alpha: 0.58 });
+    ctx.poly([-184, -10, -151, 4, -166, 22, -192, 10]).fill({ color: 0x080d11, alpha: 0.86 });
+    ctx.circle(-145, -27, 6.2).fill({ color: ember, alpha: 0.46 });
+    ctx.circle(-126, 17, 3.8).fill({ color: ember, alpha: 0.32 });
+  }
+
+  if (safeLevel >= 3) {
+    // Stage 3 (35–16 HP): central gate collapses. A huge dark breach is much
+    // more readable than cracks, especially while the wall is viewed zoomed out.
+    ctx.poly([
+      -78, -42,
+      -36, -58,
+      34, -51,
+      82, -22,
+      72, 24,
+      32, 50,
+      -42, 44,
+      -90, 17,
+    ]).fill({ color: voidBlack, alpha: 0.97 });
+    ctx.poly([
+      -70, -34,
+      -33, -48,
+      27, -42,
+      67, -18,
+      60, 19,
+      25, 40,
+      -35, 35,
+      -76, 12,
+    ]).fill({ color: 0x0f171e, alpha: 0.92 });
+    ctx.poly([
+      -75, -35,
+      -35, -49,
+      28, -42,
+      67, -18,
+      60, 20,
+      25, 40,
+      -35, 35,
+      -77, 12,
+    ]).stroke({ color: brokenEdge, width: 3.2, alpha: 0.68 });
+    // Hanging broken armor, leaving strong non-uniform silhouette inside.
+    ctx.poly([-57, -44, -20, -28, -31, -2, -69, -15]).fill({ color: exposed, alpha: 0.72 });
+    ctx.poly([18, 41, 54, 19, 42, -7, 5, 8]).fill({ color: exposed, alpha: 0.66 });
+    ctx.poly([-10, -3, 23, -3, 42, 15, 3, 22]).fill({ color: 0x06090c, alpha: 0.92 });
+    ctx.circle(-31, -20, 5.0).fill({ color: ember, alpha: 0.40 });
+    ctx.circle(35, 16, 4.4).fill({ color: ember, alpha: 0.35 });
+  }
+
+  if (safeLevel >= 4) {
+    // Stage 4 (15–1 HP): right bay and both rails are breaking apart. The wall
+    // should look one volley away from collapse, not merely worn.
+    ctx.poly([
+      88, -50,
+      148, -61,
+      207, -33,
+      218, 11,
+      186, 49,
+      126, 43,
+      82, 10,
+    ]).fill({ color: voidBlack, alpha: 0.98 });
+    ctx.poly([
+      96, -42,
+      147, -51,
+      196, -28,
+      205, 8,
+      179, 39,
+      132, 33,
+      91, 7,
+    ]).fill({ color: innerMetal, alpha: 0.92 });
+    ctx.poly([
+      89, -50,
+      148, -62,
+      208, -33,
+      219, 11,
+      185, 50,
+      126, 43,
+      81, 10,
+    ]).stroke({ color: brokenEdge, width: 3.6, alpha: 0.72 });
+    // Rails are ruptured so the entire segment visibly loses its clean shape.
+    ctx.poly([72, -78, 128, -78, 154, -61, 104, -57]).fill({ color: voidBlack, alpha: 0.94 });
+    ctx.poly([-210, 63, -146, 64, -116, 47, -175, 42]).fill({ color: voidBlack, alpha: 0.94 });
+    ctx.poly([114, 43, 145, 20, 169, 33, 146, 58]).fill({ color: exposed, alpha: 0.70 });
+    ctx.poly([160, -48, 190, -30, 177, -6, 145, -20]).fill({ color: exposed, alpha: 0.68 });
+    ctx.poly([76, -10, 124, 8, 146, 29, 96, 20]).fill({ color: 0x05080b, alpha: 0.90 });
+    ctx.circle(155, -22, 6.8).fill({ color: ember, alpha: 0.42 });
+    ctx.circle(177, 19, 4.0).fill({ color: ember, alpha: 0.30 });
+  }
+
+  return ctx;
+}
+function createAdventureWallSmokeParticleContext(radius = 18) {
+  const ctx = new PIXI.GraphicsContext();
+  ctx.circle(0, 0, radius).fill({ color: 0x0d1014, alpha: 0.44 });
+  ctx.circle(radius * 0.35, -radius * 0.12, radius * 0.74).fill({ color: 0x151a20, alpha: 0.28 });
+  ctx.circle(-radius * 0.28, radius * 0.2, radius * 0.58).fill({ color: 0x000000, alpha: 0.18 });
+  return ctx;
+}
+
+function createAdventureWallFireParticleContext(size = 16, variant = 0) {
+  const ctx = new PIXI.GraphicsContext();
+  const lean = [-0.34, -0.16, 0.14, 0.32][Math.max(0, Math.min(3, Number(variant || 0)))];
+  const tipX = size * lean;
+
+  // Soft ember glow at the breach. It remains stable and only breathes through
+  // transform/alpha, so the fire reads as a sustained burn rather than blinking.
+  ctx.ellipse(0, size * 0.30, size * 0.95, size * 0.62).fill({ color: 0x7d190b, alpha: 0.18 });
+  ctx.ellipse(0, size * 0.24, size * 0.68, size * 0.46).fill({ color: 0xff5b1f, alpha: 0.22 });
+
+  // Outer dark-red flame envelope.
+  ctx.poly([
+    tipX, -size * 1.24,
+    size * 0.50, -size * 0.32,
+    size * 0.42, size * 0.36,
+    size * 0.12, size * 0.94,
+    -size * 0.22, size * 0.82,
+    -size * 0.50, size * 0.16,
+    -size * 0.36, -size * 0.38,
+  ]).fill({ color: 0x9a250d, alpha: 0.78 });
+
+  // Main orange tongue.
+  ctx.poly([
+    tipX * 0.72, -size * 0.98,
+    size * 0.30, -size * 0.22,
+    size * 0.23, size * 0.31,
+    0, size * 0.70,
+    -size * 0.21, size * 0.22,
+    -size * 0.26, -size * 0.26,
+  ]).fill({ color: 0xff6b24, alpha: 0.94 });
+
+  // Bright inner core, deliberately lower than the outer tip.
+  ctx.poly([
+    tipX * 0.30, -size * 0.52,
+    size * 0.14, -size * 0.05,
+    size * 0.10, size * 0.29,
+    0, size * 0.50,
+    -size * 0.10, size * 0.20,
+    -size * 0.13, -size * 0.08,
+  ]).fill({ color: 0xffd26a, alpha: 0.92 });
+  ctx.circle(0, size * 0.27, size * 0.13).fill({ color: 0xfff1be, alpha: 0.90 });
+
+  return ctx;
+}
+
+function createAdventureGeneratorBaseContext() {
+  const ctx = new PIXI.GraphicsContext();
+  const outerDark = 0x070b10;
+  const armor = 0x121b25;
+  const plate = 0x1d2b36;
+  const edge = 0x657786;
+  const coldEdge = 0x9bb1bf;
+
+  // Heavy, dark octagonal station foundation.
+  ctx.circle(0, 0, 318).fill({ color: 0x000000, alpha: 0.28 });
+  ctx.poly([
+    -148, -266,
+    148, -266,
+    266, -148,
+    266, 148,
+    148, 266,
+    -148, 266,
+    -266, 148,
+    -266, -148,
+  ]).fill({ color: outerDark, alpha: 1 });
+  ctx.poly([
+    -148, -266,
+    148, -266,
+    266, -148,
+    266, 148,
+    148, 266,
+    -148, 266,
+    -266, 148,
+    -266, -148,
+  ]).stroke({ color: coldEdge, width: 5.6, alpha: 0.74 });
+
+  // Eight armored sectors that make the generator feel like a real base module.
+  for (let index = 0; index < 8; index += 1) {
+    const a = (Math.PI * 2 * index) / 8 - Math.PI / 8;
+    const b = a + Math.PI / 4;
+    const m = (a + b) * 0.5;
+    const innerA = 98;
+    const innerB = 118;
+    const outerA = 238;
+    const outerB = 248;
+    ctx.poly([
+      Math.cos(a) * innerA, Math.sin(a) * innerA,
+      Math.cos(a) * outerA, Math.sin(a) * outerA,
+      Math.cos(m) * outerB, Math.sin(m) * outerB,
+      Math.cos(b) * outerA, Math.sin(b) * outerA,
+      Math.cos(b) * innerB, Math.sin(b) * innerB,
+      Math.cos(m) * 108, Math.sin(m) * 108,
+    ]).fill({ color: index % 2 ? armor : plate, alpha: 0.98 });
+    ctx.poly([
+      Math.cos(a) * innerA, Math.sin(a) * innerA,
+      Math.cos(a) * outerA, Math.sin(a) * outerA,
+      Math.cos(m) * outerB, Math.sin(m) * outerB,
+      Math.cos(b) * outerA, Math.sin(b) * outerA,
+      Math.cos(b) * innerB, Math.sin(b) * innerB,
+      Math.cos(m) * 108, Math.sin(m) * 108,
+    ]).stroke({ color: edge, width: 2.2, alpha: 0.56 });
+  }
+
+  // Central reactor housing and reinforced service rails.
+  ctx.circle(0, 0, 126).fill({ color: 0x050a0f, alpha: 1 });
+  ctx.circle(0, 0, 126).stroke({ color: 0x718796, width: 4.2, alpha: 0.74 });
+  ctx.circle(0, 0, 98).fill({ color: 0x0c1821, alpha: 1 });
+  ctx.circle(0, 0, 98).stroke({ color: 0x2e4c5c, width: 3, alpha: 0.9 });
+
+  for (let index = 0; index < 4; index += 1) {
+    const angle = index * Math.PI * 0.5;
+    const x = Math.cos(angle) * 190;
+    const y = Math.sin(angle) * 190;
+    ctx.roundRect(-34, -16, 68, 32, 12).fill({ color: 0x17232d, alpha: 1 });
+    ctx.roundRect(-34, -16, 68, 32, 12).stroke({ color: 0x7890a0, width: 2.4, alpha: 0.58 });
+    ctx.roundRect(-18, -7, 36, 14, 6).fill({ color: 0x05090e, alpha: 0.96 });
+    ctx.roundRect(-14, -3, 28, 6, 3).fill({ color: 0x28c8e9, alpha: 0.44 });
+    // Local coordinates are rotated by the outer loop by applying a temporary transform through a container later,
+    // so only radial bolt placements are drawn here with explicit coordinates.
+    ctx.circle(x, y, 18).fill({ color: 0x0b1118, alpha: 1 });
+    ctx.circle(x, y, 12).stroke({ color: 0x5b7383, width: 2.2, alpha: 0.65 });
+  }
+
+  // Angular top plates, bolt rows and service grilles.
+  for (const axis of [-1, 1]) {
+    ctx.roundRect(axis * 142 - 28, -72, 56, 144, 9).fill({ color: 0x0b1219, alpha: 0.92 });
+    ctx.roundRect(axis * 142 - 24, -64, 48, 128, 7).stroke({ color: 0x4f6270, width: 2, alpha: 0.54 });
+    for (const y of [-43, -21, 0, 21, 43]) {
+      ctx.roundRect(axis * 142 - 14, y - 4, 28, 8, 4).fill({ color: 0x233743, alpha: 0.82 });
+    }
+  }
+  return ctx;
+}
+
+function createAdventureGeneratorCoreContext() {
+  const ctx = new PIXI.GraphicsContext();
+  ctx.circle(0, 0, 92).fill({ color: 0x061c2b, alpha: 1 });
+  ctx.circle(0, 0, 92).stroke({ color: 0x77efff, width: 5.2, alpha: 0.9 });
+  ctx.circle(0, 0, 66).fill({ color: 0x008fc1, alpha: 0.46 });
+  ctx.circle(0, 0, 44).fill({ color: 0x32e7ff, alpha: 0.56 });
+  ctx.circle(0, 0, 25).fill({ color: 0xc7ffff, alpha: 0.96 });
+  ctx.circle(0, 0, 10).fill({ color: 0xffffff, alpha: 0.98 });
+
+  for (let index = 0; index < 6; index += 1) {
+    const angle = (Math.PI * 2 * index) / 6;
+    const x = Math.cos(angle) * 109;
+    const y = Math.sin(angle) * 109;
+    const tx = Math.cos(angle) * 45;
+    const ty = Math.sin(angle) * 45;
+    ctx.poly([tx, ty, x - Math.sin(angle) * 12, y + Math.cos(angle) * 12, x + Math.sin(angle) * 12, y - Math.cos(angle) * 12])
+      .fill({ color: index % 2 ? 0x46f2ff : 0x9dffe4, alpha: 0.64 });
+  }
+  return ctx;
+}
+
+function createAdventureGeneratorRingContext(radius = 138, alpha = 0.36, segments = 16) {
+  const ctx = new PIXI.GraphicsContext();
+  const gap = 0.16;
+  for (let index = 0; index < segments; index += 1) {
+    const start = (Math.PI * 2 * index) / segments + gap;
+    const end = (Math.PI * 2 * (index + 1)) / segments - gap;
+    const steps = 10;
+    let lastX = Math.cos(start) * radius;
+    let lastY = Math.sin(start) * radius;
+    for (let step = 1; step <= steps; step += 1) {
+      const t = step / steps;
+      const angle = start + (end - start) * t;
+      const x = Math.cos(angle) * radius;
+      const y = Math.sin(angle) * radius;
+      ctx.moveTo(lastX, lastY).lineTo(x, y).stroke({ color: 0x73eaff, width: 6.2, alpha });
+      lastX = x;
+      lastY = y;
+    }
+  }
+  return ctx;
+}
+
+function createAdventureGeneratorLightContext() {
+  const ctx = new PIXI.GraphicsContext();
+  for (let index = 0; index < 24; index += 1) {
+    const angle = (Math.PI * 2 * index) / 24;
+    const radius = index % 2 ? 238 : 194;
+    const x = Math.cos(angle) * radius;
+    const y = Math.sin(angle) * radius;
+    const color = index % 4 === 0 ? 0xffb25e : 0x73f2ff;
+    ctx.circle(x, y, index % 4 === 0 ? 5.3 : 4.1).fill({ color, alpha: 0.93 });
+    ctx.circle(x, y, 1.9).fill({ color: 0xffffff, alpha: 0.96 });
+  }
+  for (const x of [-92, -46, 0, 46, 92]) {
+    ctx.roundRect(x - 8, -7, 16, 14, 6).fill({ color: 0x79f4ff, alpha: 0.68 });
+  }
+  return ctx;
+}
+
+function createAdventureGeneratorDamageContext(level = 0) {
+  const ctx = new PIXI.GraphicsContext();
+  if (level <= 0) return ctx;
+  const alpha = Math.min(1, 0.26 + level * 0.16);
+  const crack = 0xaebcc5;
+  ctx.poly([-44, -196, -18, -116, -38, -48, -10, 4, -28, 92]).stroke({ color: crack, width: 5, alpha });
+  ctx.poly([36, -162, 14, -88, 42, -18, 18, 72, 44, 152]).stroke({ color: crack, width: 5, alpha });
+  if (level >= 2) {
+    ctx.poly([-202, -34, -130, -6, -76, -28, -16, -2]).stroke({ color: crack, width: 4.5, alpha: alpha * 0.94 });
+    ctx.poly([-150, 118, -82, 142, -26, 124]).stroke({ color: crack, width: 4.5, alpha: alpha * 0.86 });
+  }
+  if (level >= 3) {
+    ctx.poly([120, -112, 186, -68, 210, -10]).stroke({ color: crack, width: 5.2, alpha });
+    ctx.poly([118, 42, 186, 78, 204, 138]).stroke({ color: crack, width: 5.2, alpha });
+  }
+  return ctx;
+}
+
+function createAdventureGeneratorEngineContext() {
+  const ctx = new PIXI.GraphicsContext();
+  ctx.poly([-30, -56, 30, -56, 48, -24, 48, 42, 26, 68, -26, 68, -48, 42, -48, -24])
+    .fill({ color: 0x101820, alpha: 1 });
+  ctx.poly([-30, -56, 30, -56, 48, -24, 48, 42, 26, 68, -26, 68, -48, 42, -48, -24])
+    .stroke({ color: 0x8297a6, width: 3.2, alpha: 0.74 });
+  ctx.roundRect(-28, -38, 56, 54, 10).fill({ color: 0x1e303d, alpha: 0.96 });
+  ctx.roundRect(-20, -28, 40, 26, 8).fill({ color: 0x070e14, alpha: 1 });
+  ctx.circle(0, -15, 17).fill({ color: 0x02070b, alpha: 1 });
+  ctx.circle(0, -15, 12).stroke({ color: 0x5fdcf0, width: 2.4, alpha: 0.76 });
+  ctx.roundRect(-26, 20, 52, 23, 7).fill({ color: 0x0a1219, alpha: 0.98 });
+  ctx.roundRect(-18, 27, 36, 7, 3).fill({ color: 0xffb864, alpha: 0.74 });
+  return ctx;
+}
+
+function createAdventureGeneratorEngineRotorContext() {
+  const ctx = new PIXI.GraphicsContext();
+  ctx.circle(0, 0, 21).fill({ color: 0x07121a, alpha: 1 });
+  ctx.circle(0, 0, 21).stroke({ color: 0x8cecff, width: 2.1, alpha: 0.62 });
+  for (let index = 0; index < 5; index += 1) {
+    const angle = (Math.PI * 2 * index) / 5;
+    const x = Math.cos(angle) * 13;
+    const y = Math.sin(angle) * 13;
+    ctx.poly([0, 0, x + Math.cos(angle + 1.22) * 7, y + Math.sin(angle + 1.22) * 7, x + Math.cos(angle - 0.28) * 5, y + Math.sin(angle - 0.28) * 5])
+      .fill({ color: 0x5e8799, alpha: 0.78 });
+  }
+  ctx.circle(0, 0, 5).fill({ color: 0xc1ffff, alpha: 0.94 });
+  return ctx;
+}
+
+function createAdventureGeneratorEngineExhaustContext() {
+  const ctx = new PIXI.GraphicsContext();
+  ctx.poly([-20, 45, 20, 45, 34, 126, 0, 174, -34, 126]).fill({ color: 0x23dfff, alpha: 0.33 });
+  ctx.poly([-12, 49, 12, 49, 20, 112, 0, 144, -20, 112]).fill({ color: 0xbfffff, alpha: 0.82 });
+  return ctx;
+}
+
+function createAdventureGeneratorEngineVisual(angle, distance) {
+  const root = new PIXI.Container();
+  root.eventMode = "none";
+  root.position.set(Math.cos(angle) * distance, Math.sin(angle) * distance);
+  root.rotation = angle - Math.PI * 0.5;
+  const exhaust = new PIXI.Graphics(createAdventureGeneratorEngineExhaustContext());
+  exhaust.blendMode = "screen";
+  const shell = new PIXI.Graphics(createAdventureGeneratorEngineContext());
+  const rotor = new PIXI.Graphics(createAdventureGeneratorEngineRotorContext());
+  rotor.position.set(0, -15);
+  const light = new PIXI.Graphics();
+  light.circle(0, 26, 16).fill({ color: 0xffcf7e, alpha: 0.26 });
+  light.blendMode = "screen";
+  root.addChild(exhaust, shell, rotor, light);
+  return { root, exhaust, rotor, light, phase: Math.random() * Math.PI * 2 };
+}
+
+function createAdventureGeneratorSmokeVisual() {
+  const smokeContainer = new PIXI.Container();
+  smokeContainer.eventMode = "none";
+  const smoke = [];
+  const anchors = [
+    { x: -116, y: -210 },
+    { x: -42, y: -244 },
+    { x: 42, y: -244 },
+    { x: 116, y: -210 },
+    { x: -198, y: -92 },
+    { x: 198, y: -92 },
+  ];
+  for (let index = 0; index < 20; index += 1) {
+    const radius = 20 + (index % 5) * 6;
+    const node = new PIXI.Graphics(createAdventureWallSmokeParticleContext(radius));
+    node.visible = false;
+    smokeContainer.addChild(node);
+    smoke.push({
+      node,
+      anchor: anchors[index % anchors.length],
+      phase: Math.random() * Math.PI * 2,
+      lift: 108 + (index % 6) * 28,
+      sway: 12 + (index % 4) * 8,
+      delay: index * 0.11,
+    });
+  }
+  return { smokeContainer, smoke };
+}
+
+function createAdventureGeneratorVisual() {
+  const root = new PIXI.Container();
+  root.eventMode = "none";
+  const halo = new PIXI.Graphics();
+  halo.circle(0, 0, 316).fill({ color: 0x1ddcff, alpha: 0.055 });
+  halo.blendMode = "screen";
+  const ringOuter = new PIXI.Graphics(createAdventureGeneratorRingContext(286, 0.23, 20));
+  const ringInner = new PIXI.Graphics(createAdventureGeneratorRingContext(174, 0.32, 12));
+  ringOuter.blendMode = "screen";
+  ringInner.blendMode = "screen";
+  const base = new PIXI.Graphics(createAdventureGeneratorBaseContext());
+  const core = new PIXI.Graphics(createAdventureGeneratorCoreContext());
+  core.blendMode = "screen";
+  const lights = new PIXI.Graphics(createAdventureGeneratorLightContext());
+  lights.blendMode = "screen";
+  const damage = new PIXI.Graphics(createAdventureGeneratorDamageContext(0));
+  const smokePack = createAdventureGeneratorSmokeVisual();
+  const engines = [];
+  const engineLayer = new PIXI.Container();
+  engineLayer.eventMode = "none";
+  for (let index = 0; index < 4; index += 1) {
+    const engine = createAdventureGeneratorEngineVisual(index * Math.PI * 0.5, 255);
+    engineLayer.addChild(engine.root);
+    engines.push(engine);
+  }
+  root.addChild(halo, ringOuter, base, ringInner, engineLayer, damage, smokePack.smokeContainer, core, lights);
+  return {
+    root,
+    halo,
+    ringOuter,
+    ringInner,
+    base,
+    core,
+    lights,
+    damage,
+    engineLayer,
+    engines,
+    smokeContainer: smokePack.smokeContainer,
+    smokeParticles: smokePack.smoke,
+    phase: Math.random() * Math.PI * 2,
+    damageLevel: 0,
+    integrity: 1,
+  };
+}
+
+function syncAdventureGenerator(visual, item, parent) {
+  if (!item) {
+    if (visual?.root) visual.root.visible = false;
+    return visual;
+  }
+  let next = visual;
+  if (!next) {
+    next = createAdventureGeneratorVisual();
+    parent.addChild(next.root);
+  }
+  const maxHp = Math.max(1, Number(item.maxHp || 1000));
+  const hp = Math.max(0, Number(item.hp ?? maxHp));
+  const integrity = clamp(hp / maxHp, 0, 1);
+  const damageLevel = integrity <= 0.12 ? 4 : integrity <= 0.32 ? 3 : integrity <= 0.58 ? 2 : integrity <= 0.82 ? 1 : 0;
+  if (next.damageLevel !== damageLevel) {
+    next.damageLevel = damageLevel;
+    next.damage.context = createAdventureGeneratorDamageContext(damageLevel);
+  }
+  next.integrity = integrity;
+  next.root.position.set(Number(item.x || 0), Number(item.y || 0));
+  next.root.visible = true;
+  next.root.alpha = 1;
+  return next;
+}
+
+function createAdventureDefenseTowerBaseContext(preview = false) {
+  const ctx = new PIXI.GraphicsContext();
+  const hull = preview ? 0x1d6078 : 0x101b23;
+  const armor = preview ? 0x315f74 : 0x263844;
+  const panel = preview ? 0x173f52 : 0x17262f;
+  const edge = preview ? 0xc7ffff : 0xb7c9d5;
+  const cyan = preview ? 0x9effff : 0x65e9f7;
+  const amber = preview ? 0xffe1a7 : 0xffbd70;
+
+  ctx.circle(0, 0, 178).fill({ color: 0x000000, alpha: preview ? 0.12 : 0.30 });
+
+  // Heavy top-down starbase deck.
+  ctx.poly([
+    -112, -102, -52, -132, 52, -132, 112, -102,
+    138, -42, 138, 42, 112, 102, 52, 132,
+    -52, 132, -112, 102, -138, 42, -138, -42,
+  ]).fill({ color: hull, alpha: preview ? 0.78 : 1 });
+  ctx.poly([
+    -112, -102, -52, -132, 52, -132, 112, -102,
+    138, -42, 138, 42, 112, 102, 52, 132,
+    -52, 132, -112, 102, -138, 42, -138, -42,
+  ]).stroke({ color: edge, width: 3.6, alpha: preview ? 0.78 : 0.82 });
+
+  ctx.poly([
+    -84, -78, -36, -104, 36, -104, 84, -78,
+    104, -32, 104, 32, 84, 78, 36, 104,
+    -36, 104, -84, 78, -104, 32, -104, -32,
+  ]).fill({ color: armor, alpha: 0.98 });
+  ctx.poly([
+    -84, -78, -36, -104, 36, -104, 84, -78,
+    104, -32, 104, 32, 84, 78, 36, 104,
+    -36, 104, -84, 78, -104, 32, -104, -32,
+  ]).stroke({ color: 0x6f8691, width: 2.0, alpha: 0.46 });
+
+  // Four service pods make the base read as a genuine turret installation.
+  const drawServicePod = (x, y, vertical = false) => {
+    const width = vertical ? 42 : 70;
+    const height = vertical ? 70 : 42;
+    ctx.roundRect(x - width / 2, y - height / 2, width, height, 12).fill({ color: 0x14232d, alpha: 1 });
+    ctx.roundRect(x - width / 2 + 6, y - height / 2 + 6, width - 12, height - 12, 9).fill({ color: panel, alpha: 0.94 });
+    if (vertical) {
+      for (const offset of [-15, 0, 15]) {
+        ctx.roundRect(x - 11, y + offset - 4, 22, 8, 3).fill({ color: 0x0a1319, alpha: 0.96 });
+      }
+    } else {
+      for (const offset of [-15, 0, 15]) {
+        ctx.roundRect(x + offset - 4, y - 11, 8, 22, 3).fill({ color: 0x0a1319, alpha: 0.96 });
+      }
+    }
+  };
+  drawServicePod(0, -103, true);
+  drawServicePod(0, 103, true);
+  drawServicePod(-105, 0, false);
+  drawServicePod(105, 0, false);
+
+  // Central armored swivel deck.
+  ctx.circle(0, 0, 68).fill({ color: 0x0a1218, alpha: 1 });
+  ctx.circle(0, 0, 68).stroke({ color: 0x86eefa, width: 3.2, alpha: preview ? 0.76 : 0.56 });
+  ctx.circle(0, 0, 52).fill({ color: 0x182933, alpha: 1 });
+  ctx.circle(0, 0, 38).fill({ color: 0x071016, alpha: 1 });
+  ctx.circle(0, 0, 26).stroke({ color: cyan, width: 3.1, alpha: 0.72 });
+
+  // Small defensive lamps around the outer hull.
+  for (let index = 0; index < 12; index += 1) {
+    const angle = (Math.PI * 2 * index) / 12;
+    const radius = 122;
+    const x = Math.cos(angle) * radius;
+    const y = Math.sin(angle) * radius;
+    ctx.circle(x, y, 4.1).fill({ color: index % 2 ? cyan : amber, alpha: 0.84 });
+  }
+
+  return ctx;
+}
+
+function createAdventureDefenseTowerTurretContext(preview = false) {
+  const ctx = new PIXI.GraphicsContext();
+  const housing = preview ? 0x3b788c : 0x29414d;
+  const housingDark = preview ? 0x254f61 : 0x172832;
+  const edge = preview ? 0xd8ffff : 0xc4d8e0;
+  const cyan = preview ? 0xa4ffff : 0x6ceeff;
+
+  // Rotating turret body seen from directly above.
+  ctx.circle(0, 0, 48).fill({ color: 0x0b141a, alpha: 1 });
+  ctx.circle(0, 0, 48).stroke({ color: edge, width: 3.0, alpha: 0.72 });
+  ctx.circle(0, 0, 29).fill({ color: housing, alpha: 0.98 });
+  ctx.circle(0, 0, 16).fill({ color: 0x071016, alpha: 1 });
+  ctx.circle(0, 0, 8).fill({ color: cyan, alpha: 0.95 });
+
+  // Two enormous laser barrels, with a gap between them.
+  for (const y of [-17, 17]) {
+    ctx.roundRect(22, y - 9, 120, 18, 7).fill({ color: housingDark, alpha: 1 });
+    ctx.roundRect(43, y - 5, 116, 10, 4).fill({ color: housing, alpha: 0.98 });
+    ctx.roundRect(130, y - 10, 42, 20, 6).fill({ color: 0x081116, alpha: 1 });
+    ctx.roundRect(144, y - 4, 29, 8, 3).fill({ color: cyan, alpha: preview ? 0.86 : 0.72 });
+  }
+
+  // Side armor shoulders and cable collars.
+  ctx.poly([-38, -38, -3, -47, 21, -28, 21, 28, -3, 47, -38, 38, -58, 18, -58, -18])
+    .fill({ color: housing, alpha: preview ? 0.84 : 1 });
+  ctx.poly([-38, -38, -3, -47, 21, -28, 21, 28, -3, 47, -38, 38, -58, 18, -58, -18])
+    .stroke({ color: edge, width: 2.5, alpha: 0.68 });
+  for (const y of [-24, 0, 24]) {
+    ctx.roundRect(-48, y - 5, 28, 10, 4).fill({ color: 0x0a151b, alpha: 0.92 });
+  }
+
+  return ctx;
+}
+
+function createAdventureDefenseTowerRingContext() {
+  const ctx = new PIXI.GraphicsContext();
+  for (let index = 0; index < 14; index += 1) {
+    const start = (Math.PI * 2 * index) / 14 + 0.075;
+    const end = (Math.PI * 2 * (index + 1)) / 14 - 0.12;
+    const radius = 132;
+    ctx.moveTo(Math.cos(start) * radius, Math.sin(start) * radius)
+      .lineTo(Math.cos(end) * radius, Math.sin(end) * radius)
+      .stroke({ color: index % 2 ? 0x54e8ff : 0xb9fff4, width: 3.3, alpha: 0.36 });
+  }
+  return ctx;
+}
+
+function createAdventureDefenseTowerLaserContext() {
+  const ctx = new PIXI.GraphicsContext();
+  // Brief twin laser flash that becomes bright exactly while the turret fires.
+  for (const y of [-17, 17]) {
+    ctx.roundRect(166, y - 3.3, 118, 6.6, 3.2).fill({ color: 0x37dbff, alpha: 0.52 });
+    ctx.roundRect(168, y - 1.35, 118, 2.7, 1.3).fill({ color: 0xf2ffff, alpha: 0.96 });
+    ctx.circle(170, y, 10).fill({ color: 0x83f4ff, alpha: 0.48 });
+  }
+  return ctx;
+}
+
+function createAdventureDefenseTowerVisual(preview = false) {
+  const root = new PIXI.Container();
+  root.eventMode = "none";
+
+  const halo = new PIXI.Graphics();
+  halo.circle(0, 0, 188).fill({ color: 0x1edfff, alpha: preview ? 0.10 : 0.055 });
+  halo.blendMode = "screen";
+
+  const base = new PIXI.Graphics(createAdventureDefenseTowerBaseContext(preview));
+  const ring = new PIXI.Graphics(createAdventureDefenseTowerRingContext());
+  ring.blendMode = "screen";
+
+  const turret = new PIXI.Container();
+  const turretBody = new PIXI.Graphics(createAdventureDefenseTowerTurretContext(preview));
+  const laser = new PIXI.Graphics(createAdventureDefenseTowerLaserContext());
+  laser.alpha = preview ? 0.24 : 0.045;
+  laser.blendMode = "screen";
+  const muzzle = new PIXI.Graphics();
+  muzzle.circle(173, -17, 18).fill({ color: 0x5aeaff, alpha: 0.08 });
+  muzzle.circle(173, 17, 18).fill({ color: 0x5aeaff, alpha: 0.08 });
+  muzzle.blendMode = "screen";
+  turret.addChild(turretBody, laser, muzzle);
+
+  const lights = new PIXI.Graphics();
+  for (const x of [-74, -46, -16, 16, 46, 74]) {
+    lights.circle(x, -92, 3.3).fill({ color: 0xa8ffff, alpha: 0.82 });
+    lights.circle(x, 92, 2.9).fill({ color: 0xffc879, alpha: 0.62 });
+  }
+  lights.blendMode = "screen";
+
+  root.addChild(halo, base, ring, turret, lights);
+  return {
+    root,
+    halo,
+    base,
+    ring,
+    turret,
+    turretBody,
+    muzzle,
+    laser,
+    lights,
+    preview,
+    phase: Math.random() * Math.PI * 2,
+    targetRotation: 0,
+    recoilUntil: 0,
+    lastSeenAt: 0,
+  };
+}
+
+function createAdventureKraniumTowerBaseContext(preview = false) {
+  const ctx = new PIXI.GraphicsContext();
+  const outer = preview ? 0x512f74 : 0x150d22;
+  const armor = preview ? 0x3b234f : 0x271633;
+  const panel = preview ? 0x573672 : 0x43245e;
+  const edge = preview ? 0xffdfff : 0xd5b4eb;
+  const cyan = preview ? 0x9cfff0 : 0x77eee3;
+  const magenta = preview ? 0xffa0f5 : 0xff86ed;
+
+  ctx.circle(0, 0, 198).fill({ color: 0x000000, alpha: preview ? 0.12 : 0.30 });
+
+  // A dark, multi-bay crystal refinery rather than a flat crystal icon.
+  ctx.poly([
+    -118, -108, -54, -142, 54, -142, 118, -108,
+    146, -46, 146, 46, 118, 108, 54, 142,
+    -54, 142, -118, 108, -146, 46, -146, -46,
+  ]).fill({ color: outer, alpha: preview ? 0.80 : 1 });
+  ctx.poly([
+    -118, -108, -54, -142, 54, -142, 118, -108,
+    146, -46, 146, 46, 118, 108, 54, 142,
+    -54, 142, -118, 108, -146, 46, -146, -46,
+  ]).stroke({ color: edge, width: 3.7, alpha: preview ? 0.78 : 0.78 });
+
+  ctx.poly([
+    -90, -82, -40, -110, 40, -110, 90, -82,
+    112, -32, 112, 32, 90, 82, 40, 110,
+    -40, 110, -90, 82, -112, 32, -112, -32,
+  ]).fill({ color: armor, alpha: 1 });
+  ctx.poly([
+    -90, -82, -40, -110, 40, -110, 90, -82,
+    112, -32, 112, 32, 90, 82, 40, 110,
+    -40, 110, -90, 82, -112, 32, -112, -32,
+  ]).stroke({ color: 0x845fa4, width: 2.0, alpha: 0.48 });
+
+  // Cardinal extraction modules: compressor, condenser, and pipe bays.
+  const drawBay = (x, y, vertical) => {
+    const w = vertical ? 44 : 74;
+    const h = vertical ? 74 : 44;
+    ctx.roundRect(x - w / 2, y - h / 2, w, h, 12).fill({ color: 0x1a1224, alpha: 1 });
+    ctx.roundRect(x - w / 2 + 6, y - h / 2 + 6, w - 12, h - 12, 9).fill({ color: panel, alpha: 0.92 });
+    if (vertical) {
+      for (const offset of [-18, 0, 18]) {
+        ctx.roundRect(x - 12, y + offset - 4, 24, 8, 3).fill({ color: 0x090b12, alpha: 0.96 });
+      }
+    } else {
+      for (const offset of [-18, 0, 18]) {
+        ctx.roundRect(x + offset - 4, y - 12, 8, 24, 3).fill({ color: 0x090b12, alpha: 0.96 });
+      }
+    }
+    ctx.circle(x, y, 5).fill({ color: vertical ? cyan : magenta, alpha: 0.92 });
+  };
+  drawBay(0, -113, true);
+  drawBay(0, 113, true);
+  drawBay(-115, 0, false);
+  drawBay(115, 0, false);
+
+  // Central containment bed and four industrial clamping arms.
+  ctx.circle(0, 0, 73).fill({ color: 0x0b0913, alpha: 1 });
+  ctx.circle(0, 0, 73).stroke({ color: 0xb987e5, width: 3.2, alpha: 0.60 });
+  ctx.circle(0, 0, 52).fill({ color: 0x1b1026, alpha: 1 });
+  ctx.circle(0, 0, 34).fill({ color: 0x080a10, alpha: 1 });
+
+  for (const [x, y, width, height] of [
+    [0, -66, 28, 52], [0, 66, 28, 52], [-66, 0, 52, 28], [66, 0, 52, 28],
+  ]) {
+    ctx.roundRect(x - width / 2, y - height / 2, width, height, 8).fill({ color: 0x2e1a42, alpha: 1 });
+    ctx.roundRect(x - width / 2 + 5, y - height / 2 + 5, width - 10, height - 10, 6).fill({ color: 0x6d4d95, alpha: 0.74 });
+  }
+
+  // Crystal canisters make the purpose readable at a glance.
+  for (const [x, y, color] of [
+    [-98, -68, cyan], [98, -68, magenta], [-98, 68, magenta], [98, 68, cyan],
+  ]) {
+    ctx.roundRect(x - 10, y - 17, 20, 34, 7).fill({ color: 0x1a1025, alpha: 1 });
+    ctx.roundRect(x - 5, y - 11, 10, 22, 4).fill({ color, alpha: 0.70 });
+  }
+
+  return ctx;
+}
+
+function createAdventureKraniumTowerCoilContext() {
+  const ctx = new PIXI.GraphicsContext();
+  for (let index = 0; index < 16; index += 1) {
+    const start = (Math.PI * 2 * index) / 16 + 0.07;
+    const end = (Math.PI * 2 * (index + 1)) / 16 - 0.12;
+    const radius = 140;
+    ctx.moveTo(Math.cos(start) * radius, Math.sin(start) * radius)
+      .lineTo(Math.cos(end) * radius, Math.sin(end) * radius)
+      .stroke({ color: index % 2 ? 0xff8ef2 : 0x84fff0, width: 3.8, alpha: 0.40 });
+  }
+  return ctx;
+}
+
+function createAdventureKraniumTowerOrbitContext(radiusX, radiusY, color, alpha, width) {
+  const ctx = new PIXI.GraphicsContext();
+  const steps = 96;
+  let previousX = null;
+  let previousY = null;
+  for (let index = 0; index <= steps; index += 1) {
+    const angle = (Math.PI * 2 * index) / steps;
+    const x = Math.cos(angle) * radiusX;
+    const y = Math.sin(angle) * radiusY;
+    if (previousX !== null) {
+      ctx.moveTo(previousX, previousY).lineTo(x, y).stroke({ color, width, alpha });
+    }
+    previousX = x;
+    previousY = y;
+  }
+  return ctx;
+}
+
+function createAdventureKraniumTowerPipeContext() {
+  const ctx = new PIXI.GraphicsContext();
+  const pipe = 0x604585;
+  const inner = 0x85f8ef;
+  const paths = [
+    [[0, -102], [0, -78], [-18, -56], [-18, -32]],
+    [[0, 102], [0, 78], [18, 56], [18, 32]],
+    [[-102, 0], [-78, 0], [-56, 18], [-32, 18]],
+    [[102, 0], [78, 0], [56, -18], [32, -18]],
+  ];
+  for (const path of paths) {
+    for (let index = 0; index < path.length - 1; index += 1) {
+      const [x1, y1] = path[index];
+      const [x2, y2] = path[index + 1];
+      ctx.moveTo(x1, y1).lineTo(x2, y2).stroke({ color: pipe, width: 8, alpha: 0.95 });
+      ctx.moveTo(x1, y1).lineTo(x2, y2).stroke({ color: inner, width: 2.2, alpha: 0.60 });
+    }
+  }
+  return ctx;
+}
+
+function createAdventureKraniumCrystalShardContext(color, accent) {
+  const ctx = new PIXI.GraphicsContext();
+  ctx.poly([0, -48, 18, -16, 12, 24, 0, 48, -12, 24, -18, -16]).fill({ color, alpha: 0.94 });
+  ctx.poly([0, -48, 18, -16, 12, 24, 0, 48, -12, 24, -18, -16]).stroke({ color: 0xfff4ff, width: 2.1, alpha: 0.88 });
+  ctx.poly([0, -43, 7, -14, 0, 33, -7, -14]).fill({ color: accent, alpha: 0.34 });
+  return ctx;
+}
+
+function createAdventureKraniumTowerVisual(preview = false) {
+  const root = new PIXI.Container();
+  root.eventMode = "none";
+
+  const halo = new PIXI.Graphics();
+  halo.circle(0, 0, 208).fill({ color: 0xd451ff, alpha: preview ? 0.12 : 0.075 });
+  halo.blendMode = "screen";
+
+  const base = new PIXI.Graphics(createAdventureKraniumTowerBaseContext(preview));
+  const pipes = new PIXI.Graphics(createAdventureKraniumTowerPipeContext());
+  const coil = new PIXI.Graphics(createAdventureKraniumTowerCoilContext());
+  coil.blendMode = "screen";
+
+  const orbitA = new PIXI.Graphics(createAdventureKraniumTowerOrbitContext(108, 29, 0x8affee, 0.68, 3.6));
+  orbitA.blendMode = "screen";
+  const orbitB = new PIXI.Graphics(createAdventureKraniumTowerOrbitContext(132, 48, 0xdc73ff, 0.52, 2.7));
+  orbitB.rotation = -0.52;
+  orbitB.blendMode = "screen";
+
+  const crystal = new PIXI.Container();
+  crystal.eventMode = "none";
+  const chamber = new PIXI.Graphics();
+  chamber.circle(0, 0, 40).fill({ color: 0x5f2a96, alpha: 0.22 });
+  chamber.circle(0, 0, 40).stroke({ color: 0xe5a4ff, width: 2.4, alpha: 0.62 });
+  chamber.blendMode = "screen";
+  crystal.addChild(chamber);
+
+  const shards = [
+    { x: 0, y: -16, r: 0, c: 0xd786ff, a: 0xffffff },
+    { x: 17, y: 9, r: 2.20, c: 0x8dfff0, a: 0xe8ffff },
+    { x: -17, y: 9, r: -2.20, c: 0xb86cff, a: 0xffffff },
+  ];
+  for (const shardData of shards) {
+    const shard = new PIXI.Graphics(createAdventureKraniumCrystalShardContext(shardData.c, shardData.a));
+    shard.position.set(shardData.x, shardData.y);
+    shard.rotation = shardData.r;
+    shard.blendMode = "screen";
+    crystal.addChild(shard);
+  }
+
+  const lights = new PIXI.Graphics();
+  for (let index = 0; index < 18; index += 1) {
+    const angle = (Math.PI * 2 * index) / 18;
+    const x = Math.cos(angle) * 143;
+    const y = Math.sin(angle) * 143;
+    lights.circle(x, y, 3.5).fill({ color: index % 2 ? 0x8bfff0 : 0xff8cf1, alpha: 0.86 });
+  }
+  lights.blendMode = "screen";
+
+  root.addChild(halo, base, pipes, coil, orbitA, orbitB, crystal, lights);
+  return {
+    root,
+    halo,
+    base,
+    pipes,
+    coil,
+    orbitA,
+    orbitB,
+    crystal,
+    lights,
+    preview,
+    phase: Math.random() * Math.PI * 2,
+    lastSeenAt: 0,
+  };
+}
+
+function syncAdventureDefenseTowers(map, items, parent, bounds, now, maxItems = 160) {
+  const active = map.__activeScratch || (map.__activeScratch = new Set());
+  active.clear();
+  let rendered = 0;
+  for (const item of items || []) {
+    if (!item || rendered >= maxItems || !isVisibleInBounds(item, bounds, 180)) continue;
+    const key = String(item.id || `${Math.round(item.x)}:${Math.round(item.y)}`);
+    active.add(key);
+    let visual = map.get(key);
+    if (!visual) {
+      visual = createAdventureDefenseTowerVisual(false);
+      parent.addChild(visual.root);
+      map.set(key, visual);
+    }
+    visual.root.position.set(Number(item.x || 0), Number(item.y || 0));
+    visual.targetRotation = Number(item.rotation || 0);
+    visual.recoilUntil = Number(item.recoilUntil || 0);
+    visual.root.visible = true;
+    visual.lastSeenAt = now;
+    rendered += 1;
+  }
+  for (const [key, visual] of map) {
+    if (!active.has(key)) visual.root.visible = false;
+    if (now - Number(visual.lastSeenAt || 0) > ENTITY_STALE_MS * 12) {
+      visual.root.destroy({ children: true });
+      map.delete(key);
+    }
+  }
+}
+
+function syncAdventureKraniumTowers(map, items, parent, bounds, now, maxItems = 120) {
+  const active = map.__activeScratch || (map.__activeScratch = new Set());
+  active.clear();
+  let rendered = 0;
+  for (const item of items || []) {
+    if (!item || rendered >= maxItems || !isVisibleInBounds(item, bounds, 190)) continue;
+    const key = String(item.id || `${Math.round(item.x)}:${Math.round(item.y)}`);
+    active.add(key);
+    let visual = map.get(key);
+    if (!visual) {
+      visual = createAdventureKraniumTowerVisual(false);
+      parent.addChild(visual.root);
+      map.set(key, visual);
+    }
+    visual.root.position.set(Number(item.x || 0), Number(item.y || 0));
+    visual.root.visible = true;
+    visual.lastSeenAt = now;
+    rendered += 1;
+  }
+  for (const [key, visual] of map) {
+    if (!active.has(key)) visual.root.visible = false;
+    if (now - Number(visual.lastSeenAt || 0) > ENTITY_STALE_MS * 12) {
+      visual.root.destroy({ children: true });
+      map.delete(key);
+    }
+  }
+}
+
+function syncAdventureTowerPreview(visual, item, parent) {
+  if (!item) {
+    if (visual?.root) visual.root.visible = false;
+    return visual;
+  }
+  const type = item.type === "kranium" ? "kranium" : "defense";
+  const valid = item.valid !== false;
+  const key = `${type}:${valid ? "valid" : "invalid"}`;
+  let next = visual;
+  if (!next || next.key !== key) {
+    if (next?.root) next.root.destroy({ children: true });
+    next = type === "kranium" ? createAdventureKraniumTowerVisual(true) : createAdventureDefenseTowerVisual(true);
+    next.key = key;
+    const border = new PIXI.Graphics();
+    const r = Number(item.radius || (type === "kranium" ? 132 : 122));
+    border.circle(0, 0, r + 16).stroke({ color: valid ? 0x65ffd4 : 0xff716b, width: 3.2, alpha: 0.94 });
+    border.circle(0, 0, r + 7).stroke({ color: valid ? 0xc4fff0 : 0xffc0b3, width: 1.3, alpha: 0.66 });
+    border.blendMode = "screen";
+    next.root.addChild(border);
+    next.placementBorder = border;
+    parent.addChild(next.root);
+  }
+  next.root.position.set(Number(item.x || 0), Number(item.y || 0));
+  next.root.alpha = valid ? 0.78 : 0.5;
+  next.root.visible = true;
+  return next;
+}
+
+function createAdventureWallHazardVisual() {
+  const smokeContainer = new PIXI.Container();
+  smokeContainer.eventMode = "none";
+  const fireContainer = new PIXI.Container();
+  fireContainer.eventMode = "none";
+  fireContainer.blendMode = "normal";
+
+  const smoke = [];
+  const smokeAnchors = [
+    { x: -162, y: -34 },
+    { x: -136, y: -18 },
+    { x: -108, y: -30 },
+    { x: -34, y: -30 },
+    { x: -6, y: -14 },
+    { x: 28, y: -16 },
+    { x: 108, y: -28 },
+    { x: 138, y: -18 },
+    { x: 164, y: -32 },
+  ];
+  for (let index = 0; index < 22; index += 1) {
+    const radius = 14 + (index % 5) * 5;
+    const node = new PIXI.Graphics(createAdventureWallSmokeParticleContext(radius));
+    node.visible = false;
+    smokeContainer.addChild(node);
+    smoke.push({
+      node,
+      anchor: smokeAnchors[index % smokeAnchors.length],
+      phase: Math.random() * Math.PI * 2,
+      lift: 72 + (index % 6) * 22,
+      sway: 12 + (index % 4) * 6,
+      delay: index * 0.11,
+    });
+  }
+
+  const fire = [];
+  const fireAnchors = [
+    { x: -146, y: -18 },
+    { x: -122, y: -12 },
+    { x: -20, y: -10 },
+    { x: 8, y: -8 },
+    { x: 126, y: -12 },
+    { x: 150, y: -18 },
+  ];
+  for (let index = 0; index < 10; index += 1) {
+    const size = 19 + (index % 3) * 6;
+    const node = new PIXI.Graphics(createAdventureWallFireParticleContext(size, index % 4));
+    node.visible = false;
+    fireContainer.addChild(node);
+    fire.push({
+      node,
+      anchor: fireAnchors[index % fireAnchors.length],
+      phase: Math.random() * Math.PI * 2,
+      sway: 3.5 + (index % 3) * 2,
+      lift: 5 + (index % 3) * 3,
+      baseScale: 0.88 + (index % 3) * 0.12,
+    });
+  }
+
+  return { smokeContainer, fireContainer, smoke, fire };
+}
+
+function createAdventureWallVisual(mode = "placed", snapped = false) {
+  const root = new PIXI.Container();
+  root.eventMode = "none";
+  const shell = new PIXI.Graphics(createAdventureWallShellContext(mode, snapped));
+  const damage = new PIXI.Graphics(createAdventureWallDamageContext(0));
+  const lights = new PIXI.Graphics(createAdventureWallLightContext(mode, snapped));
+  const sweep = new PIXI.Graphics(createAdventureWallSweepContext(mode, snapped));
+  const hazards = createAdventureWallHazardVisual();
+  damage.alpha = 0;
+  lights.blendMode = "screen";
+  sweep.blendMode = "screen";
+  root.addChild(shell);
+  root.addChild(damage);
+  root.addChild(hazards.smokeContainer);
+  root.addChild(hazards.fireContainer);
+  root.addChild(lights);
+  root.addChild(sweep);
+  return {
+    root,
+    shell,
+    damage,
+    lights,
+    sweep,
+    smokeContainer: hazards.smokeContainer,
+    fireContainer: hazards.fireContainer,
+    smokeParticles: hazards.smoke,
+    fireParticles: hazards.fire,
+    contextKey: `${mode}:${snapped ? 1 : 0}`,
+    damageLevel: 0,
+    integrity: 1,
+    phase: Math.random() * Math.PI * 2,
+    mode,
+    snapped,
+    lastSeenAt: 0,
+  };
+}
+
+function updateAdventureWallVisualContext(visual, mode = "placed", snapped = false) {
+  const nextKey = `${mode}:${snapped ? 1 : 0}`;
+  if (!visual || visual.contextKey === nextKey) return;
+  visual.contextKey = nextKey;
+  visual.mode = mode;
+  visual.snapped = snapped;
+  visual.shell.context = createAdventureWallShellContext(mode, snapped);
+  visual.lights.context = createAdventureWallLightContext(mode, snapped);
+  visual.sweep.context = createAdventureWallSweepContext(mode, snapped);
+}
+
+const ADVENTURE_GATE_BASE_LENGTH = 420;
+const ADVENTURE_GATE_VISUAL_DEPTH_SCALE = 1.0;
+
+// This is intentionally a distinct Starbase gateway, not another long wall
+// segment. The pylon-to-pylon silhouette is compact, heavy and easy to read
+// from a top-down camera while still matching the existing wall endpoints.
+function createAdventureGateShellContext(mode = "placed", snapped = false) {
+  const preview = mode === "preview";
+  const ctx = new PIXI.GraphicsContext();
+  const outer = preview ? (snapped ? 0x153e3d : 0x193448) : 0x111820;
+  const armor = preview ? (snapped ? 0x2f7770 : 0x315d73) : 0x3f4b58;
+  const armorLight = preview ? (snapped ? 0x82f6de : 0x9bd5eb) : 0x8595a3;
+  const edge = preview ? (snapped ? 0xdbfff3 : 0xdbedf8) : 0xb5c4ce;
+  const inset = preview ? 0x0a2028 : 0x090f15;
+  const dark = 0x05090e;
+  const warm = preview ? 0x9ffde3 : 0xffba76;
+
+  // Broad shadow so the gate reads as a building, not as a transparent tube.
+  ctx.poly([
+    -213, -66,
+    -188, -92,
+    188, -92,
+    213, -66,
+    213, 66,
+    188, 92,
+    -188, 92,
+    -213, 66,
+  ]).fill({ color: 0x000000, alpha: preview ? 0.16 : 0.34 });
+
+  // Full armored spine that joins perfectly with wall endpoints.
+  ctx.poly([
+    -208, -52,
+    -178, -78,
+    178, -78,
+    208, -52,
+    208, 52,
+    178, 78,
+    -178, 78,
+    -208, 52,
+  ]).fill({ color: outer, alpha: preview ? 0.68 : 1 });
+  ctx.poly([
+    -208, -52,
+    -178, -78,
+    178, -78,
+    208, -52,
+    208, 52,
+    178, 78,
+    -178, 78,
+    -208, 52,
+  ]).stroke({ color: edge, width: 3.8, alpha: preview ? 0.74 : 0.82 });
+
+  // Reinforced top/bottom defensive rails.
+  ctx.poly([-174, -70, 174, -70, 193, -51, 150, -48, -150, -48, -193, -51])
+    .fill({ color: armor, alpha: preview ? 0.52 : 0.88 });
+  ctx.poly([-150, 48, 150, 48, 193, 51, 174, 70, -174, 70, -193, 51])
+    .fill({ color: 0x242e38, alpha: preview ? 0.52 : 0.94 });
+  ctx.poly([-164, -64, 164, -64]).stroke({ color: armorLight, width: 1.3, alpha: preview ? 0.28 : 0.22 });
+  ctx.poly([-164, 62, 164, 62]).stroke({ color: 0x0a0f14, width: 2.2, alpha: 0.62 });
+
+  // Large central blast-door frame / aperture.
+  ctx.poly([
+    -92, -61,
+    92, -61,
+    116, -38,
+    116, 38,
+    92, 61,
+    -92, 61,
+    -116, 38,
+    -116, -38,
+  ]).fill({ color: dark, alpha: preview ? 0.64 : 1 });
+  ctx.poly([
+    -92, -61,
+    92, -61,
+    116, -38,
+    116, 38,
+    92, 61,
+    -92, 61,
+    -116, 38,
+    -116, -38,
+  ]).stroke({ color: edge, width: 3.4, alpha: preview ? 0.76 : 0.74 });
+  ctx.poly([-82, -48, 82, -48, 100, -30, 100, 30, 82, 48, -82, 48, -100, 30, -100, -30])
+    .fill({ color: inset, alpha: preview ? 0.62 : 0.98 });
+  ctx.poly([-82, -48, 82, -48, 100, -30, 100, 30, 82, 48, -82, 48, -100, 30, -100, -30])
+    .stroke({ color: armorLight, width: 1.5, alpha: preview ? 0.30 : 0.24 });
+
+  // Side towers: hexagonal bastions with recessed turret wells.
+  const drawBastion = (x) => {
+    ctx.poly([
+      x - 29, -60,
+      x + 25, -60,
+      x + 48, -35,
+      x + 48, 35,
+      x + 25, 60,
+      x - 29, 60,
+      x - 50, 35,
+      x - 50, -35,
+    ]).fill({ color: 0x1d2731, alpha: preview ? 0.72 : 1 });
+    ctx.poly([
+      x - 29, -60,
+      x + 25, -60,
+      x + 48, -35,
+      x + 48, 35,
+      x + 25, 60,
+      x - 29, 60,
+      x - 50, 35,
+      x - 50, -35,
+    ]).stroke({ color: edge, width: 2.6, alpha: preview ? 0.60 : 0.72 });
+    ctx.poly([
+      x - 24, -43,
+      x + 19, -43,
+      x + 34, -25,
+      x + 34, 25,
+      x + 19, 43,
+      x - 24, 43,
+      x - 35, 25,
+      x - 35, -25,
+    ]).fill({ color: armor, alpha: preview ? 0.64 : 0.94 });
+    ctx.circle(x - 2, 0, 18).fill({ color: 0x0b1015, alpha: 1 });
+    ctx.circle(x - 2, 0, 11).stroke({ color: armorLight, width: 2.1, alpha: preview ? 0.52 : 0.50 });
+    ctx.circle(x - 2, 0, 5).fill({ color: warm, alpha: preview ? 0.86 : 0.64 });
+    ctx.roundRect(x - 18, -30, 32, 9, 4).fill({ color: 0x0d141a, alpha: 0.88 });
+    ctx.roundRect(x - 18, 21, 32, 9, 4).fill({ color: 0x0d141a, alpha: 0.88 });
+  };
+  drawBastion(-160);
+  drawBastion(160);
+
+  // Mechanical ribs around the door frame — subtle, but gives it station detail.
+  for (const x of [-126, -112, -72, -58, 58, 72, 112, 126]) {
+    ctx.roundRect(x - 4, -54, 8, 108, 3).fill({ color: 0x0b1117, alpha: preview ? 0.36 : 0.62 });
+  }
+
+  return ctx;
+}
+
+function createAdventureGateDoorContext(side = "left", mode = "placed") {
+  const preview = mode === "preview";
+  const ctx = new PIXI.GraphicsContext();
+  const outer = preview ? 0x245a6a : 0x37434f;
+  const plate = preview ? 0x183e4c : 0x232e38;
+  const edge = preview ? 0xb6efff : 0x9eafbb;
+  const accent = preview ? 0x92f8ff : 0x8bdce2;
+  const sign = side === "left" ? 1 : -1;
+
+  // Each half is a heavy segmented blast door. At rest, both meet in the centre;
+  // on approach they slide sideways into the outer housings.
+  ctx.poly([
+    -54, -43,
+    42, -43,
+    56, -28,
+    56, 28,
+    42, 43,
+    -54, 43,
+    -66, 28,
+    -66, -28,
+  ]).fill({ color: outer, alpha: preview ? 0.72 : 1 });
+  ctx.poly([
+    -54, -43,
+    42, -43,
+    56, -28,
+    56, 28,
+    42, 43,
+    -54, 43,
+    -66, 28,
+    -66, -28,
+  ]).stroke({ color: edge, width: 2.1, alpha: preview ? 0.70 : 0.64 });
+  ctx.roundRect(-52, -32, 94, 64, 10).fill({ color: plate, alpha: preview ? 0.74 : 0.98 });
+
+  for (const y of [-18, 0, 18]) {
+    ctx.roundRect(-42, y - 5, 70, 10, 4).fill({ color: 0x11191f, alpha: 0.9 });
+    ctx.roundRect(-38, y - 2.5, 61, 5, 2.5).fill({ color: accent, alpha: preview ? 0.34 : 0.18 });
+  }
+
+  // Pointed centre seam which makes two halves clearly readable.
+  ctx.poly([sign * 53, -22, sign * 69, 0, sign * 53, 22, sign * 40, 0])
+    .fill({ color: accent, alpha: preview ? 0.86 : 0.54 });
+  return ctx;
+}
+
+function createAdventureGateLightContext(mode = "placed", snapped = false) {
+  const preview = mode === "preview";
+  const ctx = new PIXI.GraphicsContext();
+  const cyan = preview ? (snapped ? 0x91ffe4 : 0xa2eaff) : 0x55dce6;
+  const amber = preview ? 0xe8fff8 : 0xffb26b;
+
+  // Running lights on the rails and bastions.
+  for (const x of [-188, -172, -144, -128, -94, -70, 70, 94, 128, 144, 172, 188]) {
+    ctx.circle(x, -54, 3.2).fill({ color: cyan, alpha: preview ? 0.78 : 0.72 });
+    ctx.circle(x, 54, 2.8).fill({ color: cyan, alpha: preview ? 0.54 : 0.46 });
+  }
+  for (const x of [-162, 162]) {
+    ctx.circle(x - 2, 0, 4.8).fill({ color: amber, alpha: preview ? 0.84 : 0.76 });
+    ctx.circle(x - 2, 0, 11).stroke({ color: cyan, width: 1.1, alpha: preview ? 0.36 : 0.24 });
+  }
+  ctx.roundRect(-82, -4, 164, 8, 4).fill({ color: cyan, alpha: preview ? 0.26 : 0.20 });
+  return ctx;
+}
+
+function createAdventureGateBeamContext(mode = "placed") {
+  const preview = mode === "preview";
+  const ctx = new PIXI.GraphicsContext();
+  const field = preview ? 0x83f7ff : 0x41dbe5;
+  ctx.poly([-82, -45, 82, -45, 96, -29, 96, 29, 82, 45, -82, 45, -96, 29, -96, -29])
+    .fill({ color: field, alpha: preview ? 0.18 : 0.12 });
+  ctx.poly([-73, -35, 73, -35, 86, -23, 86, 23, 73, 35, -73, 35, -86, 23, -86, -23])
+    .stroke({ color: 0xd6ffff, width: 1.3, alpha: preview ? 0.34 : 0.20 });
+  for (const y of [-22, -7, 8, 23]) {
+    ctx.poly([-70, y, 70, y]).stroke({ color: field, width: 1.1, alpha: preview ? 0.16 : 0.11 });
+  }
+  return ctx;
+}
+
+function createAdventureGateVisual(mode = "placed", snapped = false) {
+  const root = new PIXI.Container();
+  root.eventMode = "none";
+  const shell = new PIXI.Graphics(createAdventureGateShellContext(mode, snapped));
+  const beam = new PIXI.Graphics(createAdventureGateBeamContext(mode));
+  const leftDoor = new PIXI.Graphics(createAdventureGateDoorContext("left", mode));
+  const rightDoor = new PIXI.Graphics(createAdventureGateDoorContext("right", mode));
+  const lights = new PIXI.Graphics(createAdventureGateLightContext(mode, snapped));
+
+  beam.blendMode = "screen";
+  lights.blendMode = "screen";
+  root.addChild(shell, beam, leftDoor, rightDoor, lights);
+
+  return {
+    root,
+    shell,
+    beam,
+    leftDoor,
+    rightDoor,
+    lights,
+    mode,
+    snapped,
+    phase: staticPhaseFromKey(`adventure-gate:${Math.random().toString(36).slice(2, 8)}`),
+    currentOpen: 0,
+    targetOpen: 0,
+    lastSeenAt: 0,
+  };
+}
+
+function updateAdventureGateVisualContext(visual, mode, snapped) {
+  if (!visual || (visual.mode === mode && visual.snapped === snapped)) return;
+  visual.mode = mode;
+  visual.snapped = snapped;
+  visual.shell.context = createAdventureGateShellContext(mode, snapped);
+  visual.beam.context = createAdventureGateBeamContext(mode);
+  visual.leftDoor.context = createAdventureGateDoorContext("left", mode);
+  visual.rightDoor.context = createAdventureGateDoorContext("right", mode);
+  visual.lights.context = createAdventureGateLightContext(mode, snapped);
+}
+
+function syncAdventureGates(map, items, parent, bounds, now, maxItems = 120) {
+  const active = map.__activeScratch || (map.__activeScratch = new Set());
+  active.clear();
+  let rendered = 0;
+
+  for (const item of items || []) {
+    if (!item || rendered >= maxItems || !isVisibleInBounds(item, bounds, Number(item.length || ADVENTURE_GATE_BASE_LENGTH) * 0.72)) continue;
+    const key = String(item.id || `${Math.round(item.x)}:${Math.round(item.y)}`);
+    active.add(key);
+    let visual = map.get(key);
+
+    if (!visual) {
+      visual = createAdventureGateVisual("placed", false);
+      parent.addChild(visual.root);
+      map.set(key, visual);
+    } else {
+      updateAdventureGateVisualContext(visual, "placed", false);
+    }
+
+    const scale = Math.max(0.32, Number(item.length || ADVENTURE_GATE_BASE_LENGTH) / ADVENTURE_GATE_BASE_LENGTH);
+    visual.root.position.set(Number(item.x || 0), Number(item.y || 0));
+    visual.root.rotation = Number(item.rotation || 0);
+    visual.root.scale.set(scale, scale * ADVENTURE_GATE_VISUAL_DEPTH_SCALE);
+    visual.root.alpha = 1;
+    visual.root.visible = true;
+    visual.targetOpen = clamp(Number(item.openAmount || 0), 0, 1);
+    visual.lastSeenAt = now;
+    rendered += 1;
+  }
+
+  for (const [key, visual] of map) {
+    if (!active.has(key)) visual.root.visible = false;
+    if (now - Number(visual.lastSeenAt || 0) > ENTITY_STALE_MS * 12) {
+      visual.root.destroy({ children: true });
+      map.delete(key);
+    }
+  }
+}
+
+function syncAdventureGatePreview(visual, item, parent) {
+  if (!item) {
+    if (visual?.root) visual.root.visible = false;
+    return visual;
+  }
+
+  const snapped = Boolean(item.snapped);
+  let next = visual;
+  if (!next) {
+    next = createAdventureGateVisual("preview", snapped);
+    parent.addChild(next.root);
+  } else {
+    updateAdventureGateVisualContext(next, "preview", snapped);
+  }
+
+  const scale = Math.max(0.32, Number(item.length || ADVENTURE_GATE_BASE_LENGTH) / ADVENTURE_GATE_BASE_LENGTH);
+  next.root.position.set(Number(item.x || 0), Number(item.y || 0));
+  next.root.rotation = Number(item.rotation || 0);
+  next.root.scale.set(scale, scale * ADVENTURE_GATE_VISUAL_DEPTH_SCALE);
+  next.root.alpha = snapped ? 0.96 : 0.7;
+  next.root.visible = true;
+  next.targetOpen = 0;
+  return next;
+}
+
+function syncAdventureWalls(map, items, parent, bounds, now, maxItems = 160) {
+  const active = map.__activeScratch || (map.__activeScratch = new Set());
+  active.clear();
+  let rendered = 0;
+
+  for (const item of items || []) {
+    if (!item || rendered >= maxItems || !isVisibleInBounds(item, bounds, Number(item.length || ADVENTURE_WALL_BASE_LENGTH) * 0.65)) continue;
+    const key = String(item.id || `${Math.round(item.x)}:${Math.round(item.y)}`);
+    active.add(key);
+    let visual = map.get(key);
+
+    if (!visual) {
+      visual = createAdventureWallVisual("placed", false);
+      parent.addChild(visual.root);
+      map.set(key, visual);
+    } else {
+      updateAdventureWallVisualContext(visual, "placed", false);
+    }
+
+    const scale = Math.max(0.22, Number(item.length || ADVENTURE_WALL_BASE_LENGTH) / ADVENTURE_WALL_BASE_LENGTH);
+    const maxHp = Math.max(1, Number(item.maxHp || 100));
+    const hp = Math.max(0, Number(item.hp ?? maxHp));
+    const integrity = clamp(hp / maxHp, 0, 1);
+    const damageLevel = integrity <= 0.15 ? 4 : integrity <= 0.35 ? 3 : integrity <= 0.6 ? 2 : integrity <= 0.82 ? 1 : 0;
+    if (visual.damageLevel !== damageLevel) {
+      visual.damageLevel = damageLevel;
+      visual.damage.context = createAdventureWallDamageContext(damageLevel);
+    }
+    visual.integrity = integrity;
+    // Large missing-panel geometry must stay fully visible; only the first
+    // wear stage is intentionally softer.
+    visual.damage.alpha = damageLevel <= 0 ? 0 : damageLevel === 1 ? 0.78 : 1;
+    visual.root.position.set(Number(item.x || 0), Number(item.y || 0));
+    visual.root.rotation = Number(item.rotation || 0);
+    visual.root.scale.set(scale, scale * ADVENTURE_WALL_VISUAL_DEPTH_SCALE);
+    visual.root.alpha = 1;
+    visual.root.visible = true;
+    visual.lastSeenAt = now;
+    rendered += 1;
+  }
+
+  for (const [key, visual] of map) {
+    if (!active.has(key)) visual.root.visible = false;
+    if (now - Number(visual.lastSeenAt || 0) > ENTITY_STALE_MS * 12) {
+      visual.root.destroy({ children: true });
+      map.delete(key);
+    }
+  }
+}
+
+function syncAdventureWallPreview(visual, item, parent) {
+  if (!item) {
+    if (visual?.root) visual.root.visible = false;
+    return visual;
+  }
+
+  const snapped = Boolean(item.snapped);
+  let next = visual;
+  if (!next) {
+    next = createAdventureWallVisual("preview", snapped);
+    parent.addChild(next.root);
+  } else {
+    updateAdventureWallVisualContext(next, "preview", snapped);
+  }
+
+  const scale = Math.max(0.22, Number(item.length || ADVENTURE_WALL_BASE_LENGTH) / ADVENTURE_WALL_BASE_LENGTH);
+  next.root.position.set(Number(item.x || 0), Number(item.y || 0));
+  next.root.rotation = Number(item.rotation || 0);
+  next.root.scale.set(scale, scale * ADVENTURE_WALL_VISUAL_DEPTH_SCALE);
+  next.root.alpha = snapped ? 0.92 : 0.62;
+  next.root.visible = true;
+  return next;
+}
+
+function createAdventureDemolitionContext(removable = false) {
+  const ctx = new PIXI.GraphicsContext();
+  const border = removable ? 0x5fffc4 : 0xff705f;
+  const glow = removable ? 0x8cffda : 0xffae8f;
+  const fill = removable ? 0x23b580 : 0x8f201d;
+
+  ctx.roundRect(-246, -82, 492, 164, 19).fill({ color: fill, alpha: 0.10 });
+  ctx.roundRect(-246, -82, 492, 164, 19).stroke({ color: border, width: 3.2, alpha: 0.95 });
+  ctx.roundRect(-230, -66, 460, 132, 14).stroke({ color: glow, width: 1.25, alpha: 0.56 });
+
+  for (const x of [-220, 220]) {
+    ctx.moveTo(x, -52).lineTo(x, 52).stroke({ color: border, width: 4.5, alpha: 0.9 });
+    ctx.moveTo(x - 14, -66).lineTo(x + 14, -66).stroke({ color: glow, width: 2.2, alpha: 0.9 });
+    ctx.moveTo(x - 14, 66).lineTo(x + 14, 66).stroke({ color: glow, width: 2.2, alpha: 0.9 });
+  }
+
+  if (removable) {
+    ctx.poly([-22, -22, 22, -22, 22, 22, -22, 22]).stroke({ color: glow, width: 2.2, alpha: 0.86 });
+    ctx.moveTo(-10, 0).lineTo(-2, 9).lineTo(13, -11).stroke({ color: glow, width: 4.0, alpha: 0.94 });
+  } else {
+    ctx.circle(0, 0, 28).stroke({ color: glow, width: 2.6, alpha: 0.92 });
+    ctx.moveTo(-14, -14).lineTo(14, 14).stroke({ color: glow, width: 3.8, alpha: 0.92 });
+    ctx.moveTo(14, -14).lineTo(-14, 14).stroke({ color: glow, width: 3.8, alpha: 0.92 });
+  }
+
+  return ctx;
+}
+
+function syncAdventureDemolitionTarget(visual, target, parent) {
+  if (!target) {
+    if (visual?.root) visual.root.visible = false;
+    return visual;
+  }
+
+  const removable = Boolean(target.removable);
+  const contextKey = `${target.type || 'wall'}:${removable ? 1 : 0}`;
+  let next = visual;
+  if (!next) {
+    const root = new PIXI.Graphics(createAdventureDemolitionContext(removable));
+    root.eventMode = 'none';
+    root.blendMode = 'screen';
+    next = {
+      root,
+      contextKey,
+      removable,
+      phase: staticPhaseFromKey(`adventure-demolish:${String(target.id || '')}`),
+    };
+    parent.addChild(root);
+  } else if (next.contextKey !== contextKey) {
+    next.contextKey = contextKey;
+    next.removable = removable;
+    next.root.context = createAdventureDemolitionContext(removable);
+  }
+
+  const baseLength = target.type === 'gate'
+    ? 420
+    : target.type === 'defense'
+      ? 232
+      : target.type === 'kranium'
+        ? 288
+        : 480;
+  const baseDepth = target.type === 'gate'
+    ? 136
+    : target.type === 'defense'
+      ? 232
+      : target.type === 'kranium'
+        ? 288
+        : 116;
+  const scaleX = Math.max(0.34, Number(target.length || baseLength) / 480);
+  const scaleY = Math.max(0.38, Number(target.depth || baseDepth) / 116);
+  next.root.position.set(Number(target.x || 0), Number(target.y || 0));
+  next.root.rotation = Number(target.rotation || 0);
+  next.root.scale.set(scaleX, scaleY);
+  next.root.alpha = 0.92;
+  next.root.visible = true;
+  return next;
+}
+
+function syncAdventureWallShieldHits(map, items, parent, bounds, now, maxItems = 28) {
+  const active = map.__activeScratch || (map.__activeScratch = new Set());
+  active.clear();
+  let rendered = 0;
+
+  for (const item of items || []) {
+    if (!item || rendered >= maxItems || !isVisibleInBounds(item, bounds, 120)) continue;
+    const createdAt = Number(item.createdAt || now);
+    const ttl = Math.max(1, Number(item.ttl || 620));
+    const age = Math.max(0, now - createdAt);
+    if (age >= ttl) continue;
+
+    const key = String(item.id || `${Math.round(item.x || 0)}:${Math.round(item.y || 0)}:${createdAt}`);
+    active.add(key);
+    let visual = map.get(key);
+
+    if (!visual) {
+      const root = new PIXI.Graphics(createAdventureWallShieldContext());
+      root.eventMode = "none";
+      root.blendMode = "screen";
+      visual = { root, lastSeenAt: now };
+      parent.addChild(root);
+      map.set(key, visual);
+    }
+
+    const progress = clamp(age / ttl, 0, 1);
+    const normalX = Number(item.normalX || 0);
+    const normalY = Number(item.normalY || 0);
+    const source = item.source === "projectile" ? "projectile" : "collision";
+    const travel = source === "projectile" ? 7 + progress * 15 : 4 + progress * 9;
+    const contactX = Number(item.x || 0) + normalX * travel;
+    const contactY = Number(item.y || 0) + normalY * travel;
+
+    visual.root.position.set(contactX, contactY);
+    visual.root.rotation = Math.atan2(normalY, normalX) + Math.PI * 0.5;
+    visual.root.scale.set((source === "projectile" ? 0.68 : 0.42) + progress * (source === "projectile" ? 1.58 : 1.22));
+    visual.root.alpha = (1 - progress) * (source === "projectile" ? 1.12 : 0.95);
+    visual.root.visible = true;
+    visual.lastSeenAt = now;
+    rendered += 1;
+  }
+
+  for (const [key, visual] of map) {
+    if (!active.has(key)) visual.root.visible = false;
+    if (now - Number(visual.lastSeenAt || 0) > ENTITY_STALE_MS * 4) {
+      visual.root.destroy();
+      map.delete(key);
+    }
+  }
+}
+
+function createAdventureBoltContext(team = "player") {
+  const bot = team === "bot";
+  const tower = team === "tower";
+  const ctx = new PIXI.GraphicsContext();
+
+  if (tower) {
+    // The defense tower fires a bright, narrow twin-laser-style pulse.
+    ctx.roundRect(-56, -5.4, 94, 10.8, 5.4).fill({ color: 0x20ccff, alpha: 0.34 });
+    ctx.roundRect(-48, -2.2, 96, 4.4, 2.2).fill({ color: 0xe9ffff, alpha: 0.98 });
+    ctx.circle(42, 0, 8).fill({ color: 0x7bf4ff, alpha: 0.75 });
+    ctx.roundRect(-76, -1.3, 36, 2.6, 1.3).fill({ color: 0x83f6ff, alpha: 0.48 });
+    return ctx;
+  }
+
+  const core = bot ? 0xff8c5c : 0x78efff;
+  const edge = bot ? 0xffe1b3 : 0xeaffff;
+  const aura = bot ? 0xff4d5f : 0x00cfff;
+  ctx.poly([-42, 0, -17, -12, 28, 0, -17, 12]).fill({ color: aura, alpha: 0.12 });
+  ctx.poly([-30, 0, -11, -7.5, 24, 0, -11, 7.5]).fill({ color: core, alpha: 0.98 });
+  ctx.poly([-30, 0, -11, -7.5, 24, 0, -11, 7.5]).stroke({ color: edge, width: 1.6, alpha: 0.9 });
+  ctx.circle(-15, 0, 5.5).fill({ color: edge, alpha: 0.88 });
+  ctx.poly([-58, 0, -27, -4, -27, 4]).fill({ color: core, alpha: 0.38 });
+  return ctx;
+}
+
+function createAdventureStarVisual(item) {
+  const color = ADVENTURE_STAR_COLORS[item?.color] || ADVENTURE_STAR_COLORS.cyan;
+  const root = new PIXI.Graphics(createAdventureStarContext(color));
+  root.eventMode = "none";
+
+  return {
+    root,
+    contextKey: String(item?.color || "cyan"),
+    phase: staticPhaseFromKey(`adventure-star:${item?.id || ""}`),
+    x: 0,
+    y: 0,
+    lastSeenAt: 0,
+  };
+}
+
+function syncAdventureStars(map, items, parent, bounds, now, maxItems = 160) {
+  const active = map.__activeScratch || (map.__activeScratch = new Set());
+  active.clear();
+  let rendered = 0;
+
+  for (const item of items || []) {
+    if (!item || rendered >= maxItems || !isVisibleInBounds(item, bounds, 80)) continue;
+    const key = String(item.id || `${Math.round(item.x)}:${Math.round(item.y)}`);
+    active.add(key);
+
+    let visual = map.get(key);
+    const nextContextKey = String(item.color || "cyan");
+    if (!visual) {
+      visual = createAdventureStarVisual(item);
+      parent.addChild(visual.root);
+      map.set(key, visual);
+    } else if (visual.contextKey !== nextContextKey) {
+      visual.contextKey = nextContextKey;
+      visual.root.context = createAdventureStarContext(
+        ADVENTURE_STAR_COLORS[nextContextKey] || ADVENTURE_STAR_COLORS.cyan,
+      );
+    }
+
+    visual.x = Number(item.x || 0);
+    visual.y = Number(item.y || 0);
+    visual.root.position.set(visual.x, visual.y);
+    visual.root.visible = true;
+    visual.lastSeenAt = now;
+    rendered += 1;
+  }
+
+  for (const [key, visual] of map) {
+    if (!active.has(key)) visual.root.visible = false;
+    if (now - Number(visual.lastSeenAt || 0) > ENTITY_STALE_MS * 8) {
+      visual.root.destroy();
+      map.delete(key);
+    }
+  }
+}
+
+function createAdventureAsteroidVisual(item) {
+  const root = new PIXI.Container();
+  root.eventMode = "none";
+
+  const rock = new PIXI.Graphics(
+    createAdventureAsteroidContext(Number(item?.tone || 0)),
+  );
+  rock.eventMode = "none";
+
+  const impact = new PIXI.Graphics(createAdventureAsteroidImpactContext());
+  impact.eventMode = "none";
+  impact.visible = false;
+  impact.blendMode = "add";
+
+  root.addChild(rock, impact);
+  return {
+    root,
+    rock,
+    impact,
+    contextKey: "",
+    x: 0,
+    y: 0,
+    radius: 100,
+    rotation: 0,
+    rotationSpeed: 0,
+    bobPhase: 0,
+    lastImpactAt: 0,
+    impactAngle: 0,
+    lastSeenAt: 0,
+  };
+}
+
+function syncAdventureAsteroids(map, items, parent, bounds, now, maxItems = 90) {
+  const active = map.__activeScratch || (map.__activeScratch = new Set());
+  active.clear();
+  let rendered = 0;
+
+  for (const item of items || []) {
+    if (!item || rendered >= maxItems || !isVisibleInBounds(item, bounds, Number(item.radius || 100) + 120)) continue;
+    const key = String(item.id || `${Math.round(item.x)}:${Math.round(item.y)}`);
+    active.add(key);
+
+    const tone = Math.max(0, Math.min(3, Math.floor(Number(item.tone || 0))));
+    const contextKey = String(tone);
+    let visual = map.get(key);
+
+    if (!visual) {
+      visual = createAdventureAsteroidVisual(item);
+      parent.addChild(visual.root);
+      map.set(key, visual);
+    }
+
+    if (visual.contextKey !== contextKey) {
+      visual.contextKey = contextKey;
+      visual.rock.context = createAdventureAsteroidContext(tone);
+    }
+
+    visual.x = Number(item.x || 0);
+    visual.y = Number(item.y || 0);
+    visual.radius = Math.max(30, Number(item.radius || 100));
+    visual.rotation = Number(item.rotation || 0);
+    visual.rotationSpeed = Number(item.rotationSpeed || 0);
+    visual.bobPhase = Number(item.bobPhase || 0);
+    visual.lastImpactAt = Number(item.lastHitAt || 0);
+    visual.impactAngle = Number(item.impactAngle || 0);
+    visual.root.position.set(visual.x, visual.y);
+    visual.root.visible = true;
+    visual.lastSeenAt = now;
+    rendered += 1;
+  }
+
+  for (const [key, visual] of map) {
+    if (!active.has(key)) visual.root.visible = false;
+    if (now - Number(visual.lastSeenAt || 0) > ENTITY_STALE_MS * 8) {
+      visual.root.destroy({ children: true });
+      map.delete(key);
+    }
+  }
+}
+
+function syncAdventureProjectiles(map, items, parent, bounds, now, maxItems = 80) {
+  const active = map.__activeScratch || (map.__activeScratch = new Set());
+  active.clear();
+  let rendered = 0;
+
+  for (const item of items || []) {
+    if (!item || rendered >= maxItems || !isVisibleInBounds(item, bounds, 110)) continue;
+    const key = String(item.id || "");
+    if (!key) continue;
+    active.add(key);
+
+    const team = item.team === "bot" ? "bot" : item.team === "tower" ? "tower" : "player";
+    let visual = map.get(key);
+    if (!visual) {
+      const root = new PIXI.Graphics(createAdventureBoltContext(team));
+      root.eventMode = "none";
+      root.blendMode = team === "tower" ? "screen" : "normal";
+      visual = {
+        root,
+        team,
+        phase: staticPhaseFromKey(`adventure-bolt:${key}`),
+        lastSeenAt: 0,
+      };
+      parent.addChild(root);
+      map.set(key, visual);
+    } else if (visual.team !== team) {
+      visual.team = team;
+      visual.root.context = createAdventureBoltContext(team);
+    }
+
+    visual.root.position.set(Number(item.x || 0), Number(item.y || 0));
+    visual.root.rotation = Number(item.angle || Math.atan2(Number(item.vy || 0), Number(item.vx || 1)));
+    visual.root.visible = true;
+    visual.root.alpha = 0.94;
+    visual.lastSeenAt = now;
+    rendered += 1;
+  }
+
+  for (const [key, visual] of map) {
+    if (!active.has(key)) visual.root.visible = false;
+    if (now - Number(visual.lastSeenAt || 0) > ENTITY_STALE_MS * 4) {
+      visual.root.destroy();
+      map.delete(key);
+    }
+  }
+}
+
+
+function syncAdventureDebris(map, items, parent, bounds, now, maxItems = 120) {
+  const active = map.__activeScratch || (map.__activeScratch = new Set());
+  active.clear();
+  let rendered = 0;
+
+  for (const item of items || []) {
+    if (!item || rendered >= maxItems || !isVisibleInBounds(item, bounds, 70)) continue;
+    const key = String(item.id || "");
+    if (!key) continue;
+    active.add(key);
+
+    const tone = Math.max(0, Math.min(3, Math.floor(Number(item.tone || 0))));
+    const variant = Math.max(0, Math.min(3, Math.floor(Number(item.variant || 0))));
+    const sparkle = Boolean(item.sparkle);
+    const contextKey = `${tone}:${variant}:${sparkle ? 1 : 0}`;
+    let visual = map.get(key);
+
+    if (!visual) {
+      const root = new PIXI.Graphics(createAdventureDebrisContext(tone, variant, sparkle));
+      root.eventMode = "none";
+      root.blendMode = sparkle ? "add" : "normal";
+      visual = { root, contextKey, lastSeenAt: now };
+      parent.addChild(root);
+      map.set(key, visual);
+    } else if (visual.contextKey !== contextKey) {
+      visual.contextKey = contextKey;
+      visual.root.context = createAdventureDebrisContext(tone, variant, sparkle);
+    }
+
+    const age = Math.max(0, now - Number(item.createdAt || now));
+    const ttl = Math.max(1, Number(item.ttl || 900));
+    const progress = clamp(age / ttl, 0, 1);
+    const fade = 1 - progress;
+    const size = Math.max(2, Number(item.size || 6));
+
+    visual.root.position.set(Number(item.x || 0), Number(item.y || 0));
+    visual.root.rotation = Number(item.rotation || 0);
+    visual.root.scale.set(size);
+    visual.root.alpha = fade * (sparkle ? 1 : 0.92);
+    visual.root.visible = true;
+    visual.lastSeenAt = now;
+    rendered += 1;
+  }
+
+  for (const [key, visual] of map) {
+    if (!active.has(key)) visual.root.visible = false;
+    if (now - Number(visual.lastSeenAt || 0) > ENTITY_STALE_MS * 4) {
+      visual.root.destroy();
+      map.delete(key);
+    }
+  }
+}
+
+function animateAdventureVisuals(starMap, asteroidMap, projectileMap, wallMap, gateMap, generatorVisual, defenseTowerMap, kraniumTowerMap, towerPreviewVisual, wallPreviewVisual, gatePreviewVisual, demolitionTargetVisual, now) {
+  for (const visual of starMap.values()) {
+    if (!visual?.root?.visible) continue;
+    const wave = Math.sin(now * 0.006 + visual.phase);
+    const pulse = 0.94 + wave * 0.12;
+    visual.root.position.set(visual.x, visual.y + Math.sin(now * 0.0024 + visual.phase) * 4);
+    visual.root.rotation = now * 0.0012 + visual.phase;
+    visual.root.scale.set(pulse);
+    visual.root.alpha = 0.82 + wave * 0.18;
+  }
+
+  for (const visual of asteroidMap.values()) {
+    if (!visual?.root?.visible) continue;
+    const impactAge = now - Number(visual.lastImpactAt || 0);
+    const impactProgress = clamp(impactAge / 360, 0, 1);
+    const impactStrength = impactAge >= 0 && impactAge < 360
+      ? Math.sin(impactProgress * Math.PI) * 0.115
+      : 0;
+    const baseScale = visual.radius / 84;
+
+    visual.root.position.set(
+      visual.x,
+      visual.y + Math.sin(now * 0.0011 + visual.bobPhase) * 8,
+    );
+    visual.root.rotation = visual.rotation + now * visual.rotationSpeed;
+    visual.root.scale.set(baseScale * (1 + impactStrength));
+
+    if (impactStrength > 0.002) {
+      visual.impact.visible = true;
+      visual.impact.rotation = visual.impactAngle;
+      visual.impact.alpha = (1 - impactProgress) * 0.95;
+      visual.impact.scale.set(0.42 + impactProgress * 1.45);
+    } else {
+      visual.impact.visible = false;
+    }
+  }
+
+  for (const visual of projectileMap.values()) {
+    if (!visual?.root?.visible) continue;
+    const pulse = 1 + Math.sin(now * 0.018 + visual.phase) * 0.08;
+    visual.root.scale.set(pulse);
+  }
+
+  if (generatorVisual?.root?.visible) {
+    const integrity = clamp(Number(generatorVisual.integrity ?? 1), 0, 1);
+    const damageIntensity = 1 - integrity;
+    const wave = Math.sin(now * 0.00235 + generatorVisual.phase);
+    const surge = Math.max(0, Math.sin(now * 0.0052 + generatorVisual.phase * 1.7));
+    generatorVisual.halo.alpha = 0.075 + surge * 0.075 + integrity * 0.045;
+    generatorVisual.ringOuter.rotation = now * 0.00021;
+    generatorVisual.ringInner.rotation = -now * 0.00046;
+    generatorVisual.ringOuter.alpha = 0.11 + integrity * 0.17 + surge * 0.14;
+    generatorVisual.ringInner.alpha = 0.16 + integrity * 0.21 + Math.max(0, -wave) * 0.12;
+    generatorVisual.engineLayer.rotation = Math.sin(now * 0.00042 + generatorVisual.phase) * 0.055;
+    generatorVisual.core.scale.set(0.96 + Math.sin(now * 0.0056 + generatorVisual.phase) * 0.09 + surge * 0.045);
+    generatorVisual.core.alpha = 0.56 + integrity * 0.32 + surge * 0.16;
+    generatorVisual.lights.alpha = 0.46 + integrity * 0.34 + Math.sin(now * 0.012 + generatorVisual.phase * 1.7) * 0.16;
+
+    if (generatorVisual.engines?.length) {
+      for (const engine of generatorVisual.engines) {
+        const enginePulse = 0.78 + Math.max(0, Math.sin(now * 0.010 + engine.phase)) * 0.42;
+        engine.rotor.rotation = now * 0.011 + engine.phase;
+        engine.exhaust.scale.set(0.84 + enginePulse * 0.28, 0.8 + enginePulse * 0.52);
+        engine.exhaust.alpha = (0.18 + integrity * 0.46) * enginePulse;
+        engine.light.alpha = 0.18 + enginePulse * 0.42;
+        engine.root.position.x = Math.cos(engine.root.rotation + Math.PI * 0.5) * 255;
+        engine.root.position.y = Math.sin(engine.root.rotation + Math.PI * 0.5) * 255;
+      }
+    }
+
+    const smokeStrength = 0.24 + damageIntensity * 1.08;
+    if (generatorVisual.smokeParticles?.length) {
+      for (const particle of generatorVisual.smokeParticles) {
+        const node = particle.node;
+        const t = now * 0.00145 + particle.phase + particle.delay;
+        const oscillation = (t % 1 + 1) % 1;
+        node.visible = true;
+        node.position.set(
+          particle.anchor.x + Math.sin(t * 2.25) * particle.sway,
+          particle.anchor.y - oscillation * particle.lift,
+        );
+        node.scale.set((0.46 + oscillation * 1.14) * (0.68 + smokeStrength * 0.55));
+        node.alpha = (1 - oscillation) * (0.12 + smokeStrength * 0.3);
+      }
+    }
+  }
+
+  for (const visual of defenseTowerMap.values()) {
+    if (!visual?.root?.visible) continue;
+    const pulse = 0.72 + Math.sin(now * 0.0065 + visual.phase) * 0.2;
+    visual.ring.rotation = now * 0.00064 + visual.phase;
+    visual.ring.alpha = 0.20 + pulse * 0.34;
+    visual.halo.alpha = 0.040 + pulse * 0.065;
+    visual.lights.alpha = 0.50 + pulse * 0.36;
+    visual.turret.rotation = dampAngle(visual.turret.rotation, visual.targetRotation || 0, 12, 1 / 60);
+    const recoilAge = Number(visual.recoilUntil || 0) - now;
+    const firing = recoilAge > 0;
+    const recoil = firing ? (recoilAge / 180) * 16 : 0;
+    visual.turret.position.x = -recoil;
+    visual.muzzle.alpha = firing ? 0.92 + Math.sin(now * 0.075) * 0.08 : 0.09 + pulse * 0.09;
+    visual.muzzle.scale.set(firing ? 1.42 : 0.86 + pulse * 0.14);
+    if (visual.laser) {
+      visual.laser.alpha = firing ? 0.78 + Math.sin(now * 0.09) * 0.16 : 0.035 + pulse * 0.04;
+      visual.laser.scale.x = firing ? 1.12 : 0.76 + pulse * 0.08;
+    }
+  }
+
+  for (const visual of kraniumTowerMap.values()) {
+    if (!visual?.root?.visible) continue;
+    const wave = Math.sin(now * 0.0042 + visual.phase);
+    const pulse = 0.5 + Math.max(0, wave) * 0.5;
+    visual.halo.alpha = 0.07 + pulse * 0.13;
+    if (visual.coil) {
+      visual.coil.rotation = -now * 0.00029 + visual.phase * 0.4;
+      visual.coil.alpha = 0.18 + pulse * 0.20;
+      visual.coil.scale.set(0.99 + wave * 0.018);
+    }
+    visual.orbitA.rotation = now * 0.00095 + visual.phase;
+    visual.orbitB.rotation = -now * 0.00072 - visual.phase * 0.6;
+    visual.orbitA.alpha = 0.38 + pulse * 0.30;
+    visual.orbitB.alpha = 0.32 + (1 - pulse) * 0.22;
+    const crystalScale = 0.94 + pulse * 0.08;
+    visual.crystal.scale.set(crystalScale, crystalScale);
+    visual.crystal.rotation = Math.sin(now * 0.0019 + visual.phase) * 0.035;
+    visual.crystal.alpha = 0.76 + pulse * 0.22;
+    visual.lights.alpha = 0.58 + Math.sin(now * 0.012 + visual.phase) * 0.20;
+  }
+
+  if (towerPreviewVisual?.root?.visible) {
+    const pulse = 0.68 + Math.sin(now * 0.008 + towerPreviewVisual.phase) * 0.2;
+    towerPreviewVisual.root.scale.set(0.98 + pulse * 0.035);
+    if (towerPreviewVisual.ring) towerPreviewVisual.ring.rotation = now * 0.0008;
+    if (towerPreviewVisual.orbitA) towerPreviewVisual.orbitA.rotation = now * 0.001;
+    if (towerPreviewVisual.orbitB) towerPreviewVisual.orbitB.rotation = -now * 0.0008;
+  }
+
+  for (const visual of wallMap.values()) {
+    if (!visual?.root?.visible || !visual?.lights) continue;
+    const integrity = clamp(Number(visual.integrity ?? 1), 0, 1);
+    const failing = integrity < 0.36;
+    const dropout = failing && Math.sin(now * 0.013 + visual.phase * 7) > 0.52 ? 0.15 : 1;
+    const signal = ((0.16 + integrity * 0.66) + Math.sin(now * 0.0032 + visual.phase) * (0.06 + integrity * 0.16)) * dropout;
+    const scan = (now * 0.00016 + visual.phase / (Math.PI * 2)) % 1;
+    const damageIntensity = 1 - integrity;
+    const smokeStrength = clamp((damageIntensity - 0.12) / 0.88, 0, 1);
+    const fireStrength = clamp((damageIntensity - 0.38) / 0.62, 0, 1);
+    visual.lights.alpha = signal;
+    if (visual.sweep) {
+      visual.sweep.position.x = -205 + scan * 410;
+      visual.sweep.alpha = ((0.02 + integrity * 0.18) + Math.sin(scan * Math.PI) * (0.06 + integrity * 0.32)) * dropout;
+    }
+
+    if (visual.smokeParticles?.length) {
+      for (const particle of visual.smokeParticles) {
+        const node = particle.node;
+        if (smokeStrength <= 0.02) {
+          node.visible = false;
+          continue;
+        }
+        const life = (now * 0.00012 + particle.delay + visual.phase * 0.03) % 1;
+        const rise = life * particle.lift * (0.85 + smokeStrength * 1.35);
+        const sway = Math.sin(now * 0.0013 + particle.phase + life * 5.0) * particle.sway * (0.75 + smokeStrength * 1.05);
+        node.visible = true;
+        node.position.set(particle.anchor.x + sway, particle.anchor.y - rise);
+        const scale = 0.72 + smokeStrength * 0.55 + life * (0.85 + smokeStrength * 1.15);
+        node.scale.set(scale, scale * (1.08 + smokeStrength * 0.12));
+        node.alpha = (0.18 + smokeStrength * 0.56) * (1 - life * 0.55) * (0.78 + Math.sin(now * 0.001 + particle.phase) * 0.12);
+      }
+    }
+
+    if (visual.fireParticles?.length) {
+      for (const particle of visual.fireParticles) {
+        const node = particle.node;
+        if (fireStrength <= 0.02) {
+          node.visible = false;
+          continue;
+        }
+
+        // Persistent, low-frequency motion. No life-reset or rapid alpha pulse,
+        // which removes the artificial blinking from the previous fire effect.
+        const breath = Math.sin(now * 0.0041 + particle.phase);
+        const curl = Math.sin(now * 0.0063 + particle.phase * 1.7);
+        const sway = curl * particle.sway * (0.45 + fireStrength * 0.42);
+        const lift = particle.lift + breath * (2.2 + fireStrength * 3.8);
+        const scale = particle.baseScale * (0.86 + fireStrength * 0.82 + breath * 0.075);
+
+        node.visible = true;
+        node.position.set(particle.anchor.x + sway, particle.anchor.y - lift);
+        node.rotation = curl * 0.14;
+        node.scale.set(scale * (0.84 + curl * 0.04), scale * (1.08 + fireStrength * 0.34 + breath * 0.08));
+        node.alpha = (0.34 + fireStrength * 0.58) * (0.94 + breath * 0.055);
+      }
+    }
+  }
+
+  for (const visual of gateMap.values()) {
+    if (!visual?.root?.visible || !visual?.lights) continue;
+    // Doors are deliberately eased, so the gate feels massive and hydraulic
+    // rather than instantly changing state when the drone enters its sensor range.
+    visual.currentOpen += (visual.targetOpen - visual.currentOpen) * 0.105;
+    const open = clamp(visual.currentOpen, 0, 1);
+    const lightPulse = 0.78 + Math.sin(now * 0.0027 + visual.phase) * 0.14;
+    const alertPulse = open > 0.05 ? 1.08 : 0.90;
+    visual.lights.alpha = lightPulse * alertPulse;
+
+    visual.beam.alpha = (1 - open) * (0.18 + Math.sin(now * 0.0022 + visual.phase) * 0.045);
+    visual.beam.scale.set(1, 0.96 + Math.sin(now * 0.0019 + visual.phase) * 0.035);
+
+    const travel = 48 + open * 70;
+    const hydraulic = Math.sin(now * 0.0021 + visual.phase) * (1.1 + open * 1.8);
+    visual.leftDoor.position.set(-travel + hydraulic, 0);
+    visual.rightDoor.position.set(travel - hydraulic, 0);
+    visual.leftDoor.alpha = 0.98;
+    visual.rightDoor.alpha = 0.98;
+  }
+
+  if (demolitionTargetVisual?.root?.visible) {
+    const pulse = 0.76 + Math.sin(now * 0.008 + demolitionTargetVisual.phase) * 0.20;
+    demolitionTargetVisual.root.alpha = pulse;
+  }
+
+  if (wallPreviewVisual?.root?.visible && wallPreviewVisual?.lights) {
+    const scan = (now * 0.00022 + wallPreviewVisual.phase / (Math.PI * 2)) % 1;
+    wallPreviewVisual.lights.alpha = 0.72 + Math.sin(now * 0.004 + wallPreviewVisual.phase) * 0.22;
+    if (wallPreviewVisual.sweep) {
+      wallPreviewVisual.sweep.position.x = -205 + scan * 410;
+      wallPreviewVisual.sweep.alpha = 0.28 + Math.sin(scan * Math.PI) * 0.58;
+    }
+  }
+
+  if (gatePreviewVisual?.root?.visible && gatePreviewVisual?.lights) {
+    gatePreviewVisual.currentOpen += (gatePreviewVisual.targetOpen - gatePreviewVisual.currentOpen) * 0.16;
+    const pulse = 0.76 + Math.sin(now * 0.004 + gatePreviewVisual.phase) * 0.18;
+    gatePreviewVisual.lights.alpha = pulse;
+    gatePreviewVisual.beam.alpha = 0.26 + Math.sin(now * 0.003 + gatePreviewVisual.phase) * 0.05;
+    gatePreviewVisual.leftDoor.position.set(-48, 0);
+    gatePreviewVisual.rightDoor.position.set(48, 0);
+  }
 }
 
 function createEnergyContext() {
@@ -2264,6 +4788,198 @@ function createPixelTerrainTexture(worldWidth, worldHeight) {
   return sprite;
 }
 
+
+function getAdventureSpaceTexture(cacheKey, size, draw) {
+  let texture = WORLD_TERRAIN_TEXTURE_CACHE.get(cacheKey);
+  if (texture?.destroyed || texture?.source?.destroyed || texture?.baseTexture?.destroyed) {
+    WORLD_TERRAIN_TEXTURE_CACHE.delete(cacheKey);
+    texture = null;
+  }
+
+  if (texture) return texture;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d", { alpha: true });
+  ctx.imageSmoothingEnabled = true;
+  draw(ctx, size);
+  texture = PIXI.Texture.from(canvas);
+  if (texture?.source) texture.source.scaleMode = "linear";
+  if (texture?.baseTexture) texture.baseTexture.scaleMode = PIXI.SCALE_MODES?.LINEAR ?? "linear";
+  WORLD_TERRAIN_TEXTURE_CACHE.set(cacheKey, texture);
+  return texture;
+}
+
+function createAdventureNebulaTexture() {
+  const device = getRendererDeviceProfile(false);
+  const size = device.weakDesktop ? 768 : device.mobile ? 1024 : 1536;
+  const cacheKey = `adventure-nebula:${device.weakDesktop ? "low" : device.mobile ? "mobile" : "desktop"}:${size}`;
+
+  return getAdventureSpaceTexture(cacheKey, size, (ctx, canvasSize) => {
+    ctx.clearRect(0, 0, canvasSize, canvasSize);
+
+    const base = ctx.createLinearGradient(0, 0, canvasSize, canvasSize);
+    base.addColorStop(0, "rgba(4, 9, 18, 0.96)");
+    base.addColorStop(0.43, "rgba(8, 17, 31, 0.92)");
+    base.addColorStop(1, "rgba(5, 8, 18, 0.96)");
+    ctx.fillStyle = base;
+    ctx.fillRect(0, 0, canvasSize, canvasSize);
+
+    const nebula = (x, y, rx, ry, rotation, colors) => {
+      ctx.save();
+      ctx.translate(x * canvasSize, y * canvasSize);
+      ctx.rotate(rotation);
+      ctx.scale(rx * canvasSize, ry * canvasSize);
+      const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+      colors.forEach(([stop, color]) => gradient.addColorStop(stop, color));
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(0, 0, 1, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    };
+
+    // Every part of the map receives soft, low-cost deep-space color rather
+    // than the old almost-black empty floor. The edges intentionally fade so
+    // the repeating texture has no visible seam.
+    nebula(0.16, 0.22, 0.62, 0.21, -0.38, [
+      [0, "rgba(56, 129, 197, 0.24)"],
+      [0.42, "rgba(24, 67, 116, 0.14)"],
+      [1, "rgba(0, 0, 0, 0)"],
+    ]);
+    nebula(0.82, 0.28, 0.58, 0.20, 0.41, [
+      [0, "rgba(142, 76, 212, 0.20)"],
+      [0.46, "rgba(64, 31, 118, 0.10)"],
+      [1, "rgba(0, 0, 0, 0)"],
+    ]);
+    nebula(0.48, 0.80, 0.72, 0.22, -0.10, [
+      [0, "rgba(25, 182, 188, 0.18)"],
+      [0.50, "rgba(12, 78, 93, 0.08)"],
+      [1, "rgba(0, 0, 0, 0)"],
+    ]);
+    nebula(0.12, 0.72, 0.40, 0.14, 0.72, [
+      [0, "rgba(64, 94, 188, 0.13)"],
+      [0.50, "rgba(24, 32, 86, 0.06)"],
+      [1, "rgba(0, 0, 0, 0)"],
+    ]);
+
+    const vignette = ctx.createRadialGradient(
+      canvasSize * 0.5,
+      canvasSize * 0.5,
+      canvasSize * 0.08,
+      canvasSize * 0.5,
+      canvasSize * 0.5,
+      canvasSize * 0.78,
+    );
+    vignette.addColorStop(0, "rgba(255, 255, 255, 0.02)");
+    vignette.addColorStop(1, "rgba(1, 3, 8, 0.26)");
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, canvasSize, canvasSize);
+  });
+}
+
+function createAdventureStarfieldTexture(layer = "far") {
+  const size = 1024;
+  const cacheKey = `adventure-stars:${layer}:${size}`;
+  return getAdventureSpaceTexture(cacheKey, size, (ctx, canvasSize) => {
+    ctx.clearRect(0, 0, canvasSize, canvasSize);
+    let state = layer === "near" ? 0x734b9a1d : 0x4fa85e73;
+    const random = () => {
+      state = (state * 1664525 + 1013904223) >>> 0;
+      return state / 4294967296;
+    };
+    const count = layer === "near" ? 16 : 42;
+
+    for (let index = 0; index < count; index += 1) {
+      const x = random() * canvasSize;
+      const y = random() * canvasSize;
+      const major = layer === "near" && index % 4 === 0;
+      const radius = major ? 2.2 + random() * 1.5 : 0.48 + random() * 0.9;
+      const tint = index % 8;
+      const color = tint === 0
+        ? [170, 219, 255]
+        : tint === 1
+          ? [210, 184, 255]
+          : tint === 2
+            ? [255, 231, 171]
+            : [218, 240, 255];
+
+      if (major) {
+        const glow = ctx.createRadialGradient(x, y, 0, x, y, radius * 5.4);
+        glow.addColorStop(0, `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0.46)`);
+        glow.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(x, y, radius * 5.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.fillStyle = `rgba(${color[0]}, ${color[1]}, ${color[2]}, ${major ? 0.90 : 0.55 + random() * 0.33})`;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (major) {
+        ctx.strokeStyle = `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0.36)`;
+        ctx.lineWidth = 0.7;
+        ctx.beginPath();
+        ctx.moveTo(x - radius * 4.4, y);
+        ctx.lineTo(x + radius * 4.4, y);
+        ctx.moveTo(x, y - radius * 4.4);
+        ctx.lineTo(x, y + radius * 4.4);
+        ctx.stroke();
+      }
+    }
+  });
+}
+
+function createAdventureTilingSprite(texture, width, height) {
+  let sprite;
+  try {
+    sprite = new PIXI.TilingSprite({ texture, width, height });
+  } catch {
+    // Compatibility with an older Pixi constructor shape if a project lockfile
+    // still resolves an older v8 build.
+    sprite = new PIXI.TilingSprite(texture, width, height);
+  }
+  sprite.eventMode = "none";
+  sprite.interactiveChildren = false;
+  return sprite;
+}
+
+function createAdventureDeepSpaceBackdrop(worldWidth, worldHeight) {
+  const width = Math.max(1, Number(worldWidth || DEFAULT_WORLD_WIDTH));
+  const height = Math.max(1, Number(worldHeight || DEFAULT_WORLD_HEIGHT));
+  const root = new PIXI.Container();
+  root.eventMode = "none";
+  root.interactiveChildren = false;
+
+  const nebula = createAdventureTilingSprite(createAdventureNebulaTexture(), width, height);
+  nebula.alpha = 0.98;
+  nebula.tileScale.set(4.6, 4.6);
+  nebula.tilePosition.set(178, -264);
+
+  const farStars = createAdventureTilingSprite(createAdventureStarfieldTexture("far"), width, height);
+  farStars.alpha = 0.76;
+  farStars.tileScale.set(1.0, 1.0);
+  farStars.tilePosition.set(71, 193);
+
+  const nearStars = createAdventureTilingSprite(createAdventureStarfieldTexture("near"), width, height);
+  nearStars.alpha = 0.64;
+  nearStars.tileScale.set(1.72, 1.72);
+  nearStars.tilePosition.set(-319, 127);
+
+  // A controlled navy veil prevents the repeated nebula texture from looking
+  // too bright beneath structures while still keeping the entire world alive.
+  const depthVeil = new PIXI.Graphics();
+  depthVeil.eventMode = "none";
+  depthVeil.rect(0, 0, width, height).fill({ color: 0x020713, alpha: 0.16 });
+
+  root.addChild(nebula, farStars, nearStars, depthVeil);
+  return root;
+}
+
 function destroyTerrainChild(child) {
   try {
     // Terrain textures are globally cached across arena mode changes. Destroy
@@ -2292,7 +5008,11 @@ function syncWorldTerrain(layer, state, theme, worldWidth, worldHeight) {
   if (!SPACE_BATTLE_THEMES.has(normalizedTheme)) return;
 
   try {
-    layer.addChild(createPixelTerrainTexture(width, height));
+    if (normalizedTheme === ADVENTURE_DEEP_SPACE_THEME) {
+      layer.addChild(createAdventureDeepSpaceBackdrop(width, height));
+    } else {
+      layer.addChild(createPixelTerrainTexture(width, height));
+    }
   } catch (error) {
     // A terrain texture must never be allowed to stop the whole Pixi ticker.
     // In the unlikely case a device refuses the canvas texture, players, loot
@@ -2328,6 +5048,21 @@ function PixiArenaRenderer({
   cores = [],
   projectiles = [],
   simpleProjectiles = [],
+  // Adventure is a local mode with its own opt-in celestial visuals.
+  adventureStars = [],
+  adventureAsteroids = [],
+  adventureGenerator = null,
+  adventureDefenseTowers = [],
+  adventureKraniumTowers = [],
+  adventureTowerPreview = null,
+  adventureWalls = [],
+  adventureGates = [],
+  adventureWallPreview = null,
+  adventureGatePreview = null,
+  adventureDemolitionTarget = null,
+  adventureWallShieldHits = [],
+  adventureProjectiles = [],
+  adventureDebris = [],
   combatEvents = [],
   // Set by Normal PvP / Zone PvP so combat text is private to this player.
   combatViewerId = null,
@@ -2360,6 +5095,20 @@ function PixiArenaRenderer({
     cores,
     projectiles,
     simpleProjectiles,
+    adventureStars,
+    adventureAsteroids,
+    adventureGenerator,
+    adventureDefenseTowers,
+    adventureKraniumTowers,
+    adventureTowerPreview,
+    adventureWalls,
+    adventureGates,
+    adventureWallPreview,
+    adventureGatePreview,
+    adventureDemolitionTarget,
+    adventureWallShieldHits,
+    adventureProjectiles,
+    adventureDebris,
     combatEvents,
     combatViewerId,
     combatEventsPrivate,
@@ -2462,9 +5211,12 @@ function PixiArenaRenderer({
       const itemsLayer = new PIXI.Container();
       itemsLayer.eventMode = "none";
       itemsLayer.zIndex = 2;
+      const structuresLayer = new PIXI.Container();
+      structuresLayer.eventMode = "none";
+      structuresLayer.zIndex = 3;
       const projectilesLayer = new PIXI.Container();
       projectilesLayer.eventMode = "none";
-      projectilesLayer.zIndex = 3;
+      projectilesLayer.zIndex = 4;
       const entitiesLayer = new PIXI.Container();
       entitiesLayer.eventMode = "none";
       entitiesLayer.zIndex = 4;
@@ -2476,6 +5228,7 @@ function PixiArenaRenderer({
         terrainLayer,
         zone,
         itemsLayer,
+        structuresLayer,
         projectilesLayer,
         entitiesLayer,
         combatLayer,
@@ -2489,6 +5242,20 @@ function PixiArenaRenderer({
       const simpleBotPool = [];
       const projectilePool = [];
       const simpleProjectilePool = [];
+      const adventureStarMap = new Map();
+      const adventureAsteroidMap = new Map();
+      const adventureWallMap = new Map();
+      const adventureGateMap = new Map();
+      const adventureWallShieldMap = new Map();
+      const adventureDefenseTowerMap = new Map();
+      const adventureKraniumTowerMap = new Map();
+      let adventureGeneratorVisual = null;
+      let adventureTowerPreviewVisual = null;
+      let adventureWallPreviewVisual = null;
+      let adventureGatePreviewVisual = null;
+      let adventureDemolitionTargetVisual = null;
+      const adventureProjectileMap = new Map();
+      const adventureDebrisMap = new Map();
       const combatTextMap = new Map();
       const terrainState = { key: null, failedKey: null };
 
@@ -2659,7 +5426,9 @@ function PixiArenaRenderer({
         // the world texture was the source of the visible background flash.
         // Low-quality/mobile profiles can still start without terrain by
         // explicit configuration, but a visible terrain never blinks.
-        const shouldRenderTerrain = !config.disableExpensiveTerrain;
+        const shouldRenderTerrain =
+          data.worldTheme === ADVENTURE_DEEP_SPACE_THEME ||
+          !config.disableExpensiveTerrain;
         setTerrainVisible(shouldRenderTerrain);
         if (shouldRenderTerrain) {
           try {
@@ -2775,7 +5544,127 @@ function PixiArenaRenderer({
             bounds,
             getContext: (item, contexts) => contexts[item.type] || resources.defaultCoreContext,
           });
+
+          // These are no-ops for every existing mode. Adventure supplies its
+          // own arrays so stars/asteroids never alter orb/core visuals elsewhere.
+          syncAdventureStars(
+            adventureStarMap,
+            data.adventureStars || [],
+            itemsLayer,
+            bounds,
+            now,
+            Math.min(190, Math.max(60, orbBudget)),
+          );
+          syncAdventureAsteroids(
+            adventureAsteroidMap,
+            data.adventureAsteroids || [],
+            itemsLayer,
+            bounds,
+            now,
+            Math.min(92, Math.max(32, Math.floor(itemBudget * 0.5))),
+          );
         }
+
+        adventureGeneratorVisual = syncAdventureGenerator(
+          adventureGeneratorVisual,
+          data.adventureGenerator || null,
+          structuresLayer,
+        );
+        syncAdventureDefenseTowers(
+          adventureDefenseTowerMap,
+          data.adventureDefenseTowers || [],
+          structuresLayer,
+          bounds,
+          now,
+          config.lowSpecDesktop || config.weakMobile ? 8 : 16,
+        );
+        syncAdventureKraniumTowers(
+          adventureKraniumTowerMap,
+          data.adventureKraniumTowers || [],
+          structuresLayer,
+          bounds,
+          now,
+          3,
+        );
+        adventureTowerPreviewVisual = syncAdventureTowerPreview(
+          adventureTowerPreviewVisual,
+          data.adventureTowerPreview || null,
+          structuresLayer,
+        );
+
+        // Walls are few but placement needs instant feedback, so their transforms
+        // are synchronized every frame. The pooled cached geometry avoids any draw rebuild.
+        syncAdventureWalls(
+          adventureWallMap,
+          data.adventureWalls || [],
+          structuresLayer,
+          bounds,
+          now,
+          160,
+        );
+        syncAdventureGates(
+          adventureGateMap,
+          data.adventureGates || [],
+          structuresLayer,
+          bounds,
+          now,
+          120,
+        );
+        adventureWallPreviewVisual = syncAdventureWallPreview(
+          adventureWallPreviewVisual,
+          data.adventureWallPreview || null,
+          structuresLayer,
+        );
+        adventureGatePreviewVisual = syncAdventureGatePreview(
+          adventureGatePreviewVisual,
+          data.adventureGatePreview || null,
+          structuresLayer,
+        );
+        adventureDemolitionTargetVisual = syncAdventureDemolitionTarget(
+          adventureDemolitionTargetVisual,
+          data.adventureDemolitionTarget || null,
+          structuresLayer,
+        );
+        syncAdventureWallShieldHits(
+          adventureWallShieldMap,
+          data.adventureWallShieldHits || [],
+          structuresLayer,
+          bounds,
+          now,
+          config.lowSpecDesktop || config.weakMobile ? 14 : 28,
+        );
+
+        syncAdventureDebris(
+          adventureDebrisMap,
+          data.adventureDebris || [],
+          projectilesLayer,
+          bounds,
+          now,
+          config.lowSpecDesktop || config.weakMobile ? 46 : 112,
+        );
+        animateAdventureVisuals(
+          adventureStarMap,
+          adventureAsteroidMap,
+          adventureProjectileMap,
+          adventureWallMap,
+          adventureGateMap,
+          adventureGeneratorVisual,
+          adventureDefenseTowerMap,
+          adventureKraniumTowerMap,
+          adventureTowerPreviewVisual,
+          adventureWallPreviewVisual,
+          adventureGatePreviewVisual,
+          adventureDemolitionTargetVisual,
+          now,
+        );
+        syncAdventureProjectiles(
+          adventureProjectileMap,
+          data.adventureProjectiles || [],
+          projectilesLayer,
+          bounds,
+          now,
+          config.lowSpecDesktop || config.weakMobile ? 34 : 80,
+        );
 
         // The live ref can be replaced one frame before the local player field
         // is copied on mobile. Keep the last valid local transform for a short
