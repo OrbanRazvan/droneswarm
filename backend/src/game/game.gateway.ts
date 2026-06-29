@@ -185,12 +185,6 @@ const NORMAL_CROWDED_ORB_TARGET = 24;
 const NORMAL_CROWDED_ORB_ADD_LIMIT = 12;
 const NORMAL_CROWDED_ORB_EXTRA_CAP = 30;
 
-// Slow laptops can occasionally delay a browser timer for a few hundred
-// milliseconds while still holding a direction. Keep only Normal/Zone's last
-// validated input alive a little longer; a real STOP packet still clears it
-// immediately, so this is transport-jitter protection, not client authority.
-const PVP_REMOTE_INPUT_GRACE_MS = 520;
-
 // Spectator lifecycle: a dead player remains in the room and follows the
 // player who eliminated them. This is intentionally independent from input
 // freshness so spectators are never removed just because they no longer send
@@ -201,6 +195,11 @@ const SPECTATOR_KILL_CREDIT_WINDOW_MS = 6000;
 // in-memory world. The timer starts when the last socket leaves, never when the
 // room was originally created.
 const EMPTY_ROOM_GRACE_MS = 30000;
+
+// Normal PvP is continuous, so a temporary Wi-Fi/Render reconnect must not
+// remove the drone or reset its spectator camera. Explicit EXIT still removes
+// it immediately; this grace applies only to transport loss.
+const NORMAL_PVP_RECONNECT_GRACE_MS = 600000; // 10 minutes
 
 // A temporary network interruption must never create another Zone lobby or
 // restart an existing round. Human seats are reserved by a per-tab resume token.
@@ -339,6 +338,8 @@ export class GameGateway {
   private socketRoom = new Map<string, string>();
   private normalRooms = new Map<string, any>();
   private normalSocketRoom = new Map<string, string>();
+  private normalPvpResumeSeats = new Map<string, { roomId: string; playerId: string }>();
+  private normalPvpSocketResumeToken = new Map<string, string>();
   private battleRoyaleOnlineRooms = new Map<string, any>();
   private battleRoyaleOnlineSocketRoom = new Map<string, string>();
   private zonePvpRooms = new Map<string, any>();
@@ -2257,7 +2258,11 @@ export class GameGateway {
   }
   handleDisconnect(client: Socket) {
     this.removePlayer(client.id);
-    this.removeNormalPlayer(client.id);
+    // Normal PvP mirrors Zone's reconnect behavior: only a deliberate
+    // `normal-pvp:leave` removes the drone. A transport loss reserves its seat.
+    if (this.normalSocketRoom.has(client.id)) {
+      this.detachNormalPvpSocket(client.id);
+    }
     this.removeBattleRoyaleOnlinePlayer(client.id);
 
     // Zone PvP deliberately has NO reconnect/resume path. A browser that leaves
@@ -2424,6 +2429,22 @@ export class GameGateway {
     this.removeBattleRoyaleOnlinePlayer(client.id);
     this.removeZonePvpPlayer(client.id);
 
+    const resumeToken = this.normalizeNormalPvpResumeToken(data?.resumeToken);
+    const resumed = this.findNormalPvpResumeSeat(resumeToken);
+    if (resumed) {
+      const { room, player } = resumed;
+      this.rebindNormalPvpResumeSeat(room, player, client, resumeToken!);
+      player.userId = data?.isGuest ? null : data?.userId;
+      player.isGuest = Boolean(data?.isGuest);
+      player.guestStatsKey = data?.isGuest
+        ? this.normalizeGameStatsGuestKey(data?.guestStatsKey)
+        : null;
+      player.username = String(data?.username || (data?.isGuest ? "Guest" : "Player")).slice(0, 18);
+      player.skin = normalizeSkin(data?.isGuest ? "cyan" : data?.skin);
+      this.emitNormalPvpJoined(client, room, player);
+      return;
+    }
+
     const existingRoom = this.getNormalRoomBySocket(client.id);
     const existingPlayer = existingRoom?.players.get(client.id);
     if (existingRoom && existingPlayer) {
@@ -2438,6 +2459,8 @@ export class GameGateway {
       existingPlayer.skin = normalizeSkin(data?.isGuest ? "cyan" : data?.skin);
       existingPlayer.lastSeenAt = Date.now();
       existingPlayer.lastInputReceivedAt = Date.now();
+      existingPlayer.disconnectedAt = 0;
+      this.rememberNormalPvpResumeSeat(existingRoom, existingPlayer, resumeToken);
 
       this.markRoomOccupied(existingRoom);
       client.join(existingRoom.id);
@@ -2478,6 +2501,8 @@ export class GameGateway {
       attackDroneSpeedMultiplier: 1,
       alive: true,
       input: {},
+      resumeToken,
+      disconnectedAt: 0,
       lastSeenAt: Date.now(),
       lastEnergyDrainAt: Date.now(),
       lastZoneDamageAt: Date.now(),
@@ -2504,6 +2529,7 @@ export class GameGateway {
     room.players.set(client.id, player);
     this.markRoomOccupied(room);
     this.normalSocketRoom.set(client.id, room.id);
+    this.rememberNormalPvpResumeSeat(room, player, resumeToken);
     client.join(room.id);
 
     this.emitNormalPvpJoined(client, room, player);
@@ -2511,7 +2537,7 @@ export class GameGateway {
 
   @SubscribeMessage("normal-pvp:leave")
   handleNormalPvpLeave(@ConnectedSocket() client: Socket) {
-    this.removeNormalPlayer(client.id);
+    this.removeNormalPlayer(client.id, { explicit: true });
   }
 
   // A browser returning after a long background period can still report a
@@ -3356,14 +3382,7 @@ export class GameGateway {
       // Human input is latest-wins and expires quickly after a lost STOP packet.
       // Bots keep their held vector until the next tactical replan (up to 320 ms),
       // otherwise they visibly pause before every AI decision.
-      const inputGraceMs =
-        room?.normalMode || room?.zonePvpMode
-          ? PVP_REMOTE_INPUT_GRACE_MS
-          : 280;
-      const inputFresh =
-        player.isBot ||
-        !player.lastInputReceivedAt ||
-        now - player.lastInputReceivedAt <= inputGraceMs;
+      const inputFresh = player.isBot || !player.lastInputReceivedAt || now - player.lastInputReceivedAt <= 280;
       if (!inputFresh) {
         player.input = {};
       }
@@ -5112,32 +5131,158 @@ export class GameGateway {
     return room;
   }
 
+  private normalizeNormalPvpResumeToken(value: any) {
+    const token = String(value || "").trim();
+    if (token.length < 20 || token.length > 160 || !/^[A-Za-z0-9_-]+$/.test(token)) {
+      return null;
+    }
+    return token;
+  }
+
+  private rememberNormalPvpResumeSeat(room: any, player: any, token: string | null) {
+    if (!room || !player || !token) return;
+    player.resumeToken = token;
+    this.normalPvpResumeSeats.set(token, {
+      roomId: String(room.id),
+      playerId: String(player.id),
+    });
+    this.normalPvpSocketResumeToken.set(String(player.id), token);
+  }
+
+  private findNormalPvpResumeSeat(token: string | null) {
+    if (!token) return null;
+    const seat = this.normalPvpResumeSeats.get(token);
+    if (!seat) return null;
+
+    const room = this.normalRooms.get(seat.roomId);
+    const player = room?.players?.get(seat.playerId);
+    if (!room || !player || String(player.resumeToken || "") !== token) {
+      this.normalPvpResumeSeats.delete(token);
+      return null;
+    }
+
+    return { room, player };
+  }
+
+  private remapNormalPvpPlayerReferences(room: any, previousId: string, nextId: string) {
+    if (!room || !previousId || !nextId || previousId === nextId) return;
+
+    for (const projectile of room.projectiles || []) {
+      if (String(projectile?.ownerId || "") === previousId) projectile.ownerId = nextId;
+    }
+    for (const unit of room.players?.values?.() || []) {
+      if (String(unit?.killedById || "") === previousId) unit.killedById = nextId;
+      if (String(unit?.lastDamageById || "") === previousId) unit.lastDamageById = nextId;
+      if (String(unit?.spectatorTargetId || "") === previousId) unit.spectatorTargetId = nextId;
+    }
+    for (const event of room.combatEvents || []) {
+      if (String(event?.viewerId || "") === previousId) event.viewerId = nextId;
+      if (String(event?.ownerId || "") === previousId) event.ownerId = nextId;
+    }
+    room.collisionCooldowns?.clear?.();
+  }
+
+  private detachNormalPvpSocket(socketId: string, now = Date.now()) {
+    const roomId = this.normalSocketRoom.get(socketId);
+    if (!roomId) return;
+
+    const room = this.normalRooms.get(roomId);
+    const player = room?.players?.get(socketId);
+    if (player) {
+      // Stop movement immediately but preserve drone/camera/state for resume.
+      player.input = {};
+      player.disconnectedAt = now;
+      player.lastInputReceivedAt = now - 1000;
+    }
+
+    this.normalSocketRoom.delete(socketId);
+    this.normalPvpSocketResumeToken.delete(socketId);
+  }
+
+  private rebindNormalPvpResumeSeat(room: any, player: any, client: Socket, token: string) {
+    const previousSocketId = String(player.id);
+    const nextSocketId = String(client.id);
+
+    if (previousSocketId !== nextSocketId) {
+      room.players.delete(previousSocketId);
+      this.normalSocketRoom.delete(previousSocketId);
+      this.normalPvpSocketResumeToken.delete(previousSocketId);
+      this.remapNormalPvpPlayerReferences(room, previousSocketId, nextSocketId);
+
+      player.id = nextSocketId;
+      room.players.set(nextSocketId, player);
+
+      const previousSocket = this.server.sockets.sockets.get(previousSocketId);
+      if (previousSocket?.connected) previousSocket.leave(room.id);
+    }
+
+    const now = Date.now();
+    player.disconnectedAt = 0;
+    player.lastSeenAt = now;
+    player.lastInputReceivedAt = now;
+    player.input = {};
+    this.normalSocketRoom.set(nextSocketId, room.id);
+    this.rememberNormalPvpResumeSeat(room, player, token);
+    client.join(room.id);
+    this.markRoomOccupied(room);
+  }
+
   getNormalRoomBySocket(socketId) {
     const roomId = this.normalSocketRoom.get(socketId);
     if (!roomId) return null;
     return this.normalRooms.get(roomId) || null;
   }
 
-  removeNormalPlayer(socketId) {
-    const roomId = this.normalSocketRoom.get(socketId);
-    if (!roomId) return;
+  removeNormalPlayer(socketId, options: { explicit?: boolean } = {}) {
+    let roomId = this.normalSocketRoom.get(socketId) || null;
+    let room = roomId ? this.normalRooms.get(roomId) : null;
 
-    const room = this.normalRooms.get(roomId);
-    if (room) {
-      const player = room.players.get(socketId);
-      // Preserve the personal Normal PvP record even when the player exits
-      // before the spectator screen closes.
-      this.recordNormalPvpBest(player);
-      room.players.delete(socketId);
-      this.server.sockets.sockets.get(socketId)?.leave(roomId);
-      this.markRoomEmptyIfNeeded(room);
+    // A resumable seat deliberately has no active socket mapping while the
+    // transport is down. Cleanup still needs to find and remove it after grace.
+    if (!room) {
+      for (const candidate of this.normalRooms.values()) {
+        if (candidate?.players?.has(socketId)) {
+          room = candidate;
+          roomId = candidate.id;
+          break;
+        }
+      }
     }
+    if (!room || !roomId) return;
 
+    const player = room.players.get(socketId);
+    const resumeToken =
+      this.normalPvpSocketResumeToken.get(socketId) ||
+      String(player?.resumeToken || "") ||
+      null;
+
+    // Preserve the personal Normal PvP record even when the player exits
+    // before the spectator screen closes.
+    this.recordNormalPvpBest(player);
+    room.players.delete(socketId);
+    this.server.sockets.sockets.get(socketId)?.leave(roomId);
+    this.markRoomEmptyIfNeeded(room);
+
+    if (resumeToken) {
+      const seat = this.normalPvpResumeSeats.get(resumeToken);
+      if (!seat || String(seat.playerId) === String(socketId)) {
+        this.normalPvpResumeSeats.delete(resumeToken);
+      }
+    }
     this.normalSocketRoom.delete(socketId);
+    this.normalPvpSocketResumeToken.delete(socketId);
   }
 
   cleanupNormalRoom(room, now) {
     for (const player of room.players.values()) {
+      const disconnectedAt = Number(player?.disconnectedAt || 0);
+      if (disconnectedAt > 0) {
+        if (now - disconnectedAt >= NORMAL_PVP_RECONNECT_GRACE_MS) {
+          this.removeNormalPlayer(player.id);
+        }
+        continue;
+      }
+
       const socketOnline = this.server.sockets.sockets.has(player.id);
       // A spectator has no movement input after being eliminated. Keep an
       // online dead player in the room so their camera can continue following

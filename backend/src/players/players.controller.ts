@@ -14,4 +14,4 @@ export class PlayersController {
   leaderboard() {
     return this.playersService.getLeaderboard();
   }
-}
+} 

@@ -60,11 +60,7 @@ const MOBILE_RENDER_LIMITS = Object.freeze({
 const REMOTE_SMOOTHING = 24;
 const REMOTE_PREDICTION = 1.0;
 const REMOTE_HARD_SNAP_DISTANCE = 360;
-const REMOTE_MAX_EXTRAPOLATE_MS = 180;
-// Normal PvP has one full-state lane rather than Zone's compact tuple lane.
-// A short presentation lead lets a good PC render remote players continuously
-// even when the sender's weak browser delayed one input timer.
-const REMOTE_PRESENTATION_LEAD_MS = 34;
+const REMOTE_MAX_EXTRAPOLATE_MS = 80;
 
 const PROJECTILE_SMOOTHING = 18;
 const PROJECTILE_FRAME_SCALE = 60;
@@ -92,7 +88,7 @@ const LOCAL_COLLECT_HIDE_TTL = 1800;
 // latest input. It cuts mobile/network pressure roughly in half vs 60 Hz.
 const INPUT_SEND_INTERVAL_MS = 20;
 const INPUT_HEARTBEAT_MS = 240;
-const SNAPSHOT_INTERPOLATION_DELAY_MS = 36;
+const SNAPSHOT_INTERPOLATION_DELAY_MS = 70;
 const SNAPSHOT_BUFFER_TTL_MS = 520;
 
 // Keep PvP desktop framing exactly locked to BattleRoyaleMode.
@@ -428,6 +424,42 @@ function getGuestStatsKey() {
     return next;
   } catch {
     return createGuestStatsKey();
+  }
+}
+
+
+// Normal PvP keeps the same in-memory seat across a short transport loss.
+// This token belongs to one browser tab only; explicit EXIT TO MENU removes it.
+const NORMAL_PVP_RESUME_STORAGE_KEY = "drone-swarm:normal-pvp-resume-v1";
+
+function createNormalPvpResumeToken() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID().replace(/-/g, "");
+  }
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+}
+
+function getNormalPvpResumeToken() {
+  if (typeof window === "undefined") return createNormalPvpResumeToken();
+
+  try {
+    const existing = String(sessionStorage.getItem(NORMAL_PVP_RESUME_STORAGE_KEY) || "").trim();
+    if (/^[A-Za-z0-9_-]{20,160}$/.test(existing)) return existing;
+
+    const next = createNormalPvpResumeToken();
+    sessionStorage.setItem(NORMAL_PVP_RESUME_STORAGE_KEY, next);
+    return next;
+  } catch {
+    return createNormalPvpResumeToken();
+  }
+}
+
+function clearNormalPvpResumeToken() {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.removeItem(NORMAL_PVP_RESUME_STORAGE_KEY);
+  } catch {
+    // Server-side explicit leave still clears the resumable seat.
   }
 }
 
@@ -1170,58 +1202,12 @@ function reconcileHeldInputUnit(local, server, now = performance.now(), lastLoca
   };
 }
 
-function getRemoteVelocity(snapshot) {
-  const fallbackSpeed =
-    CLIENT_SPEED *
-    NORMAL_BASE_MOVE_SPEED_MULTIPLIER *
-    Math.max(1, Number(snapshot?.moveSpeedMultiplier || 1));
-
-  const velocityX = Number(snapshot?.velocityX);
-  const velocityY = Number(snapshot?.velocityY);
-
-  return {
-    x: Number.isFinite(velocityX)
-      ? velocityX
-      : Number(snapshot?.moveX || 0) * fallbackSpeed,
-    y: Number.isFinite(velocityY)
-      ? velocityY
-      : Number(snapshot?.moveY || 0) * fallbackSpeed,
-  };
-}
-
-function extrapolateRemoteSnapshot(snapshot, aheadMs = 0) {
-  if (!snapshot) return snapshot;
-
-  const safeAheadMs = clamp(
-    Number(aheadMs || 0) + REMOTE_PRESENTATION_LEAD_MS,
-    0,
-    REMOTE_MAX_EXTRAPOLATE_MS,
-  );
-
-  if (!snapshot.isMoving || safeAheadMs <= 0) return snapshot;
-
-  const velocity = getRemoteVelocity(snapshot);
-  const seconds = safeAheadMs / 1000;
-
-  return {
-    ...snapshot,
-    x: Number(snapshot.x || 0) + velocity.x * seconds,
-    y: Number(snapshot.y || 0) + velocity.y * seconds,
-  };
-}
-
 function interpolateSnapshotBuffer(buffer = [], renderTime) {
   if (!buffer.length) return null;
-
-  const newest = buffer[buffer.length - 1];
-  const newestAt = Number(newest?.__receivedAt || renderTime);
-
-  if (buffer.length === 1 || renderTime >= newestAt) {
-    return extrapolateRemoteSnapshot(newest, renderTime - newestAt);
-  }
+  if (buffer.length === 1) return buffer[0];
 
   let older = buffer[0];
-  let newer = newest;
+  let newer = buffer[buffer.length - 1];
 
   for (let i = 0; i < buffer.length - 1; i += 1) {
     const a = buffer[i];
@@ -1236,15 +1222,15 @@ function interpolateSnapshotBuffer(buffer = [], renderTime) {
     }
   }
 
-  const aTime = Number(older.__receivedAt || renderTime);
-  const bTime = Number(newer.__receivedAt || aTime);
+  const aTime = older.__receivedAt || renderTime;
+  const bTime = newer.__receivedAt || aTime;
   const span = Math.max(1, bTime - aTime);
   const t = clamp((renderTime - aTime) / span, 0, 1);
 
   return {
     ...newer,
-    x: lerp(Number(older.x ?? newer.x ?? 0), Number(newer.x ?? older.x ?? 0), t),
-    y: lerp(Number(older.y ?? newer.y ?? 0), Number(newer.y ?? older.y ?? 0), t),
+    x: lerp(older.x ?? newer.x, newer.x ?? older.x, t),
+    y: lerp(older.y ?? newer.y, newer.y ?? older.y, t),
     hp: newer.hp,
     energy: newer.energy,
     drones: newer.drones,
@@ -1294,6 +1280,7 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const userRef = useRef(user);
   userRef.current = user;
   const socketRef = useRef(null);
+  const normalResumeTokenRef = useRef(getNormalPvpResumeToken());
   const lastNormalServerPacketAtRef = useRef(Date.now());
   const keysRef = useRef({});
   const mouseRef = useRef({
@@ -1721,6 +1708,9 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         // Fără această cheie, backend-ul nu poate lega kill-urile Guest-ului
         // de aceeași intrare din Global Top 10.
         guestStatsKey: isGuest ? getGuestStatsKey() : null,
+        // Same tab token lets the backend rebind this exact drone after a
+        // transient Socket.IO id change, without resetting the camera/arena.
+        resumeToken: normalResumeTokenRef.current,
         username: getDisplayName(currentUser),
         skin: getSelectedSkin(currentUser),
       });
@@ -1755,7 +1745,9 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       clearNormalSessionCheck();
       clearJoinRetry();
       joinAttempts = 0;
-      setConnectionError("Se restabilește conexiunea la Normal PvP...");
+      // Keep the current WebGL frame visible. This is a silent transport
+      // repair, not a game failure; `connect` rebinds the same server seat.
+      setConnectionError("");
       socket.disconnect();
       if (normalForcedReconnectTimer !== null) window.clearTimeout(normalForcedReconnectTimer);
       normalForcedReconnectTimer = window.setTimeout(() => {
@@ -1796,10 +1788,13 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       requestNormalPvpJoin();
     };
 
-    const handleNormalDisconnect = (reason) => {
+    const handleNormalDisconnect = () => {
       clearNormalSessionCheck();
-      if (!disposed && reason !== "io client disconnect") {
-        setConnectionError("Conexiunea Normal PvP s-a întrerupt. Se reconectează...");
+      // Same behavior as Zone PvP: keep camera/world on screen and let the
+      // Socket.IO reconnect + resume token restore the existing Normal seat.
+      if (!disposed) {
+        setConnectionError("");
+        lastNormalServerPacketAtRef.current = Date.now();
       }
     };
 
@@ -1809,9 +1804,10 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
 
     socket.on("connect_error", () => {
-      setConnectionError(
-        "Nu ma pot conecta la serverul PvP. Verifica Render/WebSocket.",
-      );
+      // Do not cover the arena with a Connection lost panel during a transient
+      // Render/WebSocket retry. Socket.IO keeps retrying and the resume seat is
+      // restored on the next successful connect.
+      if (!disposed) setConnectionError("");
     });
 
     const applyCollectSync = (event = {}) => {
@@ -2215,7 +2211,10 @@ function NormalPvpArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       socket.off("normal-pvp:collision", applyNormalCollisionImpulse);
       socket.off("normal-pvp:combat", applyPrivateCombatEvent);
       socket.off("normal-pvp:world-delta", applyWorldItemDelta);
-      socket.emit("normal-pvp:leave");
+      // Component cleanup is an explicit Exit to Menu, unlike a transport
+      // disconnect. Remove the resumable seat so a later new match starts clean.
+      clearNormalPvpResumeToken();
+      socket.emit("normal-pvp:leave", { resumeToken: normalResumeTokenRef.current });
       socket.disconnect();
       socketRef.current = null;
       sendInputRef.current = () => {};

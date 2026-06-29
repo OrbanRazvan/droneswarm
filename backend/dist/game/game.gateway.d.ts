@@ -5,6 +5,8 @@ export declare class GameGateway {
     private socketRoom;
     private normalRooms;
     private normalSocketRoom;
+    private normalPvpResumeSeats;
+    private normalPvpSocketResumeToken;
     private battleRoyaleOnlineRooms;
     private battleRoyaleOnlineSocketRoom;
     private zonePvpRooms;
@@ -227,8 +229,16 @@ export declare class GameGateway {
         lastInputReceivedAt: any;
     };
     findOrCreateNormalRoom(): any;
+    private normalizeNormalPvpResumeToken;
+    private rememberNormalPvpResumeSeat;
+    private findNormalPvpResumeSeat;
+    private remapNormalPvpPlayerReferences;
+    private detachNormalPvpSocket;
+    private rebindNormalPvpResumeSeat;
     getNormalRoomBySocket(socketId: any): any;
-    removeNormalPlayer(socketId: any): void;
+    removeNormalPlayer(socketId: any, options?: {
+        explicit?: boolean;
+    }): void;
     cleanupNormalRoom(room: any, now: any): void;
     getNormalSpawn(room: any): {
         x: number;

@@ -5,21 +5,21 @@ export declare class PlayersController {
     login(body: {
         username: string;
     }): Promise<{
-        skin: string;
         id: number;
         username: string;
         mass: number;
         drones: number;
+        skin: string;
         coins: number;
         createdAt: Date;
         updatedAt: Date;
     }>;
     leaderboard(): Promise<{
-        skin: string;
         id: number;
         username: string;
         mass: number;
         drones: number;
+        skin: string;
         coins: number;
         createdAt: Date;
         updatedAt: Date;
