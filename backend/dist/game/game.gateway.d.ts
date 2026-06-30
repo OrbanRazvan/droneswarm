@@ -116,6 +116,22 @@ export declare class GameGateway {
     startLoop(): void;
     updateRoomStatus(room: any, now: any): void;
     updateBattleRoyaleOnlineRoomStatus(room: any, now: any): void;
+    private getCoreHeistTeamLabel;
+    private getCoreHeistTeamPlayers;
+    private assignCoreHeistTeam;
+    private getCoreHeistExtractor;
+    private getCoreHeistVault;
+    private getCoreHeistSpawn;
+    private createCoreHeistState;
+    private initializeCoreHeistRoom;
+    private serializeCoreHeist;
+    private dropCoreHeistCore;
+    private resetCoreHeistCore;
+    private respawnCoreHeistPlayer;
+    private reviveCoreHeistPlayers;
+    private updateCoreHeistBots;
+    private updateCoreHeistObjective;
+    private finishCoreHeistMatch;
     updateZonePvpRoomStatus(room: any, now: any): void;
     isBattlePrepareLocked(room: any, now?: number): boolean;
     updatePlayers(room: any, now: any, zoneRadius: any, deltaFrames?: number): void;
@@ -251,7 +267,7 @@ export declare class GameGateway {
     cleanupBattleRoyaleOnlineRoom(room: any, now: any): void;
     getBattleRoyaleOnlineZoneRadius(room: any): number;
     broadcastBattleRoyaleOnlineRoomState(room: any, now: any): void;
-    findOrCreateZonePvpRoom(participantId?: string | null, userId?: string | null): any;
+    findOrCreateZonePvpRoom(participantId?: string | null, userId?: string | null, coreHeistMode?: boolean): any;
     getZonePvpRoomBySocket(socketId: any): any;
     removeZonePvpPlayer(socketId: string, options?: {
         explicit?: boolean;

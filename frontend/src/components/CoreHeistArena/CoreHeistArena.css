@@ -1,0 +1,267 @@
+/* Core Heist overlays only. Shared PvP movement, HUD and mobile controls come
+   from ZonePvpArena.css so this mode keeps the same responsive control layout. */
+
+.core-heist-dom-arena {
+  background: #06101d;
+}
+
+.core-heist-dom-arena .real-leaderboard h3 {
+  color: #f7dc83;
+}
+
+.core-heist-dom-arena .real-leaderboard-row.is-me {
+  border-color: rgba(247, 220, 131, 0.72);
+  background: rgba(247, 220, 131, 0.11);
+}
+
+.core-heist-team-panel {
+  border-color: rgba(247, 220, 131, 0.46) !important;
+  background:
+    linear-gradient(135deg, rgba(0, 234, 255, 0.12), rgba(255, 159, 28, 0.10)),
+    rgba(3, 12, 24, 0.86) !important;
+}
+
+.core-heist-team-panel strong {
+  color: #f7dc83;
+}
+
+.core-heist-match-timer,
+.core-heist-scoreboard,
+.core-heist-objective-panel {
+  position: fixed;
+  z-index: 42;
+  pointer-events: none;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.core-heist-match-timer {
+  top: 21px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 136px;
+  padding: 8px 14px 9px;
+  border: 1px solid rgba(247, 220, 131, 0.5);
+  border-radius: 12px;
+  text-align: center;
+  background: rgba(2, 9, 20, 0.86);
+  box-shadow: 0 0 20px rgba(247, 220, 131, 0.10);
+}
+
+.core-heist-match-timer span,
+.core-heist-match-timer strong {
+  display: block;
+}
+
+.core-heist-match-timer span {
+  color: #a9b8c8;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 1.4px;
+}
+
+.core-heist-match-timer strong {
+  margin-top: 2px;
+  color: #f7dc83;
+  font-size: 18px;
+  letter-spacing: 1px;
+}
+
+.core-heist-scoreboard {
+  top: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  grid-template-columns: minmax(72px, 1fr) 104px minmax(72px, 1fr);
+  align-items: center;
+  width: min(388px, calc(100vw - 34px));
+  min-height: 58px;
+  overflow: hidden;
+  border: 1px solid rgba(220, 237, 255, 0.22);
+  border-radius: 14px;
+  background: rgba(2, 9, 20, 0.88);
+  box-shadow: 0 0 26px rgba(0, 0, 0, 0.3);
+}
+
+.core-heist-score-side {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 58px;
+  opacity: 0.73;
+}
+
+.core-heist-score-side span {
+  font-size: 10px;
+  font-weight: 1000;
+  letter-spacing: 1.1px;
+}
+
+.core-heist-score-side strong {
+  font-size: 25px;
+  line-height: 1;
+}
+
+.core-heist-score-side.cyan {
+  color: #62efff;
+  background: linear-gradient(90deg, rgba(0, 234, 255, 0.16), transparent);
+}
+
+.core-heist-score-side.orange {
+  color: #ffbf61;
+  background: linear-gradient(270deg, rgba(255, 159, 28, 0.17), transparent);
+}
+
+.core-heist-score-side.is-your-team {
+  opacity: 1;
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+.core-heist-score-middle {
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+  text-align: center;
+  color: #f5f7ff;
+}
+
+.core-heist-score-middle b {
+  font-size: 12px;
+  letter-spacing: 0.9px;
+}
+
+.core-heist-score-middle small {
+  color: #a7b6c5;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.core-heist-objective-panel {
+  top: 145px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(420px, calc(100vw - 34px));
+  padding: 10px 14px;
+  border: 1px solid rgba(247, 220, 131, 0.38);
+  border-radius: 12px;
+  text-align: center;
+  background: rgba(2, 9, 20, 0.78);
+}
+
+.core-heist-objective-panel b,
+.core-heist-objective-panel span {
+  display: block;
+}
+
+.core-heist-objective-panel b {
+  color: #f7dc83;
+  font-size: 12px;
+  letter-spacing: 0.8px;
+}
+
+.core-heist-objective-panel span {
+  margin-top: 4px;
+  color: #c1d0df;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.core-heist-redeploy-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 75;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: rgba(2, 8, 16, 0.32);
+}
+
+.core-heist-redeploy-card {
+  min-width: min(286px, calc(100vw - 40px));
+  padding: 24px 26px;
+  border: 1px solid rgba(255, 126, 120, 0.52);
+  border-radius: 18px;
+  text-align: center;
+  background: rgba(13, 5, 12, 0.9);
+  box-shadow: 0 0 30px rgba(255, 64, 64, 0.18);
+}
+
+.core-heist-redeploy-card strong,
+.core-heist-redeploy-card b,
+.core-heist-redeploy-card span {
+  display: block;
+}
+
+.core-heist-redeploy-card strong {
+  color: #ff8580;
+  font-size: 13px;
+  letter-spacing: 1.4px;
+}
+
+.core-heist-redeploy-card b {
+  margin-top: 7px;
+  color: #fff;
+  font-size: 22px;
+}
+
+.core-heist-redeploy-card span {
+  margin-top: 8px;
+  color: #b9c8d7;
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .core-heist-match-timer {
+    top: 10px;
+    min-width: 112px;
+    padding: 6px 10px 7px;
+  }
+
+  .core-heist-match-timer strong {
+    font-size: 15px;
+  }
+
+  .core-heist-scoreboard {
+    top: 52px;
+    min-height: 46px;
+    grid-template-columns: 1fr 92px 1fr;
+  }
+
+  .core-heist-score-side {
+    min-height: 46px;
+    gap: 5px;
+  }
+
+  .core-heist-score-side strong {
+    font-size: 20px;
+  }
+
+  .core-heist-score-side span {
+    font-size: 8px;
+  }
+
+  .core-heist-score-middle b {
+    font-size: 10px;
+  }
+
+  .core-heist-objective-panel {
+    top: 109px;
+    padding: 8px 10px;
+  }
+
+  .core-heist-objective-panel b {
+    font-size: 10px;
+  }
+
+  .core-heist-objective-panel span {
+    font-size: 9px;
+  }
+
+  .core-heist-dom-arena .collect-counter {
+    top: 164px;
+  }
+
+  .core-heist-dom-arena .normal-pvp-top-hud {
+    top: 164px;
+  }
+}

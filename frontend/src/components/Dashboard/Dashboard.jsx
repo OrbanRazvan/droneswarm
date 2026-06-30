@@ -3,7 +3,7 @@ import { io } from "socket.io-client";
 import NormalPvpArena from "../NormalPvpArena/NormalPvpArena";
 import BattleRoyale from "../BattleRoyaleMode/BattleRoyaleMode";
 import ZonePvpArena from "../ZonePvpArena/ZonePvpArena";
-import Adventure from "../Adventure/Adventure";
+import CoreHeistArena from "../CoreHeistArena/CoreHeistArena";
 import PixiArenaRenderer from "../PixiArenaRenderer/PixiArenaRenderer";
 import "./Dashboard.css";
 
@@ -645,9 +645,9 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
             onExitToMenu={handleExitToHangar}
             graphicsQuality={graphicsQuality}
           />
-        ) : selectedMode === "adventure" ? (
-          <Adventure
-            key={`adventure-${arenaSessionId}`}
+        ) : selectedMode === "core-heist" ? (
+          <CoreHeistArena
+            key={`core-heist-${arenaSessionId}`}
             user={arenaUser}
             onExitToMenu={handleExitToHangar}
             graphicsQuality={graphicsQuality}
@@ -768,10 +768,10 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
           </button>
 
           <button
-            className="secondary-wide adventure-mode-wide"
-            onClick={() => launchArena("adventure")}
+            className="secondary-wide core-heist-wide"
+            onClick={() => launchArena("core-heist")}
           >
-            Adventure
+            Core Heist · Teams
           </button>
 
         </aside>
