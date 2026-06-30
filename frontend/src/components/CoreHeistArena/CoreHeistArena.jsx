@@ -3,7 +3,6 @@ import { io } from "socket.io-client";
 import MiniMap from "../MiniMap/MiniMap";
 import PixiArenaRenderer from "../PixiArenaRenderer/PixiArenaRenderer";
 import "../GameArena/GameArena.css";
-import "../ZonePvpArena/ZonePvpArena.css";
 import "./CoreHeistArena.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
@@ -206,18 +205,21 @@ function isRealMobileDevice() {
 
   const ua = navigator.userAgent || "";
   const isPhoneUa = /Android.*Mobile|iPhone|iPod|IEMobile|Opera Mini/i.test(ua);
+  const isIpad = /iPad/i.test(ua) || (
+    navigator.platform === "MacIntel" && Number(navigator.maxTouchPoints || 0) > 1
+  );
   const hasTouch = navigator.maxTouchPoints > 0 || "ontouchstart" in window;
-  const isPortrait = window.innerHeight >= window.innerWidth;
-
   const shortSide = Math.min(window.innerWidth, window.innerHeight);
   const longSide = Math.max(window.innerWidth, window.innerHeight);
 
+  // A phone remains a phone after it rotates. The old portrait-only test
+  // disabled joystick / attack / shield exactly when the player switched to
+  // landscape, which is the intended gameplay orientation.
   return Boolean(
-    isPhoneUa &&
+    (isPhoneUa || isIpad) &&
     hasTouch &&
-    isPortrait &&
-    shortSide <= 980 &&
-    longSide <= 2600
+    shortSide <= 1180 &&
+    longSide <= 3000
   );
 }
 
@@ -1391,6 +1393,129 @@ function clearCoreHeistDepartedRoom() {
   }
 }
 
+function getCoreHeistTeamLabel(team) {
+  return String(team || "cyan") === "orange" ? "RED" : "BLUE";
+}
+
+function getCoreHeistFlagLabel(team) {
+  return `${getCoreHeistTeamLabel(team)} FLAG`;
+}
+
+function resolveCoreHeistPlayerName(flag, state = {}) {
+  const directName = String(
+    flag?.carrierName ||
+    flag?.lastCarrierName ||
+    flag?.playerName ||
+    "",
+  ).trim();
+
+  if (directName) return directName;
+
+  const carrierId = String(flag?.carrierId || flag?.lastCarrierId || "");
+  if (!carrierId) return "A PLAYER";
+
+  const candidates = [
+    state?.you,
+    state?.spectatingPlayer,
+    ...(Array.isArray(state?.players) ? state.players : []),
+    ...(Array.isArray(state?.leaderboard) ? state.leaderboard : []),
+  ];
+
+  const matched = candidates.find(
+    (player) => String(player?.id || "") === carrierId,
+  );
+
+  return String(matched?.username || matched?.name || "A PLAYER");
+}
+
+function createCoreHeistFlagHistory(heist, state = {}) {
+  const flags = Array.isArray(heist?.flags) ? heist.flags : [];
+
+  return new Map(
+    flags.map((flag) => {
+      const id = String(flag?.id || flag?.team || Math.random());
+      return [
+        id,
+        {
+          id,
+          team: String(flag?.team || "cyan"),
+          status: String(flag?.status || "home"),
+          carrierId: String(flag?.carrierId || ""),
+          carrierName: resolveCoreHeistPlayerName(flag, state),
+        },
+      ];
+    }),
+  );
+}
+
+
+function buildCoreHeistAnnouncement(rawEvent = {}) {
+  const type = String(rawEvent?.type || rawEvent?.kind || "").trim().toLowerCase();
+  if (!["taken", "dropped", "returned", "captured"].includes(type)) return null;
+
+  const flagTeam = String(rawEvent?.flagTeam || rawEvent?.flag?.team || "cyan") === "orange"
+    ? "orange"
+    : "cyan";
+  const actorTeam = String(rawEvent?.actorTeam || rawEvent?.team || "") === "orange"
+    ? "orange"
+    : "cyan";
+  const scoringTeam = String(rawEvent?.scoreTeam || rawEvent?.team || actorTeam) === "orange"
+    ? "orange"
+    : "cyan";
+  const actorName = String(rawEvent?.actorName || rawEvent?.playerName || "A PLAYER").trim() || "A PLAYER";
+  const flagLabel = getCoreHeistFlagLabel(flagTeam);
+  const score = {
+    cyan: Math.max(0, Number(rawEvent?.score?.cyan || 0)),
+    orange: Math.max(0, Number(rawEvent?.score?.orange || 0)),
+  };
+  const targetScore = Math.max(1, Number(rawEvent?.targetScore || 3));
+
+  if (type === "taken") {
+    return {
+      id: String(rawEvent?.id || `heist-taken-${Date.now()}-${Math.random()}`),
+      kind: "taken",
+      team: actorTeam,
+      title: `${actorName} TOOK THE ${flagLabel}`,
+      detail: `${getCoreHeistTeamLabel(actorTeam)} TEAM IS RUNNING THE FLAG`,
+      duration: 4300,
+    };
+  }
+
+  if (type === "dropped") {
+    return {
+      id: String(rawEvent?.id || `heist-dropped-${Date.now()}-${Math.random()}`),
+      kind: "dropped",
+      team: actorTeam,
+      title: `${actorName} DROPPED THE ${flagLabel}`,
+      detail: `THE FLAG IS ON THE GROUND — SECURE IT`,
+      duration: 4300,
+    };
+  }
+
+  if (type === "returned") {
+    const returnedBy = actorName === "SYSTEM" ? "THE BASE" : actorName;
+    return {
+      id: String(rawEvent?.id || `heist-returned-${Date.now()}-${Math.random()}`),
+      kind: "returned",
+      team: flagTeam,
+      title: `${returnedBy} RETURNED THE ${flagLabel}`,
+      detail: `${getCoreHeistTeamLabel(flagTeam)} FLAG IS SAFE AT HOME`,
+      duration: 4300,
+    };
+  }
+
+  return {
+    id: String(rawEvent?.id || `heist-captured-${Date.now()}-${Math.random()}`),
+    kind: "capture",
+    team: scoringTeam,
+    title: `${actorName} CAPTURED THE ${flagLabel}`,
+    detail: `${getCoreHeistTeamLabel(scoringTeam)} SCORE: ${score[scoringTeam]} / ${targetScore}  •  ${getCoreHeistTeamLabel(
+      scoringTeam === "cyan" ? "orange" : "cyan",
+    )}: ${score[scoringTeam === "cyan" ? "orange" : "cyan"]} / ${targetScore}`,
+    duration: 5200,
+  };
+}
+
 function FlyingAttackDrone({ projectile }) {
   const skin = normalizeSkin(projectile.skin || "cyan");
   const angle = projectile.angle || Math.atan2(projectile.vy || 0, projectile.vx || 1);
@@ -1531,6 +1656,20 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   // Last authoritative self snapshot. This is visual-only fallback state for
   // the same instant WebGL combat feedback used by Battle Royale.
   const selfCombatSnapshotRef = useRef(null);
+  // Objective events are intentionally local HUD state. World state remains
+  // entirely server-authoritative; this only turns the replicated flag changes
+  // into one clear, cinematic announcement in the middle of the screen.
+  const heistEventHistoryRef = useRef({
+    roomId: null,
+    initialized: false,
+    score: { cyan: 0, orange: 0 },
+    flags: new Map(),
+  });
+  const heistAnnouncementTimerRef = useRef(null);
+  // Objective events travel on a reliable socket lane. Keep their ids briefly
+  // so the same event arriving later inside a state snapshot cannot replay.
+  const heistAnnouncementSeenIdsRef = useRef(new Map());
+  const showHeistAnnouncementRef = useRef(() => {});
 
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
   const joystickPointerRef = useRef(null);
@@ -1604,6 +1743,35 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const [mobileAttackActive, setMobileAttackActive] = useState(false);
   const [mobileShieldActive, setMobileShieldActive] = useState(false);
   const [battleBeginFlashUntil, setBattleBeginFlashUntil] = useState(0);
+  const [heistAnnouncement, setHeistAnnouncement] = useState(null);
+
+  showHeistAnnouncementRef.current = (rawEvent = {}) => {
+    const announcement = buildCoreHeistAnnouncement(rawEvent);
+    if (!announcement) return;
+
+    const now = Date.now();
+    const seen = heistAnnouncementSeenIdsRef.current;
+    for (const [id, seenAt] of seen.entries()) {
+      if (now - Number(seenAt || 0) > 30000) seen.delete(id);
+    }
+
+    if (announcement.id && seen.has(announcement.id)) return;
+    if (announcement.id) seen.set(announcement.id, now);
+
+    setHeistAnnouncement({
+      ...announcement,
+      id: `${announcement.id}-${now}`,
+    });
+
+    if (heistAnnouncementTimerRef.current) {
+      window.clearTimeout(heistAnnouncementTimerRef.current);
+    }
+
+    heistAnnouncementTimerRef.current = window.setTimeout(() => {
+      setHeistAnnouncement(null);
+      heistAnnouncementTimerRef.current = null;
+    }, Number(announcement.duration || 4300));
+  };
 
   useEffect(() => {
     // Zone PvP uses direct WebSocket. Polling can queue HTTP packets behind
@@ -1734,6 +1902,13 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       zoneEntityMetaRef.current.clear();
       zoneProjectileMetaRef.current.clear();
       combatEventMapRef.current.clear();
+      heistEventHistoryRef.current = {
+        roomId: null,
+        initialized: false,
+        score: { cyan: 0, orange: 0 },
+        flags: new Map(),
+      };
+      setHeistAnnouncement(null);
       stableOrbMapRef.current.clear();
       stableEnergyMapRef.current.clear();
       stableMinimapOrbMapRef.current.clear();
@@ -2733,6 +2908,53 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
     };
 
+    const applyCoreHeistEvent = (event = {}) => {
+      if (!event || disposed || intentionalExitRef.current) return;
+
+      lastZoneServerPacketAtRef.current = Date.now();
+
+      // Score becomes visible immediately from the reliable objective lane;
+      // the following full state remains the authoritative reconciliation.
+      if (event?.score && typeof event.score === "object") {
+        const nextScore = {
+          cyan: Math.max(0, Number(event.score.cyan || 0)),
+          orange: Math.max(0, Number(event.score.orange || 0)),
+        };
+
+        worldRef.current = {
+          ...worldRef.current,
+          heist: {
+            ...(worldRef.current.heist || {}),
+            score: nextScore,
+            targetScore: Number(event.targetScore || worldRef.current.heist?.targetScore || 3),
+            latestEvent: event,
+          },
+        };
+
+        setHudData((previous) => ({
+          ...previous,
+          heist: {
+            ...(previous?.heist || {}),
+            score: nextScore,
+            targetScore: Number(event.targetScore || previous?.heist?.targetScore || 3),
+            latestEvent: event,
+          },
+        }));
+
+        setRenderData((previous) => ({
+          ...previous,
+          heist: {
+            ...(previous?.heist || {}),
+            score: nextScore,
+            targetScore: Number(event.targetScore || previous?.heist?.targetScore || 3),
+            latestEvent: event,
+          },
+        }));
+      }
+
+      showHeistAnnouncementRef.current(event);
+    };
+
     const applyEntityRemoved = (event = {}) => {
       const currentRoomId = String(zonePhaseRef.current?.roomId || worldRef.current?.roomId || "");
       const eventRoomId = String(event?.roomId || "");
@@ -2830,6 +3052,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     // incomplete entity definitions on mobile and make bots disappear.
     socket.on("zone-pvp:collision", applyZoneCollisionImpulse);
     socket.on("zone-pvp:combat", applyPrivateCombatEvent);
+    socket.on("zone-pvp:heist-event", applyCoreHeistEvent);
     socket.on("zone-pvp:collect", applyCollectSync);
     socket.on("zone-pvp:world-delta", applyWorldItemDelta);
     socket.on("zone-pvp:entity-removed", applyEntityRemoved);
@@ -2963,6 +3186,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       socket.off("zone-pvp:movement", applyMovementFrame);
       socket.off("zone-pvp:collision", applyZoneCollisionImpulse);
       socket.off("zone-pvp:combat", applyPrivateCombatEvent);
+      socket.off("zone-pvp:heist-event", applyCoreHeistEvent);
       socket.off("zone-pvp:collect", applyCollectSync);
       socket.off("zone-pvp:world-delta", applyWorldItemDelta);
       socket.off("zone-pvp:entity-removed", applyEntityRemoved);
@@ -2980,6 +3204,156 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       sendInputRef.current = () => {};
     };
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (heistAnnouncementTimerRef.current) {
+        window.clearTimeout(heistAnnouncementTimerRef.current);
+        heistAnnouncementTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const source = hudData?.heist || renderData?.heist;
+    if (!source) return;
+
+    const roomId = String(hudData?.roomId || renderData?.roomId || "");
+    const history = heistEventHistoryRef.current;
+    const nextScore = {
+      cyan: Number(source?.score?.cyan || 0),
+      orange: Number(source?.score?.orange || 0),
+    };
+    const nextFlags = createCoreHeistFlagHistory(source, hudData?.heist ? hudData : renderData);
+
+    // The direct `zone-pvp:heist-event` socket event is the instant path.
+    // State retains the latest events too, so a reconnect or one dropped socket
+    // packet still produces the same visible objective message.
+    const retainedEvents = Array.isArray(source?.events)
+      ? source.events
+      : source?.latestEvent
+        ? [source.latestEvent]
+        : [];
+    const latestRetainedEvent = retainedEvents.length
+      ? retainedEvents[retainedEvents.length - 1]
+      : null;
+
+    if (latestRetainedEvent?.id) {
+      showHeistAnnouncementRef.current(latestRetainedEvent);
+    }
+
+    // The initial state is a snapshot, not a new action. It must establish a
+    // baseline silently so reconnecting/spectating never plays fake alerts.
+    if (!history.initialized || (roomId && history.roomId && history.roomId !== roomId)) {
+      history.roomId = roomId || history.roomId || null;
+      history.initialized = true;
+      history.score = nextScore;
+      history.flags = nextFlags;
+      return;
+    }
+
+    if (latestRetainedEvent?.id) {
+      history.roomId = roomId || history.roomId || null;
+      history.initialized = true;
+      history.score = nextScore;
+      history.flags = nextFlags;
+      return;
+    }
+
+    const showAnnouncement = (event) => {
+      if (!event?.title) return;
+      const next = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        team: event.team === "orange" ? "orange" : "cyan",
+        kind: event.kind || "objective",
+        title: event.title,
+        detail: event.detail || "",
+      };
+
+      setHeistAnnouncement(next);
+      if (heistAnnouncementTimerRef.current) {
+        window.clearTimeout(heistAnnouncementTimerRef.current);
+      }
+      heistAnnouncementTimerRef.current = window.setTimeout(() => {
+        setHeistAnnouncement(null);
+        heistAnnouncementTimerRef.current = null;
+      }, event.duration || 3900);
+    };
+
+    const targetScore = Math.max(1, Number(source?.targetScore || 3));
+    const cyanDelta = nextScore.cyan - Number(history.score?.cyan || 0);
+    const orangeDelta = nextScore.orange - Number(history.score?.orange || 0);
+    let event = null;
+
+    // A capture is the highest-priority objective event. The previous carried
+    // state keeps the scorer's name even though the server resets the flag home.
+    if (cyanDelta > 0 || orangeDelta > 0) {
+      const scoringTeam = cyanDelta > 0 ? "cyan" : "orange";
+      const capturedFlag = [...history.flags.values()].find(
+        (flag) =>
+          String(flag?.team || "") !== scoringTeam &&
+          String(flag?.status || "") === "carried",
+      );
+      const scorer = String(capturedFlag?.carrierName || "A PLAYER");
+      const score = nextScore[scoringTeam];
+      event = {
+        kind: "capture",
+        team: scoringTeam,
+        title: `${scorer} CAPTURED THE ${getCoreHeistFlagLabel(capturedFlag?.team || (scoringTeam === "cyan" ? "orange" : "cyan"))}`,
+        detail: `${getCoreHeistTeamLabel(scoringTeam)} TEAM SCORES  ${score} / ${targetScore}`,
+        duration: 4700,
+      };
+    }
+
+    if (!event) {
+      for (const [flagId, current] of nextFlags.entries()) {
+        const previous = history.flags.get(flagId);
+        if (!previous) continue;
+
+        const flagLabel = getCoreHeistFlagLabel(current.team);
+        const carrierChanged =
+          current.status === "carried" &&
+          (previous.status !== "carried" || current.carrierId !== previous.carrierId);
+
+        if (carrierChanged) {
+          event = {
+            kind: "taken",
+            team: current.team === "cyan" ? "orange" : "cyan",
+            title: `${current.carrierName} TOOK THE ${flagLabel}`,
+            detail: `STOP THE CARRIER BEFORE THEY REACH THEIR BASE`,
+          };
+          break;
+        }
+
+        if (previous.status === "carried" && current.status === "dropped") {
+          event = {
+            kind: "dropped",
+            team: current.team,
+            title: `${previous.carrierName || "A PLAYER"} DROPPED THE ${flagLabel}`,
+            detail: `THE FLAG IS ON THE GROUND — SECURE IT`,
+          };
+          break;
+        }
+
+        if (previous.status === "dropped" && current.status === "home") {
+          event = {
+            kind: "returned",
+            team: current.team,
+            title: `${flagLabel} RETURNED`,
+            detail: `THE HOME BASE IS SECURE AGAIN`,
+          };
+          break;
+        }
+      }
+    }
+
+    if (event) showAnnouncement(event);
+
+    history.roomId = roomId || history.roomId || null;
+    history.initialized = true;
+    history.score = nextScore;
+    history.flags = nextFlags;
+  }, [hudData?.heist, renderData?.heist, hudData?.roomId, renderData?.roomId]);
 
   useEffect(() => {
     let rafId = 0;
@@ -3369,7 +3743,10 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldTheme: "premium-space-battle",
         staticItemBudget: mobilePerformanceRef.current ? 52 : 110,
         safeZoneRadius: zoneRadius,
-        showZone: true,
+        // Core Heist has no shrinking zone. Keeping Zone's huge radius active
+        // wasted a world-layer draw and could cover objective graphics.
+        showZone: false,
+        heistObjectives: data.heist || null,
         coreColorMap: coreColorMapRef.current,
         otherPlayerSize: 112,
         otherPlayerQuality: 0,
@@ -3825,7 +4202,6 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const rendererBots = rendererDetailedUnits.filter((player) => player.isBot);
 
   const activeBadges = useMemo(() => getActiveEffectBadges(hudYou), [hudYou]);
-  const leaderboard = hudData.leaderboard || renderData.leaderboard || [];
   const renderStatus = renderData.status || "connecting";
   const hudStatus = hudData.status || "connecting";
   const status = getZoneStatusRank(renderStatus) >= getZoneStatusRank(hudStatus)
@@ -3835,6 +4211,16 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const isCountdown = status === "countdown";
   const isMatchmaking = isWaiting || isCountdown;
   const isFinished = status === "finished";
+
+  // Server sends the countdown end-time; this lightweight UI tick updates
+  // 5 → 4 → 3 → 2 → 1 locally even if one volatile state packet is delayed.
+  const [, setCountdownPaint] = useState(0);
+  useEffect(() => {
+    if (status !== "countdown") return undefined;
+    const timer = window.setInterval(() => setCountdownPaint((value) => value + 1), 120);
+    return () => window.clearInterval(timer);
+  }, [status]);
+
   const playersAlive = Math.max(
     Number(hudData.playerCount || 0),
     Number(renderData.playerCount || 0),
@@ -3850,7 +4236,10 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     ),
   );
   const maxPlayers = hudData.maxPlayers || renderData.maxPlayers || 60;
-  const countdown = hudData.countdown || renderData.countdown || 5;
+  const countdownEndsAt = Number(hudData.countdownEndsAt || renderData.countdownEndsAt || 0);
+  const countdown = isCountdown && countdownEndsAt > Date.now()
+    ? Math.max(1, Math.ceil((countdownEndsAt - Date.now()) / 1000))
+    : hudData.countdown || renderData.countdown || 5;
   const winnerName = hudData.winnerName || renderData.winnerName;
   const coreDropCountdown = hudData.coreDropCountdown || renderData.coreDropCountdown;
   const battlePrepareSource = hudData.status ? hudData : renderData;
@@ -4012,6 +4401,33 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const respawnSeconds = Math.max(0, Math.ceil(respawnRemainingMs / 1000));
   const heistDeaths = Math.max(0, Number(hudYou?.heistDeaths || renderData.you?.heistDeaths || 0));
   const heistPermanentElimination = Boolean(hudYou?.heistPermanentElimination || renderData.you?.heistPermanentElimination);
+
+  // Bazele sunt repere permanente pe mini-map. `isOwnBase` decide culoarea:
+  // baza ta este albastra, iar baza echipei adverse este rosie.
+  const heistMiniMapBases = useMemo(() => {
+    const rawBases = Array.isArray(heist?.bases) ? heist.bases : [];
+
+    return rawBases
+      .filter(
+        (base) =>
+          base &&
+          Number.isFinite(Number(base.x)) &&
+          Number.isFinite(Number(base.y))
+      )
+      .map((base) => {
+        const baseTeam = String(base.team || "cyan");
+
+        return {
+          id: `heist-base-${String(base.id || baseTeam)}`,
+          team: baseTeam,
+          x: Number(base.x || 0),
+          y: Number(base.y || 0),
+          perimeterRadius: Number(base.perimeterRadius || base.radius || 520),
+          isOwnBase: baseTeam === heistTeam,
+        };
+      });
+  }, [heist?.bases, heistTeam]);
+
   const heistMiniMapCores = heistFlags
     .filter((flag) => ["home", "dropped", "carried"].includes(String(flag?.status || "")))
     .map((flag) => ({
@@ -4022,7 +4438,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     }));
 
   return (
-    <div className={`game-arena pvp-dom-arena normal-pvp-dom-arena zone-pvp-dom-arena core-heist-dom-arena ${isMobileControls ? "is-mobile-device is-mobile-portrait" : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""} ${isBattlePrepare ? "is-battle-prepare" : ""}`}>
+    <div className={`game-arena core-heist-dom-arena core-heist-mobile-layout-v3 ${isMobileControls ? `is-mobile is-mobile-device ${viewport.width > viewport.height ? "is-mobile-landscape" : "is-mobile-portrait"}` : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""} ${isBattlePrepare ? "is-battle-prepare" : ""}`}>
       {isMatchmaking && !connectionError && (
         <div className="core-heist-matchmaking-screen">
           <div className="core-heist-matchmaking-card">
@@ -4076,17 +4492,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         showZone={false}
       />
 
-      {isMobileControls && (
-        <style>{`
-          .normal-pvp-dom-arena .aim-svg.mobile-aim-svg,
-          .core-heist-dom-arena .aim-svg.mobile-aim-svg {
-            display: block !important;
-            pointer-events: none !important;
-            touch-action: none !important;
-            z-index: 64 !important;
-          }
-        `}</style>
-      )}
+
 
       {/* Attack drone is the only combat visual. The old cyan aim circle/arrow
           looked like a second launched drone, so it stays disabled in PvP. */}
@@ -4104,32 +4510,32 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         </svg>
       )}
 
-      <div className={`fps-counter ${renderData.fps < 50 ? "fps-low" : ""}`}>FPS: {renderData.fps || 60}</div>
+      <div className={`core-heist-fps ${renderData.fps < 50 ? "is-low" : ""}`}>FPS: {renderData.fps || 60}</div>
 
-      <div className="hp-panel">
+      <div className="core-heist-status-panel">
         <span>DRONE HP</span>
         <strong>{hp} / {maxHp}</strong>
-        <div className="hp-bar"><i style={{ width: `${Math.max(0, Math.min(100, (hp / maxHp) * 100))}%` }} /></div>
+        <div className="core-heist-hp-bar"><i style={{ width: `${Math.max(0, Math.min(100, (hp / maxHp) * 100))}%` }} /></div>
 
-        <div className="energy-row">
+        <div className="core-heist-energy-row">
           <span>DRONE ENERGY</span>
           <strong>{energy}</strong>
-          <div className="energy-bar"><i style={{ width: `${Math.max(0, Math.min(100, energy))}%` }} /></div>
+          <div className="core-heist-energy-bar"><i style={{ width: `${Math.max(0, Math.min(100, energy))}%` }} /></div>
         </div>
       </div>
 
-      <div className="collect-counter">
+      <div className="core-heist-economy-panel">
         <span>ORB COUNT</span>
         <strong>{progress} / {nextDroneAt}</strong>
         <small>Total collected: {hudYou?.totalCollected ?? 0}</small>
         <small>Kills: {hudYou?.kills ?? 0}</small>
-        <div className="active-cores-panel">
+        <div className="core-heist-active-cores">
           <b>ACTIVE CORES</b>
           {activeBadges.length === 0 ? (
             <em>NO ACTIVE CORES</em>
           ) : (
             activeBadges.map((badge) => (
-              <em key={badge.key} className={`core-badge core-badge-${badge.className}`}>
+              <em key={badge.key} className={`core-heist-core-badge core-heist-core-badge-${badge.className}`}>
                 {badge.label}{badge.seconds !== null ? ` ${badge.seconds}s` : ""}
               </em>
             ))
@@ -4137,7 +4543,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         </div>
       </div>
 
-      <div className="alive-counter pvp-alive-counter normal-pvp-top-hud core-heist-team-panel">
+      <div className="core-heist-team-panel">
         <strong>{teamLabel} TEAM</strong>
         <span>{playersAlive} DRONES ONLINE · {Math.max(0, 2 - heistDeaths)} LIVES LEFT · MAX {maxPlayers}</span>
       </div>
@@ -4152,17 +4558,38 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       <div className="core-heist-scoreboard" aria-label="Capture the Flag score">
         <div className={`core-heist-score-side cyan ${heistTeam === "cyan" ? "is-your-team" : ""}`}>
           <span>BLUE</span>
-          <strong>{heistScore.cyan || 0}</strong>
+          <strong><b>{heistScore.cyan || 0}</b><small>/{heistTargetScore}</small></strong>
         </div>
         <div className="core-heist-score-middle">
           <b>CAPTURE THE FLAG</b>
           <small>FIRST TO {heistTargetScore}</small>
         </div>
         <div className={`core-heist-score-side orange ${heistTeam === "orange" ? "is-your-team" : ""}`}>
-          <strong>{heistScore.orange || 0}</strong>
+          <strong><b>{heistScore.orange || 0}</b><small>/{heistTargetScore}</small></strong>
           <span>RED</span>
         </div>
       </div>
+
+      {heistAnnouncement && !isMatchmaking && !isFinished && (
+        <div
+          key={heistAnnouncement.id}
+          className={`core-heist-live-event team-${heistAnnouncement.team} ${heistAnnouncement.kind}`}
+          role="status"
+          aria-live="polite"
+        >
+          <span>
+            {heistAnnouncement.kind === "capture"
+              ? "FLAG CAPTURED"
+              : heistAnnouncement.kind === "taken"
+                ? "ENEMY FLAG TAKEN"
+                : heistAnnouncement.kind === "dropped"
+                  ? "FLAG DROPPED"
+                  : "FLAG RETURNED"}
+          </span>
+          <strong>{heistAnnouncement.title}</strong>
+          <small>{heistAnnouncement.detail}</small>
+        </div>
+      )}
 
       <div className="core-heist-objective-panel">
         <b>
@@ -4183,30 +4610,23 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         </span>
       </div>
 
-      <div className="real-leaderboard">
-        <h3>LEADERBOARD</h3>
-        {(leaderboard || []).slice(0, 8).map((item, index) => (
-          <div key={item.id || index} className={`real-leaderboard-row ${item.id === hudYou?.id ? "is-me" : ""} ${item.alive === false ? "is-dead" : ""}`}>
-            <span>{index + 1}. {item.username || "Player"}</span>
-            <strong>{item.kills ?? 0}K / {item.totalCollected ?? item.score ?? 0}</strong>
-          </div>
-        ))}
-      </div>
-
       {cameraSubject && (
-        <MiniMap
-          player={cameraSubject}
-          worldWidth={worldWidth}
-          worldHeight={worldHeight}
-          orbs={renderData.minimapOrbs || []}
-          cores={[...(renderData.minimapCores || renderData.cores || []), ...heistMiniMapCores]}
-          safeZoneRadius={null}
-          players={renderData.players || []}
-        />
+        <div className="mobile-minimap-frame core-heist-minimap-frame" aria-label="World map">
+          <MiniMap
+            player={cameraSubject}
+            worldWidth={worldWidth}
+            worldHeight={worldHeight}
+            orbs={renderData.minimapOrbs || []}
+            cores={[...(renderData.minimapCores || renderData.cores || []), ...heistMiniMapCores]}
+            safeZoneRadius={null}
+            players={renderData.players || []}
+            bases={heistMiniMapBases}
+          />
+        </div>
       )}
 
       {isBattlePrepare && (
-        <div className="battle-royale-peace-countdown core-heist-peace-countdown">
+        <div className="core-heist-peace-countdown">
           <strong>PREPARE PHASE</strong>
           <b>{battlePrepareSeconds}s</b>
           <span>Attack, shield and collision damage are locked.</span>
@@ -4214,7 +4634,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       )}
 
       {showBattleBeginFlash && !isBattlePrepare && (
-        <div className="battle-royale-begin-flash core-heist-begin-flash">BATTLE BEGIN</div>
+        <div className="core-heist-begin-flash">BATTLE BEGIN</div>
       )}
 
       {/* Zone PvP intentionally has no Connection lost/error overlay. A closed
@@ -4235,7 +4655,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       )}
 
       {isFinished && (
-        <div className="game-over-screen pvp-finished-screen">
+        <div className="core-heist-finished-screen">
           <h1>{winnerName ? `${winnerName} WINS` : "MATCH FINISHED"}</h1>
           <p>{winnerName || "Capture the Flag complete."}</p>
           <p className="core-heist-finished-auto-exit">Final score: CYAN {heistScore.cyan || 0} · ORANGE {heistScore.orange || 0}</p>
@@ -4244,28 +4664,28 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       )}
 
       {isMobileControls && !isDead && !isMatchmaking && (
-      <div className="pvp-mobile-controls" aria-label="Mobile PvP controls">
+      <div className="mobile-controls core-heist-mobile-controls" aria-label="Mobile PvP controls">
         <div
-          className={`pvp-mobile-joystick ${mobileJoystick.active ? "is-active" : ""}`}
+          className={`mobile-joystick core-heist-mobile-joystick ${mobileJoystick.active ? "is-active" : ""}`}
           onPointerDown={onJoystickPointerDown}
           onPointerMove={onJoystickPointerMove}
           onPointerUp={stopJoystick}
           onPointerCancel={stopJoystick}
         >
-          <div className="pvp-mobile-joystick-ring" />
+          <div className="mobile-joystick-ring core-heist-mobile-joystick-ring" />
           <div
             ref={joystickKnobRef}
-            className="pvp-mobile-joystick-knob"
+            className="mobile-joystick-knob core-heist-mobile-joystick-knob"
             style={{
               transform: `translate(calc(-50% + ${mobileJoystick.knobX}px), calc(-50% + ${mobileJoystick.knobY}px))`,
             }}
           />
         </div>
 
-        <div className="pvp-mobile-buttons">
+        <div className="mobile-action-row core-heist-mobile-buttons">
           <button
             type="button"
-            className={`pvp-mobile-action pvp-mobile-shield ${mobileShieldActive ? "is-active" : ""} ${isBattlePrepare ? "is-locked" : ""}`}
+            className={`mobile-action-btn mobile-shield-btn core-heist-mobile-action core-heist-mobile-shield ${mobileShieldActive ? "is-active" : ""} ${isBattlePrepare ? "is-locked" : ""}`}
             onPointerDown={onShieldPointerDown}
             onPointerUp={stopMobileShield}
             onPointerCancel={stopMobileShield}
@@ -4275,7 +4695,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
           <button
             type="button"
-            className={`pvp-mobile-action pvp-mobile-attack ${mobileAttackActive ? "is-active" : ""} ${isBattlePrepare ? "is-locked" : ""}`}
+            className={`mobile-action-btn mobile-attack-btn core-heist-mobile-action core-heist-mobile-attack ${mobileAttackActive ? "is-active" : ""} ${isBattlePrepare ? "is-locked" : ""}`}
             onPointerDown={onAttackPointerDown}
             onPointerMove={onAttackPointerMove}
             onPointerUp={stopMobileAttack}
@@ -4287,7 +4707,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       </div>
       )}
 
-      <button className="pvp-exit-btn" onClick={handleZoneExitToMenu}>EXIT TO MENU</button>
+      <button className="core-heist-exit-btn" onClick={handleZoneExitToMenu}>EXIT TO MENU</button>
     </div>
   );
 }

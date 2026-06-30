@@ -2897,7 +2897,13 @@ function PixiArenaRenderer({
       resize();
 
       app.ticker.add(() => {
-        const data = liveDataRef?.current || latestRef.current;
+        // Arena modes that use a live ref update positions every animation
+        // frame. React-only props (such as Core Heist bases/flags) must still
+        // be merged in; replacing the whole snapshot with the live ref made
+        // objective graphics silently disappear.
+        const data = liveDataRef?.current
+          ? { ...latestRef.current, ...liveDataRef.current }
+          : latestRef.current;
         if (!data) return;
 
         const now = performance.now();

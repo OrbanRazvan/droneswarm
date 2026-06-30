@@ -10,7 +10,7 @@ const ORB_COLORS = {
   pink: "#ff4fc3",
 };
 
-const MINIMAP_DRAW_INTERVAL_MS = 100; // 10 FPS: HUD only; never competes with arena rendering.
+const MINIMAP_DRAW_INTERVAL_MS = 83; // 12 FPS: suficient pentru HUD, mult mai ieftin pe mobil.
 
 const CORE_COLORS = {
   nano: "#00eaff",
@@ -26,10 +26,6 @@ const CORE_COLORS = {
 
 function getStableOrbKey(orb) {
   return orb?.id || `${Math.round((orb?.x || 0) / 80)}-${Math.round((orb?.y || 0) / 80)}-${orb?.color || "cyan"}`;
-}
-
-function getStableEnergyKey(cell) {
-  return cell?.id || `energy-${Math.round((cell?.x || 0) / 80)}-${Math.round((cell?.y || 0) / 80)}`;
 }
 
 function clamp(value, min, max) {
@@ -53,28 +49,15 @@ function MiniMap({
   orbs = [],
   cores = [],
   safeZoneRadius = null,
+  bases = [],
 }) {
   const canvasRef = useRef(null);
   const stableOrbsRef = useRef([]);
   const stableCoresRef = useRef([]);
+  const basesRef = useRef([]);
   const lastOrbsUpdateRef = useRef(0);
 
-  // ---------------------------------------------------------------------
-  // IMPORTANT: safeZoneRadius, worldWidth si worldHeight sunt citite din
-  // refs in interiorul buclei requestAnimationFrame, NU mai sunt dependente
-  // ale useEffect-ului de mai jos. In Battle Royale (Online sau cu boti),
-  // safeZoneRadius se schimba continuu (zona se strange tot timpul
-  // meciului) - daca ar fi in array-ul de dependente, React ar rula
-  // cleanup (cancelAnimationFrame) + re-pornire (requestAnimationFrame)
-  // a buclei de desen la FIECARE schimbare de raza, de mai multe ori pe
-  // secunda, in plus fata de bucla RAF deja existenta in draw() insusi.
-  // Practic insemna 2 bucle RAF concurente recreate constant, dublul
-  // costului de randare pe canvas - exact cauza FPS-ului scazut raportat
-  // pe mobil la Battle Royale Online (la Normal PvP, safeZoneRadius e
-  // mereu null/constant, deci problema nu aparea niciodata acolo).
-  // Acum bucla RAF porneste o singura data la montare si ruleaza stabil
-  // tot meciul; valorile cele mai recente sunt mereu citite din refs.
-  // ---------------------------------------------------------------------
+  // Valorile dinamice sunt citite din refs in RAF, fara restartarea buclei.
   const safeZoneRadiusRef = useRef(safeZoneRadius);
   const worldWidthRef = useRef(worldWidth);
   const worldHeightRef = useRef(worldHeight);
@@ -82,6 +65,14 @@ function MiniMap({
   safeZoneRadiusRef.current = safeZoneRadius;
   worldWidthRef.current = worldWidth;
   worldHeightRef.current = worldHeight;
+  basesRef.current = Array.isArray(bases)
+    ? bases.filter(
+        (base) =>
+          base &&
+          Number.isFinite(Number(base.x)) &&
+          Number.isFinite(Number(base.y))
+      )
+    : [];
 
   const playerX = clamp(((player?.x || 0) / Math.max(1, worldWidth || 1)) * 100, 0, 100);
   const playerY = clamp(((player?.y || 0) / Math.max(1, worldHeight || 1)) * 100, 0, 100);
@@ -101,36 +92,34 @@ function MiniMap({
 
       stableOrbsRef.current = limitedOrbs.map((orb) => {
         const key = getStableOrbKey(orb);
-        const prev = previousByKey.get(key);
+        const previous = previousByKey.get(key);
 
-        if (!prev) return orb;
+        if (!previous) return orb;
 
         return {
           ...orb,
-          // Loot is static. Using its latest authoritative position prevents
-          // stale minimap dots after a zone/world delta.
-          x: orb.x,
-          y: orb.y,
+          x: previous.x + (orb.x - previous.x) * 0.35,
+          y: previous.y + (orb.y - previous.y) * 0.35,
         };
       });
 
       lastOrbsUpdateRef.current = now;
     }
 
-    stableCoresRef.current = Array.isArray(cores) ? cores.filter((core) => !core.pending) : [];
+    stableCoresRef.current = Array.isArray(cores)
+      ? cores.filter((core) => !core.pending)
+      : [];
   }, [limitedOrbs, cores]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas) return undefined;
 
     const ctx = canvas.getContext("2d", { alpha: true, desynchronized: true });
-    if (!ctx) return;
+    if (!ctx) return undefined;
 
     let frame = 0;
     let lastDrawAt = 0;
-    let lastCssWidth = 0;
-    let lastCssHeight = 0;
 
     const draw = (now) => {
       frame = requestAnimationFrame(draw);
@@ -151,11 +140,6 @@ function MiniMap({
         canvas.height = height;
       }
 
-      if (lastCssWidth !== rect.width || lastCssHeight !== rect.height) {
-        lastCssWidth = rect.width;
-        lastCssHeight = rect.height;
-      }
-
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, rect.width, rect.height);
 
@@ -170,6 +154,7 @@ function MiniMap({
       if (shouldDrawZone) {
         const zoneW = clamp(((currentSafeZoneRadius * 2) / Math.max(1, currentWorldWidth || 1)) * w, 0, w - 8);
         const zoneH = clamp(((currentSafeZoneRadius * 2) / Math.max(1, currentWorldHeight || 1)) * h, 0, h - 8);
+
         ctx.save();
         ctx.beginPath();
         ctx.ellipse(cx, cy, zoneW / 2, zoneH / 2, 0, 0, Math.PI * 2);
@@ -182,6 +167,7 @@ function MiniMap({
       for (const orb of stableOrbsRef.current) {
         const point = mapPoint(orb, currentWorldWidth, currentWorldHeight, w, h, 5);
         const color = ORB_COLORS[orb.color] || ORB_COLORS.cyan;
+
         ctx.fillStyle = color;
         ctx.globalAlpha = 0.88;
         ctx.beginPath();
@@ -192,11 +178,61 @@ function MiniMap({
       for (const core of stableCoresRef.current) {
         const point = mapPoint(core, currentWorldWidth, currentWorldHeight, w, h, 12);
         const color = CORE_COLORS[core.type] || "#00eaff";
+
         ctx.fillStyle = color;
         ctx.globalAlpha = 0.95;
         ctx.beginPath();
         ctx.arc(point.x, point.y, 4.5, 0, Math.PI * 2);
         ctx.fill();
+      }
+
+      // Core Heist: baza echipei tale este albastra, baza inamica este rosie.
+      // Cerc = perimetrul bazei, diamant = centrul bazei.
+      for (const base of basesRef.current) {
+        const point = mapPoint(base, currentWorldWidth, currentWorldHeight, w, h, 12);
+        const isOwnBase = Boolean(base.isOwnBase);
+        const baseColor = isOwnBase ? "#00eaff" : "#ff3d4f";
+        const radiusInWorld = Number(base.perimeterRadius || base.radius || 520);
+        const scale = Math.min(
+          w / Math.max(1, Number(currentWorldWidth) || 1),
+          h / Math.max(1, Number(currentWorldHeight) || 1)
+        );
+        const perimeterRadius = clamp(radiusInWorld * scale, 5, 22);
+
+        ctx.save();
+
+        ctx.globalAlpha = 1;
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, perimeterRadius, 0, Math.PI * 2);
+        ctx.fillStyle = isOwnBase
+          ? "rgba(0, 234, 255, 0.13)"
+          : "rgba(255, 61, 79, 0.13)";
+        ctx.fill();
+
+        ctx.strokeStyle = isOwnBase
+          ? "rgba(0, 234, 255, 0.92)"
+          : "rgba(255, 61, 79, 0.92)";
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+
+        ctx.fillStyle = baseColor;
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = baseColor;
+        ctx.beginPath();
+        ctx.moveTo(point.x, point.y - 5.5);
+        ctx.lineTo(point.x + 5.5, point.y);
+        ctx.lineTo(point.x, point.y + 5.5);
+        ctx.lineTo(point.x - 5.5, point.y);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, 1.8, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
       }
 
       ctx.globalAlpha = 1;

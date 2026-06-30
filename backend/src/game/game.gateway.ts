@@ -136,6 +136,20 @@ const CORE_HEIST_BASE_PERIMETER_RADIUS = 860;
 // A drone has two lives: after its first death it redeploys; after its second
 // death it becomes a same-team spectator for the rest of the round.
 const CORE_HEIST_MAX_DEATHS = 2;
+// Core Heist is an eight-player objective mode. It can safely have a denser
+// opening economy than the 60-seat modes without producing heavy packets.
+const CORE_HEIST_OPENING_ORBS_PER_BASE = 28;
+const CORE_HEIST_MIDFIELD_ORB_COUNT = 36;
+// Objective events are sent reliably to every client and retained briefly in
+// state as a reconnect fallback for the center-screen announcement HUD.
+const CORE_HEIST_EVENT_LOG_LIMIT = 12;
+const CORE_HEIST_EVENT_TTL_MS = 6500;
+// Core Heist has only eight total drones, so it can safely receive a compact
+// authoritative HUD/objective state much more often than 60-seat Zone PvP.
+// Motion still uses the separate 50 Hz transform lane below.
+const CORE_HEIST_STATE_INTERVAL_MS = 140;
+const CORE_HEIST_BOT_REPLAN_MIN_MS = 100;
+const CORE_HEIST_BOT_REPLAN_MAX_MS = 155;
 
 // AI plans are staggered but intentionally responsive. The held vector is
 // applied every simulation tick; only target selection/replanning is sampled.
@@ -1420,31 +1434,33 @@ export class GameGateway {
 
   private fillZonePvpBots(room: any, zoneRadius: number) {
     const target = room?.coreHeistMode
-      ? Math.max(0, Math.min(CORE_HEIST_BOT_TARGET_TOTAL, CORE_HEIST_ROOM_MAX_PLAYERS))
+      ? CORE_HEIST_ROOM_MAX_PLAYERS
       : Math.max(0, Math.min(ZONE_PVP_BOT_TARGET_TOTAL, ZONE_PVP_ROOM_MAX_PLAYERS));
     let nextIndex = this.getZoneBotCount(room);
 
     while (room.players.size < target) {
-      // Capture the Flag adds match-only fields such as `team`. The Zone PvP bot factory
-      // intentionally returns the shared base-player shape, so widen only this local
-      // instance before assigning Heist metadata.
       const bot: any = this.createZonePvpBot(room, nextIndex, zoneRadius);
+
       if (room?.coreHeistMode) {
         bot.team = this.assignCoreHeistTeam(room);
-        const teamCount = this.getCoreHeistTeamPlayers(room, bot.team).length;
-        bot.heistRole = ["runner", "guard", "support", "interceptor"][teamCount % 4];
         bot.heistFlagId = null;
         bot.heistDeaths = 0;
         bot.heistPermanentElimination = false;
-        const spawn = this.getCoreHeistSpawn(room, bot.team, nextIndex);
+        bot.heistSpawnIndex = this.getCoreHeistTeamPlayers(room, bot.team).length;
+        const spawn = this.getCoreHeistSpawn(room, bot.team, bot.heistSpawnIndex);
         bot.x = spawn.x;
         bot.y = spawn.y;
         bot.prevX = spawn.x;
         bot.prevY = spawn.y;
-        bot.aiState = `ctf-${bot.heistRole}`;
+        bot.heistPlanUntil = 0;
       }
+
       room.players.set(bot.id, bot);
       nextIndex += 1;
+    }
+
+    if (room?.coreHeistMode) {
+      this.assignCoreHeistBotRoles(room);
     }
   }
 
@@ -1942,6 +1958,9 @@ export class GameGateway {
       phaseVersion: Number(room.phaseVersion || 0),
       status: room.status,
       countdown,
+      countdownEndsAt: room.status === "countdown" && room.countdownStartedAt
+        ? Number(room.countdownStartedAt) + countdownDuration
+        : null,
       playerId: client.id,
       worldWidth: WORLD_WIDTH,
       worldHeight: WORLD_HEIGHT,
@@ -2990,6 +3009,8 @@ export class GameGateway {
       heistPermanentElimination: false,
       respawnAt: 0,
       heistRespawnCount: 0,
+      heistRole: room?.coreHeistMode ? "pilot" : null,
+      heistPlanUntil: 0,
     };
 
     room.players.set(client.id, player);
@@ -3347,11 +3368,13 @@ export class GameGateway {
           }
 
           const broadcastInterval =
-            room.players.size >= PVP_HEAVY_STATE_THRESHOLD
-              ? ZONE_STATE_INTERVAL_HEAVY_MS
-              : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
-                ? ZONE_STATE_INTERVAL_CROWDED_MS
-                : ZONE_STATE_INTERVAL_MS;
+            room?.coreHeistMode
+              ? CORE_HEIST_STATE_INTERVAL_MS
+              : room.players.size >= PVP_HEAVY_STATE_THRESHOLD
+                ? ZONE_STATE_INTERVAL_HEAVY_MS
+                : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
+                  ? ZONE_STATE_INTERVAL_CROWDED_MS
+                  : ZONE_STATE_INTERVAL_MS;
 
           if (
             !room.lastBroadcastAt ||
@@ -3452,17 +3475,48 @@ export class GameGateway {
   }
 
   private getCoreHeistSpawn(room: any, team: string, salt = 0) {
-    const base = this.getCoreHeistBase(room, team);
-    const centerX = Number(base?.x || (team === "orange"
+    const normalizedTeam = String(team || "cyan") === "orange" ? "orange" : "cyan";
+    const base = this.getCoreHeistBase(room, normalizedTeam);
+    const centerX = Number(base?.x || (normalizedTeam === "orange"
       ? WORLD_WIDTH - CORE_HEIST_BASE_X_OFFSET
       : CORE_HEIST_BASE_X_OFFSET));
     const centerY = Number(base?.y || WORLD_HEIGHT * 0.5);
-    const angle = ((Number(salt || 0) * 1.93) + Math.random() * 0.7) % (Math.PI * 2);
-    const radius = 210 + Math.random() * 250;
+
+    // Fixed, well-separated launch pads keep each 4-person squad inside its
+    // own perimeter. Older code used Math.random here, which could put every
+    // teammate in the same tiny area and made the opening look broken.
+    const pads = [
+      { x: -250, y: -245 },
+      { x: -85, y: 250 },
+      { x: 190, y: -145 },
+      { x: 300, y: 175 },
+      { x: -315, y: 70 },
+      { x: 80, y: -315 },
+    ];
+    const pad = pads[Math.abs(Math.floor(Number(salt || 0))) % pads.length];
+    // Mirror X on the red side so both squads face the map centre.
+    const side = normalizedTeam === "orange" ? -1 : 1;
+
     return {
-      x: this.clamp(centerX + Math.cos(angle) * radius, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS),
-      y: this.clamp(centerY + Math.sin(angle) * radius, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS),
+      x: this.clamp(centerX + pad.x * side, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS),
+      y: this.clamp(centerY + pad.y, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS),
     };
+  }
+
+  private assignCoreHeistBotRoles(room: any) {
+    if (!room?.coreHeistMode) return;
+    const rolePlan = ["runner", "escort", "guard", "interceptor"];
+
+    for (const team of ["cyan", "orange"]) {
+      const bots = this.getCoreHeistTeamPlayers(room, team)
+        .filter((player: any) => player?.isBot)
+        .sort((a: any, b: any) => String(a.id || "").localeCompare(String(b.id || "")));
+
+      bots.forEach((bot: any, index: number) => {
+        bot.heistRole = rolePlan[index % rolePlan.length];
+        bot.aiState = `ctf-${bot.heistRole}`;
+      });
+    }
   }
 
   private createCoreHeistState(now = Date.now()) {
@@ -3496,6 +3550,11 @@ export class GameGateway {
       y: base.y,
       status: "home",
       carrierId: null,
+      // Kept after a pickup/drop/capture so every client can show the actual
+      // player's name even after the flag has been reset to its home base.
+      lastCarrierId: null,
+      lastCarrierName: null,
+      lastCarrierTeam: null,
       droppedAt: 0,
       returnAt: 0,
     }));
@@ -3508,6 +3567,9 @@ export class GameGateway {
       bases,
       flags,
       lastScoreAt: now,
+      eventSequence: 0,
+      latestEvent: null,
+      events: [],
     };
   }
 
@@ -3515,21 +3577,54 @@ export class GameGateway {
     const bases = room?.heist?.bases || [];
     const seeded = [];
 
-    // Guaranteed opening economy around both bases. This avoids a bad random
-    // world roll where a team starts the twenty-second prepare phase with no
-    // visible orbs nearby, while leaving the normal server-authoritative orb
-    // system and respawns untouched.
+    // Both teams get a rich but even opening economy around their own base.
+    // These are ordinary server-authoritative orbs, so collection, respawn,
+    // anti-cheat and minimap replication remain exactly the same as before.
     for (const base of bases) {
-      for (let index = 0; index < 16; index += 1) {
-        const angle = (index / 16) * Math.PI * 2 + (String(base?.team || "").length * 0.19);
-        const radius = 620 + (index % 4) * 190 + Math.floor(index / 4) * 54;
+      for (let index = 0; index < CORE_HEIST_OPENING_ORBS_PER_BASE; index += 1) {
+        const angle =
+          (index / CORE_HEIST_OPENING_ORBS_PER_BASE) * Math.PI * 2 +
+          String(base?.team || "").length * 0.19;
+        const ring = Math.floor(index / 7);
+        const radius = 520 + ring * 215 + (index % 7) * 32;
+
         seeded.push({
           id: crypto.randomUUID(),
-          x: this.clamp(Number(base?.x || WORLD_WIDTH * 0.5) + Math.cos(angle) * radius, 220, WORLD_WIDTH - 220),
-          y: this.clamp(Number(base?.y || WORLD_HEIGHT * 0.5) + Math.sin(angle) * radius, 220, WORLD_HEIGHT - 220),
+          x: this.clamp(
+            Number(base?.x || WORLD_WIDTH * 0.5) + Math.cos(angle) * radius,
+            220,
+            WORLD_WIDTH - 220,
+          ),
+          y: this.clamp(
+            Number(base?.y || WORLD_HEIGHT * 0.5) + Math.sin(angle) * radius,
+            220,
+            WORLD_HEIGHT - 220,
+          ),
           color: COLORS[index % COLORS.length],
         });
       }
+    }
+
+    // The objective lane also has rewards, giving runners and interceptors a
+    // reason to contest the middle instead of farming only at their spawn.
+    for (let index = 0; index < CORE_HEIST_MIDFIELD_ORB_COUNT; index += 1) {
+      const column = index % 9;
+      const row = Math.floor(index / 9);
+      const x =
+        WORLD_WIDTH * 0.5 +
+        (column - 4) * 340 +
+        (row % 2 ? 120 : -120);
+      const y =
+        WORLD_HEIGHT * 0.5 +
+        (row - 1.5) * 530 +
+        ((column % 3) - 1) * 84;
+
+      seeded.push({
+        id: crypto.randomUUID(),
+        x: this.clamp(x, 220, WORLD_WIDTH - 220),
+        y: this.clamp(y, 220, WORLD_HEIGHT - 220),
+        color: COLORS[(index + 2) % COLORS.length],
+      });
     }
 
     room.orbs = [...(room.orbs || []), ...seeded];
@@ -3545,12 +3640,24 @@ export class GameGateway {
     room.nextCoreWaveAt = null;
     room.lastCoreWaveAt = now;
     room.itemSpatialDirty = true;
+    // Base orbs must be queryable during the very first prepare tick.
+    // Rebuild once here instead of waiting for the periodic maintenance pass.
+    this.refreshRoomSpatialIndexes(room, now, true);
     room.matchStartedAt = now;
   }
 
   private serializeCoreHeist(room: any, viewer: any = null, now = Date.now()) {
     const heist = room?.heist;
     if (!heist) return null;
+
+    const activeEvents = Array.isArray(heist.events)
+      ? heist.events
+          .filter((event: any) => now < Number(event?.expiresAt || 0))
+          .slice(-CORE_HEIST_EVENT_LOG_LIMIT)
+      : [];
+    const latestEvent = activeEvents.length
+      ? activeEvents[activeEvents.length - 1]
+      : null;
 
     return {
       mode: "capture-the-flag",
@@ -3562,6 +3669,10 @@ export class GameGateway {
       matchEndsAt: Number(heist.matchEndsAt || 0),
       remainingMs: Math.max(0, Number(heist.matchEndsAt || 0) - now),
       team: viewer?.team || null,
+      // The direct socket event is the fast path. These retained events make
+      // the HUD recover cleanly after packet loss or a short mobile reconnect.
+      latestEvent,
+      events: activeEvents,
       bases: (heist.bases || []).map((base: any) => ({
         id: base.id,
         team: base.team,
@@ -3582,10 +3693,75 @@ export class GameGateway {
           y: Number(carrier?.y ?? flag.y ?? 0),
           status: flag.status,
           carrierId: flag.carrierId || null,
+          carrierName: carrier
+            ? this.getCoreHeistPlayerName(carrier)
+            : flag.lastCarrierName || null,
+          carrierTeam: carrier?.team || flag.lastCarrierTeam || null,
+          lastCarrierId: flag.lastCarrierId || null,
+          lastCarrierName: flag.lastCarrierName || null,
+          lastCarrierTeam: flag.lastCarrierTeam || null,
           returnAt: Number(flag.returnAt || 0),
         };
       }),
     };
+  }
+
+  private getCoreHeistPlayerName(player: any, fallback = "A PLAYER") {
+    const username = String(
+      player?.username ||
+      player?.firstName ||
+      player?.email?.split?.("@")?.[0] ||
+      fallback,
+    ).trim();
+
+    return (username || fallback).slice(0, 22);
+  }
+
+  private pushCoreHeistEvent(room: any, input: any, now = Date.now()) {
+    const heist = room?.heist;
+    if (!room?.coreHeistMode || !heist) return null;
+
+    const actor = input?.actor || null;
+    const flag = input?.flag || null;
+    const type = ["taken", "dropped", "returned", "captured"].includes(String(input?.type || ""))
+      ? String(input.type)
+      : "returned";
+    const actorTeam = String(actor?.team || input?.actorTeam || "") === "orange" ? "orange" : "cyan";
+    const flagTeam = String(flag?.team || input?.flagTeam || "") === "orange" ? "orange" : "cyan";
+    const scoreTeam = String(input?.scoreTeam || actorTeam) === "orange" ? "orange" : "cyan";
+    const sequence = Number(heist.eventSequence || 0) + 1;
+    heist.eventSequence = sequence;
+
+    const event = {
+      id: `heist-${sequence}-${crypto.randomUUID()}`,
+      type,
+      team: type === "captured" ? scoreTeam : actor ? actorTeam : flagTeam,
+      actorId: actor?.id || null,
+      actorName: String(input?.actorName || this.getCoreHeistPlayerName(actor, "SYSTEM")),
+      actorTeam: actor ? actorTeam : null,
+      flagId: flag?.id || input?.flagId || null,
+      flagTeam,
+      scoreTeam: type === "captured" ? scoreTeam : null,
+      score: {
+        cyan: Number(heist.score?.cyan || 0),
+        orange: Number(heist.score?.orange || 0),
+      },
+      targetScore: Number(heist.targetScore || CORE_HEIST_TARGET_SCORE),
+      createdAt: now,
+      expiresAt: now + CORE_HEIST_EVENT_TTL_MS,
+    };
+
+    const previous = Array.isArray(heist.events) ? heist.events : [];
+    heist.events = [...previous, event]
+      .filter((item: any) => now < Number(item?.expiresAt || 0))
+      .slice(-CORE_HEIST_EVENT_LOG_LIMIT);
+    heist.latestEvent = event;
+
+    // Objective announcements are global, unlike combat text which is private
+    // to the involved player. This reaches every teammate, enemy and spectator
+    // immediately; serialization above is the reconnect fallback.
+    this.server?.to(String(room.id)).emit("zone-pvp:heist-event", event);
+    return event;
   }
 
   private resetCoreHeistFlag(flag: any) {
@@ -3603,12 +3779,20 @@ export class GameGateway {
     if (!flag || String(flag.carrierId || "") !== String(player?.id || "")) return;
     flag.status = "dropped";
     flag.carrierId = null;
+    flag.lastCarrierId = player?.id || null;
+    flag.lastCarrierName = this.getCoreHeistPlayerName(player);
+    flag.lastCarrierTeam = player?.team || null;
     flag.x = Number(player?.x || flag.x || flag.homeX || 0);
     flag.y = Number(player?.y || flag.y || flag.homeY || 0);
     flag.droppedAt = now;
     flag.returnAt = now + CORE_HEIST_FLAG_RETURN_MS;
     player.heistFlagId = null;
     this.pushCombatEvent(room, player, "FLAG DROPPED", "damage", now);
+    this.pushCoreHeistEvent(room, {
+      type: "dropped",
+      actor: player,
+      flag,
+    }, now);
   }
 
   private respawnCoreHeistPlayer(room: any, player: any, now = Date.now()) {
@@ -3657,158 +3841,223 @@ export class GameGateway {
   private updateCoreHeistBots(room: any, now: number) {
     const heist = room?.heist;
     if (!heist || room.status !== "playing") return;
-    const units = [...room.players.values()].filter((unit: any) => unit?.alive !== false);
-    const combatReady = !this.isBattlePrepareLocked(room, now);
 
-    const nearest = (source: any, candidates: any[], maxDistance = Number.POSITIVE_INFINITY) => {
-      let target: any = null;
-      let best = maxDistance * maxDistance;
+    const combatReady = !this.isBattlePrepareLocked(room, now);
+    const units = [...room.players.values()].filter(
+      (unit: any) => unit && unit.alive !== false && !unit.heistPermanentElimination,
+    );
+
+    const findNearest = (source: any, candidates: any[], maxDistance = Number.POSITIVE_INFINITY) => {
+      let chosen: any = null;
+      let bestDistanceSq = maxDistance * maxDistance;
+
       for (const candidate of candidates) {
         if (!candidate || candidate.id === source.id || candidate.alive === false) continue;
         const dx = Number(candidate.x || 0) - Number(source.x || 0);
         const dy = Number(candidate.y || 0) - Number(source.y || 0);
         const distanceSq = dx * dx + dy * dy;
-        if (distanceSq < best) {
-          best = distanceSq;
-          target = candidate;
-        }
-      }
-      return target;
-    };
-
-    const moveTo = (bot: any, targetX: number, targetY: number, targetEnemy: any, state: string) => {
-      let dx = targetX - Number(bot.x || 0);
-      let dy = targetY - Number(bot.y || 0);
-      const distance = Math.hypot(dx, dy) || 1;
-      let moveX = dx / distance;
-      let moveY = dy / distance;
-
-      // Keep squads from stacking. This is a cheap local steering term and is
-      // deliberately independent from terrain/pathfinding allocations.
-      let avoidX = 0;
-      let avoidY = 0;
-      for (const unit of units) {
-        if (!unit || unit.id === bot.id) continue;
-        const ax = Number(bot.x || 0) - Number(unit.x || 0);
-        const ay = Number(bot.y || 0) - Number(unit.y || 0);
-        const ad = Math.hypot(ax, ay) || 1;
-        if (ad < 280) {
-          const force = (280 - ad) / 280;
-          avoidX += (ax / ad) * force;
-          avoidY += (ay / ad) * force;
+        if (distanceSq < bestDistanceSq) {
+          bestDistanceSq = distanceSq;
+          chosen = candidate;
         }
       }
 
-      // A carrier routes more defensively: a little lateral drift makes it
-      // harder to line up a projectile while keeping the route deterministic.
-      if (bot.heistFlagId) {
-        const lateral = bot.id.length % 2 ? 1 : -1;
-        moveX += -moveY * lateral * 0.22;
-        moveY += dx / distance * lateral * 0.22;
-      }
-      moveX += avoidX * 0.58;
-      moveY += avoidY * 0.58;
-      const normalized = this.normalizeZoneBotMove(moveX, moveY);
-
-      const aim = targetEnemy || { x: targetX, y: targetY };
-      const aimDx = Number(aim.x || targetX) - Number(bot.x || 0);
-      const aimDy = Number(aim.y || targetY) - Number(bot.y || 0);
-      const aimDistance = Math.hypot(aimDx, aimDy) || 1;
-      const canAttack = combatReady && Boolean(targetEnemy) && aimDistance <= 1850;
-      bot.input = {
-        mobileMove: true,
-        moveX: normalized.x,
-        moveY: normalized.y,
-        attacking: canAttack && now - Number(bot.lastFireAt || 0) >= 520,
-        shield: combatReady && Boolean(targetEnemy) && aimDistance < 700 && Number(bot.energy || 0) >= 20 && Number(bot.drones || 0) > 0,
-        mouseX: Number(aim.x || targetX),
-        mouseY: Number(aim.y || targetY),
-      };
-      bot.aiState = state;
-      bot.lastSeenAt = now;
-      bot.lastInputReceivedAt = now;
+      return chosen;
     };
 
-    for (const bot of units.filter((unit: any) => unit?.isBot)) {
-      const team = String(bot.team || "cyan");
+    const choosePrepareOrb = (bot: any, ownBase: any, claimedOrbIds: Set<string>) => {
+      let best: any = null;
+      let bestScore = Number.POSITIVE_INFINITY;
+
+      for (const orb of room.orbs || []) {
+        if (!orb?.id || claimedOrbIds.has(String(orb.id))) continue;
+        const baseDx = Number(orb.x || 0) - Number(ownBase?.x || 0);
+        const baseDy = Number(orb.y || 0) - Number(ownBase?.y || 0);
+        const baseDistanceSq = baseDx * baseDx + baseDy * baseDy;
+        // Economy is around the home base during the twenty seconds of prepare.
+        if (baseDistanceSq > 2600 * 2600) continue;
+
+        const dx = Number(orb.x || 0) - Number(bot.x || 0);
+        const dy = Number(orb.y || 0) - Number(bot.y || 0);
+        const score = dx * dx + dy * dy;
+        if (score < bestScore) {
+          bestScore = score;
+          best = orb;
+        }
+      }
+
+      if (best?.id) claimedOrbIds.add(String(best.id));
+      return best;
+    };
+
+    const bots = units.filter((unit: any) => unit.isBot);
+    const claimedOrbIds = new Set<string>();
+
+    for (const bot of bots) {
+      // Keep the last held vector between plans. This avoids a full decision
+      // pass on every 60 Hz simulation tick and removes server-side micro-stalls.
+      if (now < Number(bot.heistPlanUntil || 0)) continue;
+      bot.heistPlanUntil = now + CORE_HEIST_BOT_REPLAN_MIN_MS +
+        Math.floor(Math.random() * (CORE_HEIST_BOT_REPLAN_MAX_MS - CORE_HEIST_BOT_REPLAN_MIN_MS));
+
+      const team = String(bot.team || "cyan") === "orange" ? "orange" : "cyan";
       const enemyTeam = this.getCoreHeistEnemyTeam(team);
-      const allies = units.filter((unit: any) => String(unit.team || "cyan") === team && unit.id !== bot.id);
-      const enemies = units.filter((unit: any) => String(unit.team || "cyan") === enemyTeam);
       const ownBase = this.getCoreHeistBase(room, team);
       const enemyBase = this.getCoreHeistBase(room, enemyTeam);
       const ownFlag = this.getCoreHeistFlag(room, team);
       const enemyFlag = this.getCoreHeistFlag(room, enemyTeam);
-      const enemyCarrier = enemies.find((unit: any) => String(unit.heistFlagId || "") === String(ownFlag?.id || "")) || null;
+      const role = String(bot.heistRole || "escort");
+
+      const allies = units.filter((unit: any) => String(unit.team || "cyan") === team && unit.id !== bot.id);
+      const enemies = units.filter((unit: any) => String(unit.team || "cyan") === enemyTeam);
+      const nearbyEnemy = findNearest(bot, enemies, 1750);
+      const enemyCarrier = enemies.find(
+        (unit: any) => String(unit.heistFlagId || "") === String(ownFlag?.id || ""),
+      ) || null;
       const allyCarrier = allies.find((unit: any) => Boolean(unit.heistFlagId)) || null;
-      const nearbyEnemy = nearest(bot, enemies, 1900);
-      const role = String(bot.heistRole || "support");
+      const alliedRunner = allies.find((unit: any) => String(unit.heistRole || "") === "runner") || null;
+
+      let targetX = Number(bot.x || 0);
+      let targetY = Number(bot.y || 0);
+      let attackTarget: any = null;
+      let nextState = "hold";
 
       if (bot.heistFlagId) {
-        moveTo(bot, Number(ownBase?.x || bot.x), Number(ownBase?.y || bot.y), nearbyEnemy, "flag-run-home");
-        continue;
-      }
-
-      if (enemyCarrier) {
-        moveTo(bot, Number(enemyCarrier.x), Number(enemyCarrier.y), enemyCarrier, "intercept-enemy-flag");
-        continue;
-      }
-
-      if (ownFlag?.status === "dropped" && (role === "support" || role === "runner" || role === "interceptor")) {
-        moveTo(bot, Number(ownFlag.x), Number(ownFlag.y), nearbyEnemy, "return-own-flag");
-        continue;
-      }
-
-      if (allyCarrier) {
-        const escortDistance = Math.hypot(Number(allyCarrier.x) - Number(bot.x), Number(allyCarrier.y) - Number(bot.y));
-        if (role === "guard" && ownBase) {
-          const baseThreat = nearest(bot, enemies.filter((enemy: any) => {
-            const dx = Number(enemy.x) - Number(ownBase.x);
-            const dy = Number(enemy.y) - Number(ownBase.y);
-            return dx * dx + dy * dy < 2300 * 2300;
-          }), 2400);
-          moveTo(bot, Number(baseThreat?.x || ownBase.x), Number(baseThreat?.y || ownBase.y), baseThreat, "guard-base");
-        } else if (escortDistance > 420) {
-          moveTo(bot, Number(allyCarrier.x), Number(allyCarrier.y), nearbyEnemy, "escort-carrier");
+        targetX = Number(ownBase?.x || bot.x);
+        targetY = Number(ownBase?.y || bot.y);
+        attackTarget = nearbyEnemy;
+        nextState = "return-flag";
+      } else if (enemyCarrier) {
+        targetX = Number(enemyCarrier.x);
+        targetY = Number(enemyCarrier.y);
+        attackTarget = enemyCarrier;
+        nextState = "intercept-carrier";
+      } else if (ownFlag?.status === "dropped") {
+        targetX = Number(ownFlag.x);
+        targetY = Number(ownFlag.y);
+        attackTarget = nearbyEnemy;
+        nextState = "recover-flag";
+      } else if (!combatReady) {
+        const orb = choosePrepareOrb(bot, ownBase, claimedOrbIds);
+        if (orb) {
+          targetX = Number(orb.x);
+          targetY = Number(orb.y);
+          nextState = "prepare-farm";
         } else {
-          moveTo(bot, Number(allyCarrier.x) - 220, Number(allyCarrier.y) + 160, nearbyEnemy, "escort-carrier");
+          const formation = {
+            runner: { x: 260, y: -120 },
+            escort: { x: 180, y: 180 },
+            guard: { x: -290, y: 120 },
+            interceptor: { x: -150, y: -250 },
+          }[role] || { x: 0, y: 0 };
+          targetX = Number(ownBase?.x || bot.x) + formation.x;
+          targetY = Number(ownBase?.y || bot.y) + formation.y;
+          nextState = "prepare-formation";
         }
-        continue;
-      }
+      } else if (role === "guard") {
+        const baseThreat = findNearest(
+          bot,
+          enemies.filter((enemy: any) => {
+            const dx = Number(enemy.x || 0) - Number(ownBase?.x || 0);
+            const dy = Number(enemy.y || 0) - Number(ownBase?.y || 0);
+            return dx * dx + dy * dy <= 2700 * 2700;
+          }),
+          2800,
+        );
 
-      if (role === "guard" && ownBase) {
-        const baseThreat = nearest(bot, enemies.filter((enemy: any) => {
-          const dx = Number(enemy.x) - Number(ownBase.x);
-          const dy = Number(enemy.y) - Number(ownBase.y);
-          return dx * dx + dy * dy < 2600 * 2600;
-        }), 2700);
         if (baseThreat) {
-          moveTo(bot, Number(baseThreat.x), Number(baseThreat.y), baseThreat, "defend-base");
+          targetX = Number(baseThreat.x);
+          targetY = Number(baseThreat.y);
+          attackTarget = baseThreat;
+          nextState = "defend-base";
         } else {
-          const guardAngle = (Number(bot.aiFarmAngle || 0) + now * 0.00024) % (Math.PI * 2);
-          moveTo(bot, Number(ownBase.x) + Math.cos(guardAngle) * 520, Number(ownBase.y) + Math.sin(guardAngle) * 520, nearbyEnemy, "guard-perimeter");
+          const guardAngle = (Number(bot.heistGuardAngle || (bot.id.length * 0.71)) + now * 0.00018) % (Math.PI * 2);
+          targetX = Number(ownBase?.x || bot.x) + Math.cos(guardAngle) * 540;
+          targetY = Number(ownBase?.y || bot.y) + Math.sin(guardAngle) * 540;
+          attackTarget = nearbyEnemy;
+          nextState = "guard-perimeter";
         }
-        continue;
-      }
-
-      // Prepare phase is an economy window. Squads spread over different nearby
-      // orbs, then runners attack the enemy flag as soon as combat opens.
-      if (!combatReady) {
-        const orb = this.findZoneBotNearest(bot, room.orbs || [], 3600);
-        if (orb?.unit) {
-          moveTo(bot, Number(orb.unit.x), Number(orb.unit.y), null, "prepare-farm");
-        } else {
-          moveTo(bot, Number(enemyFlag?.x || enemyBase?.x || bot.x), Number(enemyFlag?.y || enemyBase?.y || bot.y), null, "prepare-route");
-        }
-        continue;
-      }
-
-      if (role === "runner" || role === "interceptor") {
-        moveTo(bot, Number(enemyFlag?.x || enemyBase?.x || bot.x), Number(enemyFlag?.y || enemyBase?.y || bot.y), nearbyEnemy, "steal-enemy-flag");
-      } else if (nearbyEnemy) {
-        moveTo(bot, Number(nearbyEnemy.x), Number(nearbyEnemy.y), nearbyEnemy, "team-skirmish");
+      } else if (role === "escort" && (allyCarrier || alliedRunner)) {
+        const escortTarget = allyCarrier || alliedRunner;
+        const side = bot.id.length % 2 ? 1 : -1;
+        const facing = Number(escortTarget.moveAngle || 0);
+        targetX = Number(escortTarget.x) - Math.cos(facing) * 260 - Math.sin(facing) * side * 220;
+        targetY = Number(escortTarget.y) - Math.sin(facing) * 260 + Math.cos(facing) * side * 220;
+        attackTarget = nearbyEnemy;
+        nextState = allyCarrier ? "escort-carrier" : "escort-runner";
+      } else if (role === "interceptor" && enemyFlag?.status === "carried") {
+        const carrier = enemies.find((enemy: any) => String(enemy.heistFlagId || "") === String(enemyFlag.id || ""));
+        targetX = Number(carrier?.x || enemyBase?.x || bot.x);
+        targetY = Number(carrier?.y || enemyBase?.y || bot.y);
+        attackTarget = carrier || nearbyEnemy;
+        nextState = "intercept-flag-run";
       } else {
-        moveTo(bot, Number(enemyFlag?.x || enemyBase?.x || bot.x), Number(enemyFlag?.y || enemyBase?.y || bot.y), null, "push-flag");
+        // Runner and free interceptor move through the middle toward the enemy
+        // flag. Escort bots share the route rather than scattering across map.
+        targetX = Number(enemyFlag?.x || enemyBase?.x || bot.x);
+        targetY = Number(enemyFlag?.y || enemyBase?.y || bot.y);
+        attackTarget = nearbyEnemy;
+        nextState = "push-enemy-flag";
       }
+
+      let dx = targetX - Number(bot.x || 0);
+      let dy = targetY - Number(bot.y || 0);
+      const length = Math.hypot(dx, dy) || 1;
+      dx /= length;
+      dy /= length;
+
+      // Local separation prevents bot stacks without an expensive global pathfinder.
+      let repelX = 0;
+      let repelY = 0;
+      for (const unit of units) {
+        if (!unit || unit.id === bot.id) continue;
+        const ax = Number(bot.x || 0) - Number(unit.x || 0);
+        const ay = Number(bot.y || 0) - Number(unit.y || 0);
+        const distance = Math.hypot(ax, ay) || 1;
+        if (distance < 250) {
+          const force = (250 - distance) / 250;
+          repelX += (ax / distance) * force;
+          repelY += (ay / distance) * force;
+        }
+      }
+
+      if (bot.heistFlagId) {
+        const lateral = bot.id.length % 2 ? 0.18 : -0.18;
+        const originalX = dx;
+        dx += -dy * lateral;
+        dy += originalX * lateral;
+      }
+
+      const movement = this.normalizeZoneBotMove(dx + repelX * 0.55, dy + repelY * 0.55);
+      const attackDx = Number(attackTarget?.x || targetX) - Number(bot.x || 0);
+      const attackDy = Number(attackTarget?.y || targetY) - Number(bot.y || 0);
+      const attackDistance = Math.hypot(attackDx, attackDy);
+      const canAttack = Boolean(
+        combatReady &&
+        attackTarget &&
+        attackDistance <= 1580 &&
+        Number(bot.drones || 0) > 0 &&
+        now - Number(bot.lastFireAt || 0) >= 520,
+      );
+
+      bot.input = {
+        mobileMove: true,
+        moveX: movement.x,
+        moveY: movement.y,
+        attacking: canAttack,
+        shield: Boolean(
+          combatReady &&
+          attackTarget &&
+          attackDistance < 680 &&
+          Number(bot.energy || 0) >= 20 &&
+          Number(bot.drones || 0) >= 2,
+        ),
+        mouseX: Number(attackTarget?.x || targetX),
+        mouseY: Number(attackTarget?.y || targetY),
+      };
+      bot.aiState = nextState;
+      bot.lastSeenAt = now;
+      bot.lastInputReceivedAt = now;
     }
   }
 
@@ -3834,6 +4083,11 @@ export class GameGateway {
       if (flag.status === "dropped" && Number(flag.returnAt || 0) > 0 && now >= Number(flag.returnAt)) {
         this.resetCoreHeistFlag(flag);
         this.pushCombatEvent(room, { id: `flag-${flag.id}`, x: flag.x, y: flag.y }, `${this.getCoreHeistTeamLabel(flag.team)} FLAG RETURNED`, "heal", now);
+        this.pushCoreHeistEvent(room, {
+          type: "returned",
+          actorName: "SYSTEM",
+          flag,
+        }, now);
       }
     }
 
@@ -3855,8 +4109,18 @@ export class GameGateway {
           const dy = Number(player.y) - Number(ownBase.y);
           if (dx * dx + dy * dy <= CORE_HEIST_BASE_CAPTURE_RADIUS * CORE_HEIST_BASE_CAPTURE_RADIUS) {
             heist.score[team] = Number(heist.score?.[team] || 0) + 1;
+            heist.lastScoreAt = now;
+            carried.lastCarrierId = player.id;
+            carried.lastCarrierName = this.getCoreHeistPlayerName(player);
+            carried.lastCarrierTeam = team;
             player.heistFlagId = null;
             this.pushCombatEvent(room, player, "FLAG CAPTURED", "drone-reward", now);
+            this.pushCoreHeistEvent(room, {
+              type: "captured",
+              actor: player,
+              flag: carried,
+              scoreTeam: team,
+            }, now);
             this.resetCoreHeistFlag(carried);
             if (Number(heist.score?.[team] || 0) >= CORE_HEIST_TARGET_SCORE) {
               this.finishCoreHeistMatch(room, player, team, now, "flag-capture");
@@ -3875,6 +4139,11 @@ export class GameGateway {
         if (dx * dx + dy * dy <= CORE_HEIST_FLAG_PICKUP_DISTANCE * CORE_HEIST_FLAG_PICKUP_DISTANCE) {
           this.resetCoreHeistFlag(ownFlag);
           this.pushCombatEvent(room, player, "FLAG RETURNED", "heal", now);
+          this.pushCoreHeistEvent(room, {
+            type: "returned",
+            actor: player,
+            flag: ownFlag,
+          }, now);
           continue;
         }
       }
@@ -3885,10 +4154,18 @@ export class GameGateway {
         if (dx * dx + dy * dy <= CORE_HEIST_FLAG_PICKUP_DISTANCE * CORE_HEIST_FLAG_PICKUP_DISTANCE) {
           enemyFlag.status = "carried";
           enemyFlag.carrierId = player.id;
+          enemyFlag.lastCarrierId = player.id;
+          enemyFlag.lastCarrierName = this.getCoreHeistPlayerName(player);
+          enemyFlag.lastCarrierTeam = team;
           enemyFlag.returnAt = 0;
           enemyFlag.droppedAt = 0;
           player.heistFlagId = enemyFlag.id;
           this.pushCombatEvent(room, player, "ENEMY FLAG TAKEN", "drone-reward", now);
+          this.pushCoreHeistEvent(room, {
+            type: "taken",
+            actor: player,
+            flag: enemyFlag,
+          }, now);
         }
       }
     }
@@ -3954,16 +4231,32 @@ export class GameGateway {
 
       if (room?.coreHeistMode) {
         this.initializeCoreHeistRoom(room, now);
+
+        // Assign deterministic launch pads per team. This keeps a 4v4 opening
+        // readable: teammates launch from distinct points in their own base,
+        // rather than all spawning at the human player's position.
+        const nextSpawnSlot: Record<string, number> = { cyan: 0, orange: 0 };
         for (const player of room.players.values()) {
-          const team = String(player.team || this.assignCoreHeistTeam(room));
+          const team = String(player.team || this.assignCoreHeistTeam(room)) === "orange"
+            ? "orange"
+            : "cyan";
           player.team = team;
-          const spawn = this.getCoreHeistSpawn(room, team, Number(player.heistSpawnIndex || 0));
-          player.heistSpawnIndex = Number(player.heistSpawnIndex || 0) + 1;
+          const slot = nextSpawnSlot[team] || 0;
+          nextSpawnSlot[team] = slot + 1;
+          player.heistSpawnIndex = slot;
+          const spawn = this.getCoreHeistSpawn(room, team, slot);
           player.x = spawn.x;
           player.y = spawn.y;
           player.prevX = spawn.x;
           player.prevY = spawn.y;
+          player.velocityX = 0;
+          player.velocityY = 0;
+          player.input = {};
         }
+
+        this.assignCoreHeistBotRoles(room);
+        room.lastBroadcastAt = 0;
+        room.lastTransformBroadcastAt = 0;
       }
 
       this.broadcastZonePvpRoomState(room, now, true);
@@ -4911,7 +5204,9 @@ export class GameGateway {
       ...payload,
       collectionSeq: player.collectionSeq,
       serverTime: Date.now(),
-      you: this.serializePlayer(player),
+      you: room?.zonePvpMode
+        ? this.serializeZonePvpStatePlayer(room, player)
+        : this.serializePlayer(player),
     });
   }
 
@@ -7031,6 +7326,9 @@ export class GameGateway {
         phaseVersion: Number(room.phaseVersion || 0),
         status: room.status,
         countdown: zonePvpCountdown,
+        countdownEndsAt: room.status === "countdown" && room.countdownStartedAt
+          ? Number(room.countdownStartedAt) + zoneCountdownDuration
+          : null,
         coreDropCountdown,
         winnerId: room.winnerId,
         winnerName: room.winnerName,

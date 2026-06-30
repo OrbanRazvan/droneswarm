@@ -122,10 +122,13 @@ export declare class GameGateway {
     private getCoreHeistBase;
     private getCoreHeistFlag;
     private getCoreHeistSpawn;
+    private assignCoreHeistBotRoles;
     private createCoreHeistState;
     private seedCoreHeistOpeningOrbs;
     private initializeCoreHeistRoom;
     private serializeCoreHeist;
+    private getCoreHeistPlayerName;
+    private pushCoreHeistEvent;
     private resetCoreHeistFlag;
     private dropCoreHeistFlag;
     private respawnCoreHeistPlayer;
