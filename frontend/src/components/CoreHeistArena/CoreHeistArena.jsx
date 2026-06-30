@@ -75,7 +75,7 @@ const LOCAL_PROJECTILE_MAX_DISTANCE = 4200;
 const PROJECTILE_HIT_VISUAL_RADIUS = 118;
 const LOCAL_PROJECTILE_SPEED = 4.4;
 const FIRE_COOLDOWN = 3000;
-const BATTLE_PREPARE_DURATION = 10000; // 10-second peace phase before combat.
+const BATTLE_PREPARE_DURATION = 20000; // 20-second economy phase before combat.
 const ORB_STABLE_TTL = 2400;
 const MINIMAP_STABLE_TTL = 8000;
 
@@ -1682,7 +1682,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         username: getDisplayName(currentUser),
         skin: getSelectedSkin(currentUser),
         // Same robust Zone socket lane, but server creates/joins an isolated
-        // Core Heist room rather than a shrinking-zone battle royale room.
+        // Capture the Flag room rather than a shrinking-zone battle royale room.
         mode: "core-heist",
         resumeToken: resumeTokenRef.current,
         participantId: participantIdRef.current,
@@ -3998,16 +3998,28 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const heistScore = heist?.score || { cyan: 0, orange: 0 };
   const heistTargetScore = Number(heist?.targetScore || 3);
   const heistTeam = String(heist?.team || hudYou?.team || "cyan");
-  const heistCore = heist?.core || null;
-  const heistExtraction = heist?.extraction || null;
+  const enemyHeistTeam = heistTeam === "orange" ? "cyan" : "orange";
+  const teamLabel = heistTeam === "orange" ? "RED" : "BLUE";
+  const enemyTeamLabel = enemyHeistTeam === "orange" ? "RED" : "BLUE";
+  const heistFlags = Array.isArray(heist?.flags) ? heist.flags : [];
+  const ownFlag = heistFlags.find((flag) => String(flag?.team || "cyan") === heistTeam) || null;
+  const enemyFlag = heistFlags.find((flag) => String(flag?.team || "cyan") === enemyHeistTeam) || null;
+  const carriedFlag = heistFlags.find((flag) => String(flag?.carrierId || "") === String(hudYou?.id || "")) || null;
   const heistRemainingMs = Math.max(0, Number(heist?.remainingMs || (heist?.matchEndsAt ? Number(heist.matchEndsAt) - Date.now() : 0)));
   const heistMinutes = Math.floor(heistRemainingMs / 60000);
   const heistSeconds = Math.floor((heistRemainingMs % 60000) / 1000).toString().padStart(2, "0");
   const respawnRemainingMs = Math.max(0, Number(hudYou?.respawnAt || renderData.you?.respawnAt || 0) - Date.now());
   const respawnSeconds = Math.max(0, Math.ceil(respawnRemainingMs / 1000));
-  const heistMiniMapCores = heistCore && ["vault", "dropped", "carried"].includes(String(heistCore.status || ""))
-    ? [{ id: `heist-${heistCore.id || "core"}`, x: heistCore.x, y: heistCore.y, type: "emp" }]
-    : [];
+  const heistDeaths = Math.max(0, Number(hudYou?.heistDeaths || renderData.you?.heistDeaths || 0));
+  const heistPermanentElimination = Boolean(hudYou?.heistPermanentElimination || renderData.you?.heistPermanentElimination);
+  const heistMiniMapCores = heistFlags
+    .filter((flag) => ["home", "dropped", "carried"].includes(String(flag?.status || "")))
+    .map((flag) => ({
+      id: `ctf-${flag.id || flag.team}`,
+      x: Number(flag.x || 0),
+      y: Number(flag.y || 0),
+      type: String(flag?.team || "cyan") === "orange" ? "berserk" : "nano",
+    }));
 
   return (
     <div className={`game-arena pvp-dom-arena normal-pvp-dom-arena zone-pvp-dom-arena core-heist-dom-arena ${isMobileControls ? "is-mobile-device is-mobile-portrait" : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""} ${isBattlePrepare ? "is-battle-prepare" : ""}`}>
@@ -4015,12 +4027,12 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         <div className="core-heist-matchmaking-screen">
           <div className="core-heist-matchmaking-card">
             <div className="core-heist-loader" />
-            <h1>{isCountdown ? "SE AȘTEAPTĂ ALȚI JUCĂTORI" : "MATCHMAKING SEARCH"}</h1>
-            <strong>{isCountdown ? countdown : `${matchmakingPlayerCount} / ${minPlayers}`}</strong>
+            <h1>{isCountdown ? "MATCH STARTING" : "MATCHMAKING SEARCH"}</h1>
+            <strong>{isCountdown ? countdown : `${matchmakingPlayerCount} / ${minPlayers} REAL PLAYER`}</strong>
             <p>
               {isCountdown
-                ? `Se așteaptă alți jucători: ${countdown}`
-                : "Se pornește cu un jucător real; restul locurilor vor fi completate cu boți."}
+                ? `Meciul începe în ${countdown}. Restul locurilor sunt completate cu boți.`
+                : "Este nevoie de minimum un jucător real. După countdown intră automat 7 boți."}
             </p>
           </div>
         </div>
@@ -4126,8 +4138,8 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       </div>
 
       <div className="alive-counter pvp-alive-counter normal-pvp-top-hud core-heist-team-panel">
-        <strong>{heistTeam === "orange" ? "ORANGE TEAM" : "CYAN TEAM"}</strong>
-        <span>{playersAlive} DRONES ONLINE · MAX {maxPlayers}</span>
+        <strong>{teamLabel} TEAM</strong>
+        <span>{playersAlive} DRONES ONLINE · {Math.max(0, 2 - heistDeaths)} LIVES LEFT · MAX {maxPlayers}</span>
       </div>
 
       {!isFinished && !isMatchmaking && (
@@ -4137,35 +4149,37 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         </div>
       )}
 
-      <div className="core-heist-scoreboard" aria-label="Core Heist score">
+      <div className="core-heist-scoreboard" aria-label="Capture the Flag score">
         <div className={`core-heist-score-side cyan ${heistTeam === "cyan" ? "is-your-team" : ""}`}>
-          <span>CYAN</span>
+          <span>BLUE</span>
           <strong>{heistScore.cyan || 0}</strong>
         </div>
         <div className="core-heist-score-middle">
-          <b>CORE HEIST</b>
+          <b>CAPTURE THE FLAG</b>
           <small>FIRST TO {heistTargetScore}</small>
         </div>
         <div className={`core-heist-score-side orange ${heistTeam === "orange" ? "is-your-team" : ""}`}>
           <strong>{heistScore.orange || 0}</strong>
-          <span>ORANGE</span>
+          <span>RED</span>
         </div>
       </div>
 
       <div className="core-heist-objective-panel">
         <b>
-          {heistCore?.status === "carried"
-            ? (String(heistCore.carrierId || "") === String(hudYou?.id || "") ? "YOU CARRY THE CORE" : "CORE CARRIER MARKED")
-            : heistCore?.status === "dropped"
-              ? "CORE DROPPED — SECURE IT"
-              : heistCore?.status === "respawning"
-                ? "VAULT RECHARGING"
-                : "SECURE THE VAULT CORE"}
+          {carriedFlag
+            ? `YOU CARRY THE ${String(carriedFlag.team) === "orange" ? "RED" : "BLUE"} FLAG`
+            : enemyFlag?.status === "carried"
+              ? `${enemyTeamLabel} FLAG CARRIER MARKED`
+              : ownFlag?.status === "carried"
+                ? `YOUR ${teamLabel} FLAG WAS STOLEN`
+                : ownFlag?.status === "dropped"
+                  ? `RETURN YOUR ${teamLabel} FLAG`
+                  : `STEAL THE ${enemyTeamLabel} FLAG`}
         </b>
         <span>
-          {heistExtraction?.carrierId && String(heistExtraction.carrierId) === String(hudYou?.id || "") && Number(heistExtraction.progress || 0) > 0
-            ? `EXTRACTING ${Math.round(Number(heistExtraction.progress || 0) * 100)}%`
-            : "Bring it to your extractor. Enemies near it stop the channel."}
+          {carriedFlag
+            ? `Take it inside the ${teamLabel} base perimeter to score.`
+            : "Farm orbs for escort drones. Combat unlocks after the 20-second prepare phase."}
         </span>
       </div>
 
@@ -4209,9 +4223,13 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       {isDead && !isFinished && (
         <div className="core-heist-redeploy-panel">
           <div className="core-heist-redeploy-card">
-            <strong>DRONE DOWN</strong>
-            <b>REDEPLOYING {respawnSeconds}s</b>
-            <span>Your team can still secure and extract the core.</span>
+            <strong>{heistPermanentElimination ? "OUT OF LIVES" : "DRONE DOWN"}</strong>
+            <b>{heistPermanentElimination ? "SPECTATING YOUR TEAM" : `REDEPLOYING ${respawnSeconds}s`}</b>
+            <span>
+              {heistPermanentElimination
+                ? "You used both lives. Follow your surviving teammates."
+                : `Death ${heistDeaths} / 2 — redeploying inside your ${teamLabel} base.`}
+            </span>
           </div>
         </div>
       )}
@@ -4219,7 +4237,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       {isFinished && (
         <div className="game-over-screen pvp-finished-screen">
           <h1>{winnerName ? `${winnerName} WINS` : "MATCH FINISHED"}</h1>
-          <p>{winnerName || "Core Heist complete."}</p>
+          <p>{winnerName || "Capture the Flag complete."}</p>
           <p className="core-heist-finished-auto-exit">Final score: CYAN {heistScore.cyan || 0} · ORANGE {heistScore.orange || 0}</p>
           <button onClick={handleZoneExitToMenu}>EXIT TO MENU</button>
         </div>

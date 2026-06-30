@@ -2468,11 +2468,11 @@ function safeDestroy(app) {
 }
 
 
-function drawCoreHeistObjectives(graphics, objectives) {
+function drawCoreHeistObjectives(graphics, objectives, units = []) {
   if (!graphics) return;
   graphics.clear();
 
-  if (!objectives || !Array.isArray(objectives.extractors)) {
+  if (!objectives || !Array.isArray(objectives.bases)) {
     graphics.visible = false;
     return;
   }
@@ -2480,43 +2480,94 @@ function drawCoreHeistObjectives(graphics, objectives) {
   graphics.visible = true;
   graphics.eventMode = "none";
 
-  for (const extractor of objectives.extractors) {
-    const isOrange = String(extractor?.team || "") === "orange";
-    const color = isOrange ? 0xffa33a : 0x1ee8ff;
-    const x = Number(extractor?.x || 0);
-    const y = Number(extractor?.y || 0);
-    const radius = Math.max(120, Number(extractor?.radius || 360));
+  const colorForTeam = (team) => String(team || "cyan") === "orange" ? 0xff4d4d : 0x3d9bff;
+  const lightForTeam = (team) => String(team || "cyan") === "orange" ? 0xffc1c1 : 0xcbe9ff;
+  const findCarrier = (id) => units.find((unit) => String(unit?.id || "") === String(id || "")) || null;
 
-    graphics.circle(x, y, radius).fill({ color, alpha: 0.022 });
-    graphics.circle(x, y, radius).stroke({ color, width: 9, alpha: 0.42 });
-    graphics.circle(x, y, radius - 38).stroke({ color: 0xffffff, width: 2.1, alpha: 0.22 });
-    graphics.circle(x, y, 32).fill({ color, alpha: 0.18 });
-    graphics.circle(x, y, 18).stroke({ color: 0xffffff, width: 3, alpha: 0.62 });
-    graphics.moveTo(x - 52, y).lineTo(x + 52, y).stroke({ color, width: 3, alpha: 0.58 });
-    graphics.moveTo(x, y - 52).lineTo(x, y + 52).stroke({ color, width: 3, alpha: 0.58 });
+  // Each base is one static Graphics batch: protected pad, outer perimeter
+  // segments and the flag stand. No DOM nodes or per-frame allocations are used.
+  for (const base of objectives.bases || []) {
+    const team = String(base?.team || "cyan");
+    const color = colorForTeam(team);
+    const light = lightForTeam(team);
+    const x = Number(base?.x || 0);
+    const y = Number(base?.y || 0);
+    const captureRadius = Math.max(160, Number(base?.radius || 520));
+    const perimeterRadius = Math.max(captureRadius + 120, Number(base?.perimeterRadius || 860));
+
+    graphics.circle(x, y, perimeterRadius).fill({ color, alpha: 0.014 });
+    graphics.circle(x, y, perimeterRadius).stroke({ color, width: 6, alpha: 0.34 });
+    graphics.circle(x, y, captureRadius).fill({ color, alpha: 0.052 });
+    graphics.circle(x, y, captureRadius).stroke({ color, width: 10, alpha: 0.52 });
+    graphics.circle(x, y, captureRadius - 48).stroke({ color: light, width: 2.2, alpha: 0.33 });
+    graphics.circle(x, y, 78).fill({ color: 0x06101d, alpha: 0.92 });
+    graphics.circle(x, y, 78).stroke({ color, width: 5, alpha: 0.72 });
+    graphics.circle(x, y, 36).fill({ color, alpha: 0.22 });
+    graphics.circle(x, y, 18).fill({ color: light, alpha: 0.86 });
+
+    // Eight modular wall blocks make the base perimeter visually obvious even
+    // at a wide camera scale, while remaining one lightweight vector batch.
+    for (let index = 0; index < 8; index += 1) {
+      const angle = (index / 8) * Math.PI * 2;
+      const bx = x + Math.cos(angle) * perimeterRadius;
+      const by = y + Math.sin(angle) * perimeterRadius;
+      const tangentX = -Math.sin(angle);
+      const tangentY = Math.cos(angle);
+      const normalX = Math.cos(angle);
+      const normalY = Math.sin(angle);
+      const halfLength = 94;
+      const halfDepth = 26;
+      const points = [
+        bx + tangentX * halfLength + normalX * halfDepth,
+        by + tangentY * halfLength + normalY * halfDepth,
+        bx - tangentX * halfLength + normalX * halfDepth,
+        by - tangentY * halfLength + normalY * halfDepth,
+        bx - tangentX * halfLength - normalX * halfDepth,
+        by - tangentY * halfLength - normalY * halfDepth,
+        bx + tangentX * halfLength - normalX * halfDepth,
+        by + tangentY * halfLength - normalY * halfDepth,
+      ];
+      graphics.poly(points).fill({ color: 0x071622, alpha: 0.96 });
+      graphics.poly(points).stroke({ color, width: 3.4, alpha: 0.64 });
+      graphics.moveTo(bx - tangentX * (halfLength - 14), by - tangentY * (halfLength - 14))
+        .lineTo(bx + tangentX * (halfLength - 14), by + tangentY * (halfLength - 14))
+        .stroke({ color: light, width: 1.3, alpha: 0.42 });
+    }
   }
 
-  for (const vault of objectives.vaults || []) {
-    const x = Number(vault?.x || 0);
-    const y = Number(vault?.y || 0);
-    const active = Boolean(vault?.active);
-    const color = active ? 0xf9dc7b : 0x55677c;
-    graphics.circle(x, y, active ? 196 : 144).fill({ color, alpha: active ? 0.035 : 0.012 });
-    graphics.circle(x, y, active ? 184 : 132).stroke({ color, width: active ? 7 : 4, alpha: active ? 0.58 : 0.20 });
-    graphics.circle(x, y, active ? 136 : 94).stroke({ color: 0xffffff, width: 1.5, alpha: active ? 0.30 : 0.12 });
-  }
+  for (const flag of objectives.flags || []) {
+    const team = String(flag?.team || "cyan");
+    const color = colorForTeam(team);
+    const light = lightForTeam(team);
+    const carrier = String(flag?.status || "") === "carried" ? findCarrier(flag?.carrierId) : null;
+    const baseX = Number(carrier?.x ?? flag?.x ?? flag?.homeX ?? 0);
+    const baseY = Number(carrier?.y ?? flag?.y ?? flag?.homeY ?? 0);
+    const facing = Number(carrier?.moveAngle || 0);
+    const carriedOffsetX = carrier ? -Math.cos(facing || 0) * 74 : 0;
+    const carriedOffsetY = carrier ? -Math.sin(facing || 0) * 74 : 0;
+    const x = baseX + carriedOffsetX;
+    const y = baseY + carriedOffsetY;
+    const carried = Boolean(carrier);
+    const flagHeight = carried ? 70 : 112;
+    const flagWidth = carried ? 52 : 78;
+    const poleWidth = carried ? 4 : 6;
 
-  const core = objectives.core;
-  if (core && ["vault", "dropped", "carried"].includes(String(core.status || ""))) {
-    const x = Number(core.x || 0);
-    const y = Number(core.y || 0);
-    const isDropped = String(core.status) === "dropped";
-    const color = isDropped ? 0xff7b72 : 0xf9dc7b;
-    graphics.circle(x, y, 58).fill({ color, alpha: 0.10 });
-    graphics.circle(x, y, 46).stroke({ color, width: 6, alpha: 0.82 });
-    graphics.circle(x, y, 26).fill({ color: 0x111b2b, alpha: 0.95 });
-    graphics.poly([x, y - 20, x + 18, y, x, y + 20, x - 18, y]).fill({ color, alpha: 0.98 });
-    graphics.poly([x, y - 20, x + 18, y, x, y + 20, x - 18, y]).stroke({ color: 0xffffff, width: 2.1, alpha: 0.76 });
+    if (!carried) {
+      graphics.circle(x, y, 62).fill({ color, alpha: String(flag?.status) === "dropped" ? 0.095 : 0.05 });
+      graphics.circle(x, y, 58).stroke({ color, width: 3, alpha: 0.42 });
+    }
+    graphics.moveTo(x, y + flagHeight * 0.5).lineTo(x, y - flagHeight * 0.5).stroke({ color: 0xe8f4ff, width: poleWidth, alpha: 0.86 });
+    graphics.circle(x, y - flagHeight * 0.5, carried ? 6 : 8).fill({ color: light, alpha: 0.98 });
+    graphics.poly([
+      x + 2, y - flagHeight * 0.5 + 7,
+      x + flagWidth, y - flagHeight * 0.5 + flagHeight * 0.24,
+      x + 2, y - flagHeight * 0.5 + flagHeight * 0.49,
+    ]).fill({ color, alpha: 0.94 });
+    graphics.poly([
+      x + 2, y - flagHeight * 0.5 + 7,
+      x + flagWidth, y - flagHeight * 0.5 + flagHeight * 0.24,
+      x + 2, y - flagHeight * 0.5 + flagHeight * 0.49,
+    ]).stroke({ color: light, width: 1.7, alpha: 0.84 });
   }
 }
 
@@ -2547,7 +2598,7 @@ function PixiArenaRenderer({
   worldHeight = DEFAULT_WORLD_HEIGHT,
   safeZoneRadius = null,
   showZone = false,
-  // Core Heist sends at most three static zones plus one moving core. This is
+  // Capture the Flag sends two static bases and two moving flags. This is
   // drawn as one tiny Graphics object and is independent from every mode.
   heistObjectives = null,
   worldTheme = "default",
@@ -2674,7 +2725,7 @@ function PixiArenaRenderer({
       zone.visible = false;
       zone.zIndex = 2;
 
-      // Objective graphics are only populated by Core Heist. One Graphics
+      // Objective graphics are only populated by Capture the Flag. One Graphics
       // instance draws its three static platforms and the current core, so no
       // extra React/DOM work occurs while the drone movement loop is running.
       const heistLayer = new PIXI.Graphics();
@@ -2961,7 +3012,11 @@ function PixiArenaRenderer({
         // Three extraction/vault rings plus one core are trivial compared with
         // a drone mesh. Updating this tiny Graphics object at display cadence
         // keeps a carried core glued to its drone without creating entities.
-        drawCoreHeistObjectives(heistLayer, data.heistObjectives);
+        drawCoreHeistObjectives(
+          heistLayer,
+          data.heistObjectives,
+          [data.player, ...(data.players || []), ...(data.bots || []), ...(data.simpleBots || [])].filter(Boolean),
+        );
 
         const staticSyncInterval = config.staticSyncInterval;
         if (now - lastStaticSync >= staticSyncInterval) {

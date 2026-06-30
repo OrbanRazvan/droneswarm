@@ -81,25 +81,20 @@ const CORE_HEIST_MODE = "core-heist";
 const CORE_HEIST_ROOM_MAX_PLAYERS = 8;
 const CORE_HEIST_ROOM_MIN_PLAYERS = 1;
 const CORE_HEIST_START_COUNTDOWN_MS = 5000;
-const CORE_HEIST_BATTLE_PREPARE_DURATION = 4500;
-const CORE_HEIST_MATCH_DURATION_MS = 8 * 60 * 1000;
+const CORE_HEIST_BATTLE_PREPARE_DURATION = 20000;
+const CORE_HEIST_MATCH_DURATION_MS = 10 * 60 * 1000;
 const CORE_HEIST_TARGET_SCORE = 3;
-const CORE_HEIST_RESPAWN_MS = 3600;
-const CORE_HEIST_CORE_PICKUP_DISTANCE = 205;
-const CORE_HEIST_EXTRACTION_RADIUS = 360;
-const CORE_HEIST_CONTEST_RADIUS = 540;
-const CORE_HEIST_EXTRACTION_CHANNEL_MS = 11500;
-const CORE_HEIST_DROPPED_CORE_RETURN_MS = 18000;
-const CORE_HEIST_CORE_RESPAWN_MS = 2600;
-const CORE_HEIST_CARRIER_SPEED_MULTIPLIER = 0.74;
+const CORE_HEIST_RESPAWN_MS = 3500;
+const CORE_HEIST_FLAG_PICKUP_DISTANCE = 215;
+const CORE_HEIST_BASE_CAPTURE_RADIUS = 520;
+const CORE_HEIST_FLAG_RETURN_MS = 12000;
+const CORE_HEIST_CARRIER_SPEED_MULTIPLIER = 0.80;
 const CORE_HEIST_BOT_TARGET_TOTAL = CORE_HEIST_ROOM_MAX_PLAYERS;
-const CORE_HEIST_BASE_X_OFFSET = 2500;
+const CORE_HEIST_BASE_X_OFFSET = 2200;
 const CORE_HEIST_BASE_Y_OFFSET = 0;
-const CORE_HEIST_VAULTS = [
-    { id: "vault-alpha", x: WORLD_WIDTH * 0.5, y: WORLD_HEIGHT * 0.5 },
-    { id: "vault-north", x: WORLD_WIDTH * 0.5, y: WORLD_HEIGHT * 0.5 - 2200 },
-    { id: "vault-south", x: WORLD_WIDTH * 0.5, y: WORLD_HEIGHT * 0.5 + 2200 },
-];
+const CORE_HEIST_BASE_RADIUS = 520;
+const CORE_HEIST_BASE_PERIMETER_RADIUS = 860;
+const CORE_HEIST_MAX_DEATHS = 2;
 const ZONE_PVP_BOT_REPLAN_MIN_MS = 110;
 const ZONE_PVP_BOT_REPLAN_MAX_MS = 210;
 const ZONE_PVP_BOT_ATTACK_RANGE = 2180;
@@ -688,7 +683,10 @@ let GameGateway = class GameGateway {
             netId: this.ensureZonePvpNetId(room, player?.id),
             isBot: Boolean(player?.isBot),
             team: room?.coreHeistMode ? String(player?.team || "cyan") : null,
-            carryingHeistCore: Boolean(room?.coreHeistMode && player?.heistCoreId),
+            carryingHeistFlag: Boolean(room?.coreHeistMode && player?.heistFlagId),
+            heistFlagId: room?.coreHeistMode ? String(player?.heistFlagId || "") || null : null,
+            heistDeaths: room?.coreHeistMode ? Number(player?.heistDeaths || 0) : 0,
+            heistPermanentElimination: Boolean(room?.coreHeistMode && player?.heistPermanentElimination),
             respawnAt: room?.coreHeistMode ? Number(player?.respawnAt || 0) : 0,
         };
     }
@@ -1108,12 +1106,17 @@ let GameGateway = class GameGateway {
             const bot = this.createZonePvpBot(room, nextIndex, zoneRadius);
             if (room?.coreHeistMode) {
                 bot.team = this.assignCoreHeistTeam(room);
+                const teamCount = this.getCoreHeistTeamPlayers(room, bot.team).length;
+                bot.heistRole = ["runner", "guard", "support", "interceptor"][teamCount % 4];
+                bot.heistFlagId = null;
+                bot.heistDeaths = 0;
+                bot.heistPermanentElimination = false;
                 const spawn = this.getCoreHeistSpawn(room, bot.team, nextIndex);
                 bot.x = spawn.x;
                 bot.y = spawn.y;
                 bot.prevX = spawn.x;
                 bot.prevY = spawn.y;
-                bot.aiState = "heist-base";
+                bot.aiState = `ctf-${bot.heistRole}`;
             }
             room.players.set(bot.id, bot);
             nextIndex += 1;
@@ -2301,7 +2304,9 @@ let GameGateway = class GameGateway {
             collectionSeq: 0,
             disconnectedAt: 0,
             team: assignedTeam,
-            heistCoreId: null,
+            heistFlagId: null,
+            heistDeaths: 0,
+            heistPermanentElimination: false,
             respawnAt: 0,
             heistRespawnCount: 0,
         };
@@ -2625,7 +2630,7 @@ let GameGateway = class GameGateway {
         }
     }
     getCoreHeistTeamLabel(team) {
-        return String(team || "cyan") === "orange" ? "ORANGE" : "CYAN";
+        return String(team || "cyan") === "orange" ? "RED" : "BLUE";
     }
     getCoreHeistTeamPlayers(room, team, aliveOnly = false) {
         return [...(room?.players?.values?.() || [])].filter((player) => String(player?.team || "cyan") === team &&
@@ -2636,82 +2641,91 @@ let GameGateway = class GameGateway {
         const orange = this.getCoreHeistTeamPlayers(room, "orange").length;
         return cyan <= orange ? "cyan" : "orange";
     }
-    getCoreHeistExtractor(room, team) {
-        const extractors = room?.heist?.extractors || [];
-        return extractors.find((extractor) => extractor?.team === team) || null;
+    getCoreHeistBase(room, team) {
+        return (room?.heist?.bases || []).find((base) => String(base?.team) === String(team)) || null;
     }
-    getCoreHeistVault(room, vaultId) {
-        const vaults = room?.heist?.vaults || [];
-        return vaults.find((vault) => String(vault?.id) === String(vaultId)) || vaults[0] || null;
+    getCoreHeistFlag(room, teamOrId) {
+        const source = String(teamOrId || "");
+        return (room?.heist?.flags || []).find((flag) => String(flag?.team) === source || String(flag?.id) === source) || null;
     }
     getCoreHeistSpawn(room, team, salt = 0) {
-        const extractor = this.getCoreHeistExtractor(room, team);
-        const centerX = Number(extractor?.x || (team === "orange"
+        const base = this.getCoreHeistBase(room, team);
+        const centerX = Number(base?.x || (team === "orange"
             ? WORLD_WIDTH - CORE_HEIST_BASE_X_OFFSET
             : CORE_HEIST_BASE_X_OFFSET));
-        const centerY = Number(extractor?.y || WORLD_HEIGHT * 0.5);
-        const angle = ((Number(salt || 0) * 1.97) + Math.random() * 0.9) % (Math.PI * 2);
-        const radius = 420 + Math.random() * 320;
+        const centerY = Number(base?.y || WORLD_HEIGHT * 0.5);
+        const angle = ((Number(salt || 0) * 1.93) + Math.random() * 0.7) % (Math.PI * 2);
+        const radius = 210 + Math.random() * 250;
         return {
             x: this.clamp(centerX + Math.cos(angle) * radius, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS),
             y: this.clamp(centerY + Math.sin(angle) * radius, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS),
         };
     }
     createCoreHeistState(now = Date.now()) {
-        const vaults = CORE_HEIST_VAULTS.map((vault, index) => ({
-            ...vault,
-            active: index === 0,
-        }));
-        const extractors = [
+        const bases = [
             {
-                id: "cyan-extractor",
+                id: "cyan-base",
                 team: "cyan",
-                label: "CYAN EXTRACT",
+                label: "BLUE BASE",
                 x: CORE_HEIST_BASE_X_OFFSET,
                 y: WORLD_HEIGHT * 0.5 + CORE_HEIST_BASE_Y_OFFSET,
-                radius: CORE_HEIST_EXTRACTION_RADIUS,
+                radius: CORE_HEIST_BASE_RADIUS,
+                perimeterRadius: CORE_HEIST_BASE_PERIMETER_RADIUS,
             },
             {
-                id: "orange-extractor",
+                id: "orange-base",
                 team: "orange",
-                label: "ORANGE EXTRACT",
+                label: "RED BASE",
                 x: WORLD_WIDTH - CORE_HEIST_BASE_X_OFFSET,
                 y: WORLD_HEIGHT * 0.5 + CORE_HEIST_BASE_Y_OFFSET,
-                radius: CORE_HEIST_EXTRACTION_RADIUS,
+                radius: CORE_HEIST_BASE_RADIUS,
+                perimeterRadius: CORE_HEIST_BASE_PERIMETER_RADIUS,
             },
         ];
-        const firstVault = vaults[0];
+        const flags = bases.map((base) => ({
+            id: `${base.team}-flag`,
+            team: base.team,
+            homeX: base.x,
+            homeY: base.y,
+            x: base.x,
+            y: base.y,
+            status: "home",
+            carrierId: null,
+            droppedAt: 0,
+            returnAt: 0,
+        }));
         return {
+            mode: "capture-the-flag",
             targetScore: CORE_HEIST_TARGET_SCORE,
             score: { cyan: 0, orange: 0 },
             matchEndsAt: 0,
-            vaults,
-            extractors,
-            activeVaultIndex: 0,
-            core: {
-                id: `heist-core-${crypto.randomUUID()}`,
-                status: "vault",
-                vaultId: firstVault.id,
-                x: firstVault.x,
-                y: firstVault.y,
-                carrierId: null,
-                droppedAt: 0,
-                returnAt: 0,
-                respawnAt: 0,
-            },
-            extraction: {
-                team: null,
-                carrierId: null,
-                startedAt: 0,
-                progress: 0,
-                contested: false,
-            },
+            bases,
+            flags,
             lastScoreAt: now,
         };
+    }
+    seedCoreHeistOpeningOrbs(room) {
+        const bases = room?.heist?.bases || [];
+        const seeded = [];
+        for (const base of bases) {
+            for (let index = 0; index < 16; index += 1) {
+                const angle = (index / 16) * Math.PI * 2 + (String(base?.team || "").length * 0.19);
+                const radius = 620 + (index % 4) * 190 + Math.floor(index / 4) * 54;
+                seeded.push({
+                    id: crypto.randomUUID(),
+                    x: this.clamp(Number(base?.x || WORLD_WIDTH * 0.5) + Math.cos(angle) * radius, 220, WORLD_WIDTH - 220),
+                    y: this.clamp(Number(base?.y || WORLD_HEIGHT * 0.5) + Math.sin(angle) * radius, 220, WORLD_HEIGHT - 220),
+                    color: COLORS[index % COLORS.length],
+                });
+            }
+        }
+        room.orbs = [...(room.orbs || []), ...seeded];
+        room.itemSpatialDirty = true;
     }
     initializeCoreHeistRoom(room, now = Date.now()) {
         room.heist = this.createCoreHeistState(now);
         room.heist.matchEndsAt = now + CORE_HEIST_MATCH_DURATION_MS;
+        this.seedCoreHeistOpeningOrbs(room);
         room.cores = [];
         room.pendingCores = [];
         room.nextCoreWaveAt = null;
@@ -2723,20 +2737,8 @@ let GameGateway = class GameGateway {
         const heist = room?.heist;
         if (!heist)
             return null;
-        const core = heist.core || {};
-        const carrier = core.carrierId ? room?.players?.get(core.carrierId) : null;
-        const resolvedCore = {
-            id: core.id,
-            status: core.status,
-            vaultId: core.vaultId || null,
-            carrierId: core.carrierId || null,
-            x: Number(carrier?.x ?? core.x ?? 0),
-            y: Number(carrier?.y ?? core.y ?? 0),
-            returnAt: Number(core.returnAt || 0),
-            respawnAt: Number(core.respawnAt || 0),
-        };
-        const extraction = heist.extraction || {};
         return {
+            mode: "capture-the-flag",
             targetScore: Number(heist.targetScore || CORE_HEIST_TARGET_SCORE),
             score: {
                 cyan: Number(heist.score?.cyan || 0),
@@ -2745,74 +2747,53 @@ let GameGateway = class GameGateway {
             matchEndsAt: Number(heist.matchEndsAt || 0),
             remainingMs: Math.max(0, Number(heist.matchEndsAt || 0) - now),
             team: viewer?.team || null,
-            vaults: (heist.vaults || []).map((vault) => ({
-                id: vault.id,
-                x: Number(vault.x || 0),
-                y: Number(vault.y || 0),
-                active: String(vault.id) === String(core.vaultId) && core.status === "vault",
+            bases: (heist.bases || []).map((base) => ({
+                id: base.id,
+                team: base.team,
+                label: base.label,
+                x: Number(base.x || 0),
+                y: Number(base.y || 0),
+                radius: Number(base.radius || CORE_HEIST_BASE_RADIUS),
+                perimeterRadius: Number(base.perimeterRadius || CORE_HEIST_BASE_PERIMETER_RADIUS),
             })),
-            extractors: (heist.extractors || []).map((extractor) => ({
-                id: extractor.id,
-                team: extractor.team,
-                label: extractor.label,
-                x: Number(extractor.x || 0),
-                y: Number(extractor.y || 0),
-                radius: Number(extractor.radius || CORE_HEIST_EXTRACTION_RADIUS),
-            })),
-            core: resolvedCore,
-            extraction: {
-                team: extraction.team || null,
-                carrierId: extraction.carrierId || null,
-                progress: Number(extraction.progress || 0),
-                contested: Boolean(extraction.contested),
-            },
+            flags: (heist.flags || []).map((flag) => {
+                const carrier = flag.carrierId ? room?.players?.get(flag.carrierId) : null;
+                return {
+                    id: flag.id,
+                    team: flag.team,
+                    homeX: Number(flag.homeX || 0),
+                    homeY: Number(flag.homeY || 0),
+                    x: Number(carrier?.x ?? flag.x ?? 0),
+                    y: Number(carrier?.y ?? flag.y ?? 0),
+                    status: flag.status,
+                    carrierId: flag.carrierId || null,
+                    returnAt: Number(flag.returnAt || 0),
+                };
+            }),
         };
     }
-    dropCoreHeistCore(room, player, now = Date.now()) {
-        const core = room?.heist?.core;
-        if (!room?.coreHeistMode || !core || String(core.carrierId || "") !== String(player?.id || ""))
+    resetCoreHeistFlag(flag) {
+        if (!flag)
             return;
-        core.status = "dropped";
-        core.carrierId = null;
-        core.x = Number(player?.x || core.x || WORLD_WIDTH * 0.5);
-        core.y = Number(player?.y || core.y || WORLD_HEIGHT * 0.5);
-        core.droppedAt = now;
-        core.returnAt = now + CORE_HEIST_DROPPED_CORE_RETURN_MS;
-        player.heistCoreId = null;
-        room.heist.extraction = {
-            team: null,
-            carrierId: null,
-            startedAt: 0,
-            progress: 0,
-            contested: false,
-        };
-        this.pushCombatEvent(room, player, "CORE DROPPED", "damage", now);
+        flag.x = Number(flag.homeX || 0);
+        flag.y = Number(flag.homeY || 0);
+        flag.status = "home";
+        flag.carrierId = null;
+        flag.droppedAt = 0;
+        flag.returnAt = 0;
     }
-    resetCoreHeistCore(room, now = Date.now(), delay = CORE_HEIST_CORE_RESPAWN_MS) {
-        const heist = room?.heist;
-        if (!heist)
+    dropCoreHeistFlag(room, player, now = Date.now()) {
+        const flag = this.getCoreHeistFlag(room, String(player?.heistFlagId || ""));
+        if (!flag || String(flag.carrierId || "") !== String(player?.id || ""))
             return;
-        const nextIndex = (Number(heist.activeVaultIndex || 0) + 1) % Math.max(1, heist.vaults.length);
-        heist.activeVaultIndex = nextIndex;
-        const vault = heist.vaults[nextIndex] || heist.vaults[0];
-        heist.core = {
-            id: `heist-core-${crypto.randomUUID()}`,
-            status: delay > 0 ? "respawning" : "vault",
-            vaultId: vault?.id || null,
-            x: Number(vault?.x || WORLD_WIDTH * 0.5),
-            y: Number(vault?.y || WORLD_HEIGHT * 0.5),
-            carrierId: null,
-            droppedAt: 0,
-            returnAt: 0,
-            respawnAt: delay > 0 ? now + delay : 0,
-        };
-        heist.extraction = {
-            team: null,
-            carrierId: null,
-            startedAt: 0,
-            progress: 0,
-            contested: false,
-        };
+        flag.status = "dropped";
+        flag.carrierId = null;
+        flag.x = Number(player?.x || flag.x || flag.homeX || 0);
+        flag.y = Number(player?.y || flag.y || flag.homeY || 0);
+        flag.droppedAt = now;
+        flag.returnAt = now + CORE_HEIST_FLAG_RETURN_MS;
+        player.heistFlagId = null;
+        this.pushCombatEvent(room, player, "FLAG DROPPED", "damage", now);
     }
     respawnCoreHeistPlayer(room, player, now = Date.now()) {
         const spawn = this.getCoreHeistSpawn(room, String(player?.team || "cyan"), Number(player?.heistRespawnCount || 0));
@@ -2829,7 +2810,7 @@ let GameGateway = class GameGateway {
         player.nextDroneAt = this.getNextDroneAt(0);
         player.alive = true;
         player.respawnAt = 0;
-        player.heistCoreId = null;
+        player.heistFlagId = null;
         player.input = {};
         player.isMoving = false;
         player.moveX = 0;
@@ -2846,210 +2827,230 @@ let GameGateway = class GameGateway {
     }
     reviveCoreHeistPlayers(room, now = Date.now()) {
         for (const player of room?.players?.values?.() || []) {
-            if (player?.alive !== false)
+            if (player?.alive !== false || player?.heistPermanentElimination)
                 continue;
             if (!player?.respawnAt || now < Number(player.respawnAt))
                 continue;
             this.respawnCoreHeistPlayer(room, player, now);
         }
     }
+    getCoreHeistEnemyTeam(team) {
+        return String(team || "cyan") === "orange" ? "cyan" : "orange";
+    }
     updateCoreHeistBots(room, now) {
         const heist = room?.heist;
-        const core = heist?.core;
-        if (!heist || !core)
+        if (!heist || room.status !== "playing")
             return;
         const units = [...room.players.values()].filter((unit) => unit?.alive !== false);
-        const nearest = (source, candidates) => {
+        const combatReady = !this.isBattlePrepareLocked(room, now);
+        const nearest = (source, candidates, maxDistance = Number.POSITIVE_INFINITY) => {
             let target = null;
-            let best = Number.POSITIVE_INFINITY;
+            let best = maxDistance * maxDistance;
             for (const candidate of candidates) {
                 if (!candidate || candidate.id === source.id || candidate.alive === false)
                     continue;
                 const dx = Number(candidate.x || 0) - Number(source.x || 0);
                 const dy = Number(candidate.y || 0) - Number(source.y || 0);
-                const d = dx * dx + dy * dy;
-                if (d < best) {
+                const distanceSq = dx * dx + dy * dy;
+                if (distanceSq < best) {
+                    best = distanceSq;
                     target = candidate;
-                    best = d;
                 }
             }
             return target;
         };
-        for (const bot of units.filter((unit) => unit?.isBot)) {
-            const team = String(bot.team || "cyan");
-            const enemies = units.filter((unit) => String(unit.team || "cyan") !== team);
-            const allies = units.filter((unit) => String(unit.team || "cyan") === team && unit.id !== bot.id);
-            const enemyCarrier = enemies.find((unit) => String(unit.id) === String(core.carrierId || ""));
-            const allyCarrier = allies.find((unit) => String(unit.id) === String(core.carrierId || ""));
-            const ownExtractor = this.getCoreHeistExtractor(room, team);
-            let targetX = Number(core.x || WORLD_WIDTH * 0.5);
-            let targetY = Number(core.y || WORLD_HEIGHT * 0.5);
-            let targetEnemy = null;
-            let state = "vault-rush";
-            if (String(core.carrierId || "") === String(bot.id)) {
-                targetX = Number(ownExtractor?.x || bot.x);
-                targetY = Number(ownExtractor?.y || bot.y);
-                targetEnemy = nearest(bot, enemies.filter((enemy) => {
-                    const dx = Number(enemy.x || 0) - Number(bot.x || 0);
-                    const dy = Number(enemy.y || 0) - Number(bot.y || 0);
-                    return dx * dx + dy * dy < 1650 * 1650;
-                }));
-                state = "extract-core";
-            }
-            else if (enemyCarrier) {
-                targetX = Number(enemyCarrier.x || targetX);
-                targetY = Number(enemyCarrier.y || targetY);
-                targetEnemy = enemyCarrier;
-                state = "intercept-carrier";
-            }
-            else if (allyCarrier) {
-                targetX = Number(allyCarrier.x || targetX);
-                targetY = Number(allyCarrier.y || targetY);
-                targetEnemy = nearest(bot, enemies);
-                state = "escort-carrier";
-            }
-            else {
-                targetEnemy = nearest(bot, enemies.filter((enemy) => {
-                    const dx = Number(enemy.x || 0) - Number(bot.x || 0);
-                    const dy = Number(enemy.y || 0) - Number(bot.y || 0);
-                    return dx * dx + dy * dy < 1450 * 1450;
-                }));
-                if (targetEnemy && Math.random() < 0.48) {
-                    targetX = Number(targetEnemy.x || targetX);
-                    targetY = Number(targetEnemy.y || targetY);
-                    state = "skirmish-vault";
+        const moveTo = (bot, targetX, targetY, targetEnemy, state) => {
+            let dx = targetX - Number(bot.x || 0);
+            let dy = targetY - Number(bot.y || 0);
+            const distance = Math.hypot(dx, dy) || 1;
+            let moveX = dx / distance;
+            let moveY = dy / distance;
+            let avoidX = 0;
+            let avoidY = 0;
+            for (const unit of units) {
+                if (!unit || unit.id === bot.id)
+                    continue;
+                const ax = Number(bot.x || 0) - Number(unit.x || 0);
+                const ay = Number(bot.y || 0) - Number(unit.y || 0);
+                const ad = Math.hypot(ax, ay) || 1;
+                if (ad < 280) {
+                    const force = (280 - ad) / 280;
+                    avoidX += (ax / ad) * force;
+                    avoidY += (ay / ad) * force;
                 }
             }
-            const dx = targetX - Number(bot.x || 0);
-            const dy = targetY - Number(bot.y || 0);
-            const distance = Math.hypot(dx, dy) || 1;
-            const moveX = dx / distance;
-            const moveY = dy / distance;
-            const aimTarget = targetEnemy || { x: targetX, y: targetY };
-            const aimDx = Number(aimTarget.x || targetX) - Number(bot.x || 0);
-            const aimDy = Number(aimTarget.y || targetY) - Number(bot.y || 0);
+            if (bot.heistFlagId) {
+                const lateral = bot.id.length % 2 ? 1 : -1;
+                moveX += -moveY * lateral * 0.22;
+                moveY += dx / distance * lateral * 0.22;
+            }
+            moveX += avoidX * 0.58;
+            moveY += avoidY * 0.58;
+            const normalized = this.normalizeZoneBotMove(moveX, moveY);
+            const aim = targetEnemy || { x: targetX, y: targetY };
+            const aimDx = Number(aim.x || targetX) - Number(bot.x || 0);
+            const aimDy = Number(aim.y || targetY) - Number(bot.y || 0);
             const aimDistance = Math.hypot(aimDx, aimDy) || 1;
-            const shouldAttack = Boolean(targetEnemy) && aimDistance < 1860 && now - Number(bot.lastFireAt || 0) > 260;
+            const canAttack = combatReady && Boolean(targetEnemy) && aimDistance <= 1850;
             bot.input = {
                 mobileMove: true,
-                moveX,
-                moveY,
-                attacking: shouldAttack,
-                shield: Boolean(targetEnemy && aimDistance < 680 && Number(bot.energy || 0) >= 20 && Number(bot.drones || 0) > 0),
-                mouseX: Number(aimTarget.x || targetX),
-                mouseY: Number(aimTarget.y || targetY),
+                moveX: normalized.x,
+                moveY: normalized.y,
+                attacking: canAttack && now - Number(bot.lastFireAt || 0) >= 520,
+                shield: combatReady && Boolean(targetEnemy) && aimDistance < 700 && Number(bot.energy || 0) >= 20 && Number(bot.drones || 0) > 0,
+                mouseX: Number(aim.x || targetX),
+                mouseY: Number(aim.y || targetY),
             };
             bot.aiState = state;
             bot.lastSeenAt = now;
             bot.lastInputReceivedAt = now;
+        };
+        for (const bot of units.filter((unit) => unit?.isBot)) {
+            const team = String(bot.team || "cyan");
+            const enemyTeam = this.getCoreHeistEnemyTeam(team);
+            const allies = units.filter((unit) => String(unit.team || "cyan") === team && unit.id !== bot.id);
+            const enemies = units.filter((unit) => String(unit.team || "cyan") === enemyTeam);
+            const ownBase = this.getCoreHeistBase(room, team);
+            const enemyBase = this.getCoreHeistBase(room, enemyTeam);
+            const ownFlag = this.getCoreHeistFlag(room, team);
+            const enemyFlag = this.getCoreHeistFlag(room, enemyTeam);
+            const enemyCarrier = enemies.find((unit) => String(unit.heistFlagId || "") === String(ownFlag?.id || "")) || null;
+            const allyCarrier = allies.find((unit) => Boolean(unit.heistFlagId)) || null;
+            const nearbyEnemy = nearest(bot, enemies, 1900);
+            const role = String(bot.heistRole || "support");
+            if (bot.heistFlagId) {
+                moveTo(bot, Number(ownBase?.x || bot.x), Number(ownBase?.y || bot.y), nearbyEnemy, "flag-run-home");
+                continue;
+            }
+            if (enemyCarrier) {
+                moveTo(bot, Number(enemyCarrier.x), Number(enemyCarrier.y), enemyCarrier, "intercept-enemy-flag");
+                continue;
+            }
+            if (ownFlag?.status === "dropped" && (role === "support" || role === "runner" || role === "interceptor")) {
+                moveTo(bot, Number(ownFlag.x), Number(ownFlag.y), nearbyEnemy, "return-own-flag");
+                continue;
+            }
+            if (allyCarrier) {
+                const escortDistance = Math.hypot(Number(allyCarrier.x) - Number(bot.x), Number(allyCarrier.y) - Number(bot.y));
+                if (role === "guard" && ownBase) {
+                    const baseThreat = nearest(bot, enemies.filter((enemy) => {
+                        const dx = Number(enemy.x) - Number(ownBase.x);
+                        const dy = Number(enemy.y) - Number(ownBase.y);
+                        return dx * dx + dy * dy < 2300 * 2300;
+                    }), 2400);
+                    moveTo(bot, Number(baseThreat?.x || ownBase.x), Number(baseThreat?.y || ownBase.y), baseThreat, "guard-base");
+                }
+                else if (escortDistance > 420) {
+                    moveTo(bot, Number(allyCarrier.x), Number(allyCarrier.y), nearbyEnemy, "escort-carrier");
+                }
+                else {
+                    moveTo(bot, Number(allyCarrier.x) - 220, Number(allyCarrier.y) + 160, nearbyEnemy, "escort-carrier");
+                }
+                continue;
+            }
+            if (role === "guard" && ownBase) {
+                const baseThreat = nearest(bot, enemies.filter((enemy) => {
+                    const dx = Number(enemy.x) - Number(ownBase.x);
+                    const dy = Number(enemy.y) - Number(ownBase.y);
+                    return dx * dx + dy * dy < 2600 * 2600;
+                }), 2700);
+                if (baseThreat) {
+                    moveTo(bot, Number(baseThreat.x), Number(baseThreat.y), baseThreat, "defend-base");
+                }
+                else {
+                    const guardAngle = (Number(bot.aiFarmAngle || 0) + now * 0.00024) % (Math.PI * 2);
+                    moveTo(bot, Number(ownBase.x) + Math.cos(guardAngle) * 520, Number(ownBase.y) + Math.sin(guardAngle) * 520, nearbyEnemy, "guard-perimeter");
+                }
+                continue;
+            }
+            if (!combatReady) {
+                const orb = this.findZoneBotNearest(bot, room.orbs || [], 3600);
+                if (orb?.unit) {
+                    moveTo(bot, Number(orb.unit.x), Number(orb.unit.y), null, "prepare-farm");
+                }
+                else {
+                    moveTo(bot, Number(enemyFlag?.x || enemyBase?.x || bot.x), Number(enemyFlag?.y || enemyBase?.y || bot.y), null, "prepare-route");
+                }
+                continue;
+            }
+            if (role === "runner" || role === "interceptor") {
+                moveTo(bot, Number(enemyFlag?.x || enemyBase?.x || bot.x), Number(enemyFlag?.y || enemyBase?.y || bot.y), nearbyEnemy, "steal-enemy-flag");
+            }
+            else if (nearbyEnemy) {
+                moveTo(bot, Number(nearbyEnemy.x), Number(nearbyEnemy.y), nearbyEnemy, "team-skirmish");
+            }
+            else {
+                moveTo(bot, Number(enemyFlag?.x || enemyBase?.x || bot.x), Number(enemyFlag?.y || enemyBase?.y || bot.y), null, "push-flag");
+            }
         }
     }
-    updateCoreHeistObjective(room, now = Date.now()) {
+    updateCoreHeistObjective(room, now) {
         const heist = room?.heist;
-        const core = heist?.core;
-        if (!heist || !core || room.status !== "playing")
+        if (!heist || room.status !== "playing")
             return;
         if (now >= Number(heist.matchEndsAt || 0)) {
             const cyan = Number(heist.score?.cyan || 0);
             const orange = Number(heist.score?.orange || 0);
-            const winnerTeam = cyan === orange
-                ? (Math.random() < 0.5 ? "cyan" : "orange")
-                : cyan > orange ? "cyan" : "orange";
+            const winnerTeam = cyan === orange ? "cyan" : cyan > orange ? "cyan" : "orange";
             const winner = [...room.players.values()].find((player) => String(player?.team || "cyan") === winnerTeam) || null;
             this.finishCoreHeistMatch(room, winner, winnerTeam, now, "time");
             return;
         }
-        if (core.status === "respawning") {
-            if (now >= Number(core.respawnAt || 0)) {
-                core.status = "vault";
-                core.respawnAt = 0;
-                const vault = this.getCoreHeistVault(room, core.vaultId);
-                core.x = Number(vault?.x || core.x);
-                core.y = Number(vault?.y || core.y);
-                this.pushCombatEvent(room, { id: "heist-system", x: core.x, y: core.y }, "CORE ONLINE", "drone-reward", now);
+        const flags = heist.flags || [];
+        const alivePlayers = [...room.players.values()].filter((player) => player?.alive !== false);
+        for (const flag of flags) {
+            if (flag.status === "dropped" && Number(flag.returnAt || 0) > 0 && now >= Number(flag.returnAt)) {
+                this.resetCoreHeistFlag(flag);
+                this.pushCombatEvent(room, { id: `flag-${flag.id}`, x: flag.x, y: flag.y }, `${this.getCoreHeistTeamLabel(flag.team)} FLAG RETURNED`, "heal", now);
             }
-            return;
         }
-        if (core.status === "carried") {
-            const carrier = room.players.get(core.carrierId);
-            if (!carrier || carrier.alive === false) {
-                if (carrier)
-                    this.dropCoreHeistCore(room, carrier, now);
-                else
-                    this.resetCoreHeistCore(room, now, 0);
-                return;
-            }
-            core.x = Number(carrier.x || core.x);
-            core.y = Number(carrier.y || core.y);
-            const team = String(carrier.team || "cyan");
-            const extractor = this.getCoreHeistExtractor(room, team);
-            const dx = Number(extractor?.x || 0) - core.x;
-            const dy = Number(extractor?.y || 0) - core.y;
-            const insideExtractor = dx * dx + dy * dy <= CORE_HEIST_EXTRACTION_RADIUS * CORE_HEIST_EXTRACTION_RADIUS;
-            const contested = [...room.players.values()].some((player) => {
-                if (!player?.alive || String(player.team || "cyan") === team)
-                    return false;
-                const ex = Number(player.x || 0) - Number(extractor?.x || 0);
-                const ey = Number(player.y || 0) - Number(extractor?.y || 0);
-                return ex * ex + ey * ey <= CORE_HEIST_CONTEST_RADIUS * CORE_HEIST_CONTEST_RADIUS;
-            });
-            if (insideExtractor && !contested) {
-                const sameChannel = String(heist.extraction?.carrierId || "") === String(carrier.id);
-                const startedAt = sameChannel ? Number(heist.extraction.startedAt || now) : now;
-                const progress = this.clamp((now - startedAt) / CORE_HEIST_EXTRACTION_CHANNEL_MS, 0, 1);
-                heist.extraction = {
-                    team,
-                    carrierId: carrier.id,
-                    startedAt,
-                    progress,
-                    contested: false,
-                };
-                if (progress >= 1) {
-                    heist.score[team] = Number(heist.score?.[team] || 0) + 1;
-                    carrier.heistCoreId = null;
-                    this.pushCombatEvent(room, carrier, "CORE EXTRACTED", "drone-reward", now);
-                    const winningTeam = Number(heist.score?.[team] || 0) >= CORE_HEIST_TARGET_SCORE;
-                    this.resetCoreHeistCore(room, now, CORE_HEIST_CORE_RESPAWN_MS);
-                    if (winningTeam) {
-                        this.finishCoreHeistMatch(room, carrier, team, now, "score");
+        for (const player of alivePlayers) {
+            const team = String(player.team || "cyan");
+            const enemyTeam = this.getCoreHeistEnemyTeam(team);
+            const ownBase = this.getCoreHeistBase(room, team);
+            const ownFlag = this.getCoreHeistFlag(room, team);
+            const enemyFlag = this.getCoreHeistFlag(room, enemyTeam);
+            if (player.heistFlagId) {
+                const carried = this.getCoreHeistFlag(room, String(player.heistFlagId));
+                if (carried && ownBase) {
+                    carried.x = Number(player.x);
+                    carried.y = Number(player.y);
+                    const dx = Number(player.x) - Number(ownBase.x);
+                    const dy = Number(player.y) - Number(ownBase.y);
+                    if (dx * dx + dy * dy <= CORE_HEIST_BASE_CAPTURE_RADIUS * CORE_HEIST_BASE_CAPTURE_RADIUS) {
+                        heist.score[team] = Number(heist.score?.[team] || 0) + 1;
+                        player.heistFlagId = null;
+                        this.pushCombatEvent(room, player, "FLAG CAPTURED", "drone-reward", now);
+                        this.resetCoreHeistFlag(carried);
+                        if (Number(heist.score?.[team] || 0) >= CORE_HEIST_TARGET_SCORE) {
+                            this.finishCoreHeistMatch(room, player, team, now, "flag-capture");
+                            return;
+                        }
                     }
                 }
+                continue;
             }
-            else {
-                heist.extraction = {
-                    team,
-                    carrierId: carrier.id,
-                    startedAt: 0,
-                    progress: 0,
-                    contested,
-                };
+            if (ownFlag?.status === "dropped") {
+                const dx = Number(player.x) - Number(ownFlag.x);
+                const dy = Number(player.y) - Number(ownFlag.y);
+                if (dx * dx + dy * dy <= CORE_HEIST_FLAG_PICKUP_DISTANCE * CORE_HEIST_FLAG_PICKUP_DISTANCE) {
+                    this.resetCoreHeistFlag(ownFlag);
+                    this.pushCombatEvent(room, player, "FLAG RETURNED", "heal", now);
+                    continue;
+                }
             }
-            return;
-        }
-        if (core.status === "dropped") {
-            if (core.returnAt && now >= Number(core.returnAt)) {
-                this.resetCoreHeistCore(room, now, 0);
-                return;
+            if (enemyFlag && (enemyFlag.status === "home" || enemyFlag.status === "dropped")) {
+                const dx = Number(player.x) - Number(enemyFlag.x);
+                const dy = Number(player.y) - Number(enemyFlag.y);
+                if (dx * dx + dy * dy <= CORE_HEIST_FLAG_PICKUP_DISTANCE * CORE_HEIST_FLAG_PICKUP_DISTANCE) {
+                    enemyFlag.status = "carried";
+                    enemyFlag.carrierId = player.id;
+                    enemyFlag.returnAt = 0;
+                    enemyFlag.droppedAt = 0;
+                    player.heistFlagId = enemyFlag.id;
+                    this.pushCombatEvent(room, player, "ENEMY FLAG TAKEN", "drone-reward", now);
+                }
             }
-        }
-        const candidates = [...room.players.values()]
-            .filter((player) => player?.alive !== false)
-            .map((player) => {
-            const dx = Number(player.x || 0) - Number(core.x || 0);
-            const dy = Number(player.y || 0) - Number(core.y || 0);
-            return { player, distanceSq: dx * dx + dy * dy };
-        })
-            .filter((entry) => entry.distanceSq <= CORE_HEIST_CORE_PICKUP_DISTANCE * CORE_HEIST_CORE_PICKUP_DISTANCE)
-            .sort((a, b) => a.distanceSq - b.distanceSq);
-        const picker = candidates[0]?.player;
-        if (picker) {
-            core.status = "carried";
-            core.carrierId = picker.id;
-            core.returnAt = 0;
-            core.droppedAt = 0;
-            picker.heistCoreId = core.id;
-            heist.extraction = { team: null, carrierId: null, startedAt: 0, progress: 0, contested: false };
-            this.pushCombatEvent(room, picker, "CORE SECURED", "drone-reward", now);
         }
     }
     finishCoreHeistMatch(room, winner, winnerTeam, now = Date.now(), reason = "score") {
@@ -3062,7 +3063,7 @@ let GameGateway = class GameGateway {
         room.battleBeginFlashUntil = null;
         room.winnerId = winner?.id || null;
         room.winnerName = `${this.getCoreHeistTeamLabel(winnerTeam)} TEAM`;
-        room.finishReason = `core-heist-${reason}`;
+        room.finishReason = `capture-the-flag-${reason}`;
         room.finishedAt = now;
         room.closingAt = now + ZONE_PVP_FINISH_DISPLAY_MS;
         room.phaseVersion = Number(room.phaseVersion || 0) + 1;
@@ -3186,7 +3187,7 @@ let GameGateway = class GameGateway {
                 ? NORMAL_BASE_MOVE_SPEED_MULTIPLIER *
                     Math.max(1, Number(player.moveSpeedMultiplier || 1))
                 : 1;
-            const coreCarryMultiplier = room?.coreHeistMode && player?.heistCoreId
+            const coreCarryMultiplier = room?.coreHeistMode && player?.heistFlagId
                 ? CORE_HEIST_CARRIER_SPEED_MULTIPLIER
                 : 1;
             const speed = PLAYER_SPEED * progressionMoveMultiplier * coreCarryMultiplier;
@@ -3292,10 +3293,14 @@ let GameGateway = class GameGateway {
             : null;
         if (isValid(lockedTarget))
             return lockedTarget;
-        const candidates = [...room.players.values()].filter(isValid);
-        if (!candidates.length)
+        const allCandidates = [...room.players.values()].filter(isValid);
+        const candidates = room?.coreHeistMode
+            ? allCandidates.filter((candidate) => String(candidate?.team || "cyan") === String(victim?.team || "cyan"))
+            : allCandidates;
+        const pool = candidates.length ? candidates : allCandidates;
+        if (!pool.length)
             return null;
-        return candidates[Math.floor(Math.random() * candidates.length)] || null;
+        return pool[Math.floor(Math.random() * pool.length)] || null;
     }
     eliminatePlayer(room, victim, killer = null, now = Date.now(), reason = "unknown", forceEmit = false) {
         if (!room || !victim)
@@ -3322,22 +3327,32 @@ let GameGateway = class GameGateway {
         victim.eliminatedAt = now;
         victim.eliminationReason = reason;
         if (room?.coreHeistMode) {
-            this.dropCoreHeistCore(room, victim, now);
-            victim.respawnAt = now + CORE_HEIST_RESPAWN_MS;
-            victim.spectatorTargetId = null;
+            this.dropCoreHeistFlag(room, victim, now);
+            victim.heistDeaths = Number(victim.heistDeaths || 0) + 1;
             victim.lastSeenAt = now;
+            const permanent = Number(victim.heistDeaths || 0) >= CORE_HEIST_MAX_DEATHS;
+            victim.heistPermanentElimination = permanent;
+            victim.respawnAt = permanent ? 0 : now + CORE_HEIST_RESPAWN_MS;
+            const spectatorTarget = permanent
+                ? this.getStableSpectatorTarget(room, victim, validKiller)
+                : null;
+            victim.spectatorTargetId = spectatorTarget?.id || null;
             if (wasAlive) {
                 const socket = this.server.sockets.sockets.get(victim.id);
                 socket?.emit("zone-pvp:eliminated", {
                     serverTime: now,
                     reason,
+                    permanent,
+                    deaths: Number(victim.heistDeaths || 0),
                     respawnAt: victim.respawnAt,
                     you: this.serializeZonePvpStatePlayer(room, victim),
-                    spectatorTargetId: null,
-                    spectatingPlayer: null,
+                    spectatorTargetId: spectatorTarget?.id || null,
+                    spectatingPlayer: spectatorTarget
+                        ? this.serializeZonePvpStatePlayer(room, spectatorTarget)
+                        : null,
                 });
             }
-            return null;
+            return spectatorTarget;
         }
         const spectatorTarget = this.getStableSpectatorTarget(room, victim, validKiller);
         victim.spectatorTargetId = spectatorTarget?.id || null;
@@ -5139,7 +5154,7 @@ let GameGateway = class GameGateway {
                 this.recordZonePvpParticipant(player, null);
             }
             if (room?.coreHeistMode && player) {
-                this.dropCoreHeistCore(room, player, now);
+                this.dropCoreHeistFlag(room, player, now);
             }
             room.players.delete(socketId);
             room.projectiles = (room.projectiles || []).filter((projectile) => String(projectile?.ownerId || "") !== String(socketId));

@@ -1,4 +1,4 @@
-/* Core Heist overlays only. Shared PvP movement, HUD and mobile controls come
+/* Capture The Flag overlays only. Shared PvP movement, HUD and mobile controls come
    from ZonePvpArena.css so this mode keeps the same responsive control layout. */
 
 .core-heist-dom-arena {
@@ -6,7 +6,7 @@
 }
 
 .core-heist-dom-arena .real-leaderboard h3 {
-  color: #f7dc83;
+  color: #dcecff;
 }
 
 .core-heist-dom-arena .real-leaderboard-row.is-me {
@@ -15,14 +15,14 @@
 }
 
 .core-heist-team-panel {
-  border-color: rgba(247, 220, 131, 0.46) !important;
+  border-color: rgba(220, 237, 255, 0.46) !important;
   background:
     linear-gradient(135deg, rgba(0, 234, 255, 0.12), rgba(255, 159, 28, 0.10)),
     rgba(3, 12, 24, 0.86) !important;
 }
 
 .core-heist-team-panel strong {
-  color: #f7dc83;
+  color: #dcecff;
 }
 
 .core-heist-match-timer,
@@ -40,11 +40,11 @@
   transform: translateX(-50%);
   min-width: 136px;
   padding: 8px 14px 9px;
-  border: 1px solid rgba(247, 220, 131, 0.5);
+  border: 1px solid rgba(220, 237, 255, 0.5);
   border-radius: 12px;
   text-align: center;
   background: rgba(2, 9, 20, 0.86);
-  box-shadow: 0 0 20px rgba(247, 220, 131, 0.10);
+  box-shadow: 0 0 20px rgba(255, 74, 74, 0.10);
 }
 
 .core-heist-match-timer span,
@@ -61,7 +61,7 @@
 
 .core-heist-match-timer strong {
   margin-top: 2px;
-  color: #f7dc83;
+  color: #dcecff;
   font-size: 18px;
   letter-spacing: 1px;
 }
@@ -142,7 +142,7 @@
   transform: translateX(-50%);
   width: min(420px, calc(100vw - 34px));
   padding: 10px 14px;
-  border: 1px solid rgba(247, 220, 131, 0.38);
+  border: 1px solid rgba(220, 237, 255, 0.38);
   border-radius: 12px;
   text-align: center;
   background: rgba(2, 9, 20, 0.78);
@@ -154,7 +154,7 @@
 }
 
 .core-heist-objective-panel b {
-  color: #f7dc83;
+  color: #dcecff;
   font-size: 12px;
   letter-spacing: 0.8px;
 }
@@ -264,4 +264,25 @@
   .core-heist-dom-arena .normal-pvp-top-hud {
     top: 164px;
   }
+}
+
+
+/* CTF identity: blue home team versus red enemy team, without adding a second
+   DOM render loop. */
+.core-heist-score-side.cyan {
+  color: #73c8ff;
+  background: linear-gradient(90deg, rgba(52, 145, 255, 0.22), transparent);
+}
+
+.core-heist-score-side.orange {
+  color: #ff7777;
+  background: linear-gradient(270deg, rgba(255, 65, 65, 0.24), transparent);
+}
+
+.core-heist-dom-arena .core-heist-objective-panel {
+  border-color: rgba(160, 205, 255, 0.34);
+}
+
+.core-heist-dom-arena .core-heist-redeploy-card {
+  border-color: rgba(255, 92, 92, 0.58);
 }

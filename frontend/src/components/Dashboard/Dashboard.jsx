@@ -771,7 +771,7 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
             className="secondary-wide core-heist-wide"
             onClick={() => launchArena("core-heist")}
           >
-            Core Heist · Teams
+            Capture The Flag · 4v4
           </button>
 
         </aside>
