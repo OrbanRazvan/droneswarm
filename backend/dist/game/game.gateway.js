@@ -3299,415 +3299,454 @@ let GameGateway = class GameGateway {
         if (!heist || room.status !== "playing")
             return;
         const combatReady = !this.isBattlePrepareLocked(room, now);
-        const units = [...room.players.values()].filter((unit) => unit && unit.alive !== false && !unit.heistPermanentElimination);
-        const bots = units.filter((unit) => Boolean(unit?.isBot));
-        if (!bots.length)
-            return;
-        const distanceSq = (a, b) => {
+        const matchStartedAt = Number(room.matchStartedAt || 0);
+        const elapsedMs = matchStartedAt > 0 ? now - matchStartedAt : 0;
+        const sq = (a, b) => {
             const dx = Number(a?.x || 0) - Number(b?.x || 0);
             const dy = Number(a?.y || 0) - Number(b?.y || 0);
             return dx * dx + dy * dy;
         };
-        const pointDistanceSq = (x, y, point) => {
-            const dx = x - Number(point?.x || 0);
-            const dy = y - Number(point?.y || 0);
-            return dx * dx + dy * dy;
+        const dist = (a, b) => Math.sqrt(sq(a, b));
+        const norm = (x, y) => {
+            const l = Math.hypot(x, y);
+            return l > 1e-5 ? { x: x / l, y: y / l } : { x: 0, y: 0 };
         };
-        const normalize = (x, y) => {
-            const length = Math.hypot(x, y);
-            return length > 0.0001 ? { x: x / length, y: y / length } : { x: 0, y: 0 };
-        };
-        const clampWorld = (point) => ({
-            x: this.clamp(Number(point?.x || WORLD_WIDTH * 0.5), PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS),
-            y: this.clamp(Number(point?.y || WORLD_HEIGHT * 0.5), PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS),
+        const clampW = (x, y) => ({
+            x: Math.max(PLAYER_RADIUS, Math.min(WORLD_WIDTH - PLAYER_RADIUS, x)),
+            y: Math.max(PLAYER_RADIUS, Math.min(WORLD_HEIGHT - PLAYER_RADIUS, y)),
         });
-        const movePoint = (from, to, distance) => {
-            const direction = normalize(Number(to?.x || 0) - Number(from?.x || 0), Number(to?.y || 0) - Number(from?.y || 0));
-            return clampWorld({
-                x: Number(from?.x || 0) + direction.x * distance,
-                y: Number(from?.y || 0) + direction.y * distance,
-            });
+        const lerp = (a, b, t) => a + (b - a) * Math.max(0, Math.min(1, t));
+        const fuzzyLowHp = (hp, max) => Math.max(0, 1 - hp / Math.max(1, max));
+        const fuzzyLowEnergy = (en) => Math.max(0, 1 - en / 100);
+        const fuzzyNearby = (d, radius) => Math.max(0, 1 - d / Math.max(1, radius));
+        const fuzzyThreat = (bot, enemy) => {
+            if (!enemy)
+                return 0;
+            const d = dist(bot, enemy);
+            const power = Math.max(0, (Number(enemy?.drones || 0) * 28 + Number(enemy?.hp || 0) * 0.5));
+            const myPow = Math.max(1, Number(bot?.drones || 0) * 28 + Number(bot?.hp || 0) * 0.5);
+            return fuzzyNearby(d, 2400) * Math.min(2, power / myPow);
         };
-        const clampFromBase = (base, point, maxDistance) => {
-            const dx = Number(point?.x || base?.x || 0) - Number(base?.x || 0);
-            const dy = Number(point?.y || base?.y || 0) - Number(base?.y || 0);
-            const length = Math.hypot(dx, dy) || 1;
-            const ratio = Math.min(1, maxDistance / length);
-            return clampWorld({
-                x: Number(base?.x || 0) + dx * ratio,
-                y: Number(base?.y || 0) + dy * ratio,
-            });
-        };
-        const formationBehind = (leader, destination, side, distance) => {
-            const forward = normalize(Number(destination?.x || leader?.x || 0) - Number(leader?.x || 0), Number(destination?.y || leader?.y || 0) - Number(leader?.y || 0));
-            return clampWorld({
-                x: Number(leader?.x || 0) - forward.x * distance - forward.y * side,
-                y: Number(leader?.y || 0) - forward.y * distance + forward.x * side,
-            });
+        const fuzzyNeedResource = (bot) => {
+            const lowHp = fuzzyLowHp(Number(bot?.hp || 0), Number(bot?.maxHp || 100));
+            const lowEn = fuzzyLowEnergy(Number(bot?.energy || 0));
+            const noDrn = Number(bot?.drones || 0) === 0 ? 1 : 0;
+            return Math.max(lowEn * 0.7, noDrn * 0.85, lowHp * 0.4);
         };
         const claimedOrbs = new Set();
         const claimedEnergy = new Set();
-        const squadByTeam = {};
-        for (const team of ["cyan", "orange"]) {
-            const members = units.filter((unit) => String(unit?.team || "cyan") === team);
-            const enemies = units.filter((unit) => String(unit?.team || "cyan") !== team);
-            const attackers = members
-                .filter((unit) => this.normalizeCoreHeistRole(unit?.heistRole || "attacker") === "attacker")
-                .sort((a, b) => String(a?.id || "").localeCompare(String(b?.id || "")));
-            const botAttackers = attackers.filter((unit) => Boolean(unit?.isBot));
-            squadByTeam[team] = {
-                team,
-                members,
-                enemies,
-                ownBase: this.getCoreHeistBase(room, team),
-                enemyBase: this.getCoreHeistBase(room, this.getCoreHeistEnemyTeam(team)),
-                ownFlag: this.getCoreHeistFlag(room, team),
-                enemyFlag: this.getCoreHeistFlag(room, this.getCoreHeistEnemyTeam(team)),
-                tank: members.find((unit) => this.normalizeCoreHeistRole(unit?.heistRole || "attacker") === "tank") || null,
-                defender: members.find((unit) => this.normalizeCoreHeistRole(unit?.heistRole || "attacker") === "defender") || null,
-                attackers,
-                homeGuardAttacker: botAttackers[0] || null,
-                tankGuardAttacker: botAttackers[1] || null,
-            };
-        }
-        const chooseResource = (bot, items, claims, key, options) => {
-            const locks = bot.heistResourceLocks || (bot.heistResourceLocks = {});
+        const pickResource = (bot, key, items, claims, opts) => {
+            const locks = bot._hlocks || (bot._hlocks = {});
             const lock = locks[key];
-            const isAllowed = (item) => {
-                if (!item?.id)
+            const maxD = opts.maxDist || 3500;
+            const ok = (it) => {
+                if (!it?.id)
                     return false;
-                if (distanceSq(bot, item) > options.maxDistance * options.maxDistance)
+                if (sq(bot, it) > maxD * maxD)
                     return false;
-                if (options.anchor && Number.isFinite(options.anchorRadius)) {
-                    if (distanceSq(options.anchor, item) > Number(options.anchorRadius) * Number(options.anchorRadius))
+                if (opts.anchor && opts.anchorR) {
+                    if (sq(opts.anchor, it) > opts.anchorR * opts.anchorR)
                         return false;
                 }
                 return true;
             };
             if (lock && now < Number(lock.until || 0)) {
-                const retained = (items || []).find((item) => String(item?.id || "") === String(lock.id || ""));
-                if (retained && isAllowed(retained)) {
-                    claims.add(String(retained.id));
+                const retained = (items || []).find((i) => String(i?.id || "") === lock.id);
+                if (retained && ok(retained)) {
+                    claims.add(retained.id);
                     return retained;
                 }
             }
-            let chosen = null;
-            let bestScore = Number.POSITIVE_INFINITY;
-            for (const item of items || []) {
-                if (!item?.id || claims.has(String(item.id)) || !isAllowed(item))
+            let best = null, bestS = Infinity;
+            for (const it of items || []) {
+                if (!it?.id || claims.has(String(it.id)) || !ok(it))
                     continue;
-                let score = distanceSq(bot, item);
-                if (options.anchor)
-                    score += distanceSq(options.anchor, item) * 0.11;
-                if (options.lane)
-                    score += distanceSq(options.lane, item) * 0.025;
-                if (score < bestScore) {
-                    bestScore = score;
-                    chosen = item;
+                let s = sq(bot, it);
+                if (opts.anchor)
+                    s += sq(opts.anchor, it) * 0.08;
+                if (s < bestS) {
+                    bestS = s;
+                    best = it;
                 }
             }
-            if (chosen?.id) {
-                claims.add(String(chosen.id));
-                locks[key] = { id: String(chosen.id), until: now + 4200 };
+            if (best?.id) {
+                claims.add(String(best.id));
+                locks[key] = { id: String(best.id), until: now + 4000 };
             }
-            return chosen;
+            return best;
         };
-        const chooseThreat = (origin, squad, maxDistance) => {
-            let chosen = null;
-            let bestScore = Number.NEGATIVE_INFINITY;
-            const ownFlagId = String(squad?.ownFlag?.id || "");
-            for (const enemy of squad?.enemies || []) {
-                const dSq = distanceSq(origin, enemy);
-                if (dSq > maxDistance * maxDistance)
+        const pickThreat = (origin, enemies, maxDist, ownFlagId) => {
+            let best = null, bestScore = -Infinity;
+            for (const e of enemies) {
+                const d = dist(origin, e);
+                if (d > maxDist)
                     continue;
-                const role = this.normalizeCoreHeistRole(enemy?.heistRole || "attacker");
-                const carriesOurFlag = ownFlagId && String(enemy?.heistFlagId || "") === ownFlagId;
-                const roleValue = role === "tank" ? 420 : role === "attacker" ? 290 : 170;
-                const carrierValue = carriesOurFlag ? 2600 : 0;
-                const lowHpValue = Math.max(0, 100 - Number(enemy?.hp || 0)) * 1.2;
-                const score = carrierValue + roleValue + lowHpValue - Math.sqrt(dSq) * 0.095;
+                const role = String(e?.heistRole || "attacker").toLowerCase();
+                const hasOurFlag = String(e?.heistFlagId || "") === ownFlagId;
+                const flagBonus = hasOurFlag ? 3000 : 0;
+                const tankBonus = role === "tank" ? 400 : 0;
+                const atkBonus = role === "attacker" ? 280 : 0;
+                const weakBonus = Math.max(0, 100 - Number(e?.hp || 0)) * 1.5;
+                const proximityVal = (maxDist - d) * 0.12;
+                const score = flagBonus + tankBonus + atkBonus + weakBonus + proximityVal;
                 if (score > bestScore) {
                     bestScore = score;
-                    chosen = enemy;
+                    best = e;
                 }
             }
-            return chosen;
+            return best;
         };
+        const getProjectileEvade = (bot) => {
+            const threat = this.getZoneBotIncomingProjectileThreat(room, bot);
+            if (!threat?.incoming || Number(threat.distance || 999) > 380)
+                return null;
+            const v = norm(Number(threat.vx || 0), Number(threat.vy || 0));
+            return clampW(Number(bot.x || 0) - v.y * 400, Number(bot.y || 0) + v.x * 400);
+        };
+        const getSeparation = (bot, units) => {
+            let rx = 0, ry = 0;
+            for (const o of units) {
+                if (!o || String(o.id || "") === String(bot.id || ""))
+                    continue;
+                const dx = Number(bot.x || 0) - Number(o.x || 0);
+                const dy = Number(bot.y || 0) - Number(o.y || 0);
+                const d = Math.hypot(dx, dy) || 1;
+                if (d >= 280)
+                    continue;
+                const str = Math.min(0.8, ((280 - d) / 280) ** 2);
+                rx += (dx / d) * str;
+                ry += (dy / d) * str;
+            }
+            return { rx, ry };
+        };
+        const getDefenderPatrolTarget = (bot, ownBase, enemyBase) => {
+            const inward = Number(enemyBase.x || 0) >= Number(ownBase.x || 0) ? 1 : -1;
+            const R = 900;
+            const pts = [
+                { x: inward * R, y: -R * 0.48 },
+                { x: inward * R * 1.2, y: R * 0.12 },
+                { x: inward * R * 0.9, y: R * 0.52 },
+                { x: inward * R * 0.4, y: R * 0.28 },
+            ];
+            const idx = Number(bot._patrolIdx || 0) % pts.length;
+            const pt = { x: Number(ownBase.x || 0) + pts[idx].x, y: Number(ownBase.y || 0) + pts[idx].y };
+            if (sq(bot, pt) < 160 * 160)
+                bot._patrolIdx = (idx + 1) % pts.length;
+            return clampW(pt.x, pt.y);
+        };
+        const allUnits = [...room.players.values()].filter((u) => u?.alive !== false && !u?.heistPermanentElimination);
+        const bots = allUnits.filter((u) => Boolean(u?.isBot));
+        if (!bots.length)
+            return;
+        const squadByTeam = {};
+        for (const team of ["cyan", "orange"]) {
+            const members = allUnits.filter((u) => String(u?.team || "cyan") === team);
+            const enemies = allUnits.filter((u) => String(u?.team || "cyan") !== team);
+            const botAttackers = members
+                .filter((u) => Boolean(u?.isBot) && this.normalizeCoreHeistRole(u?.heistRole || "attacker") === "attacker")
+                .sort((a, b) => String(a?.id || "").localeCompare(String(b?.id || "")));
+            squadByTeam[team] = {
+                members, enemies,
+                ownBase: this.getCoreHeistBase(room, team),
+                enemyBase: this.getCoreHeistBase(room, this.getCoreHeistEnemyTeam(team)),
+                ownFlag: this.getCoreHeistFlag(room, team),
+                enemyFlag: this.getCoreHeistFlag(room, this.getCoreHeistEnemyTeam(team)),
+                tank: members.find((u) => this.normalizeCoreHeistRole(u?.heistRole || "attacker") === "tank") || null,
+                defender: members.find((u) => this.normalizeCoreHeistRole(u?.heistRole || "attacker") === "defender") || null,
+                homeGuard: botAttackers[0] || null,
+                tankGuard: botAttackers[1] || null,
+            };
+        }
         for (const bot of bots) {
-            if (now < Number(bot.heistPlanUntil || 0))
+            const seed = String(bot.id || "").split("").reduce((s, c) => s + c.charCodeAt(0), 0);
+            const jitter = seed % 140;
+            if (now < Number(bot._planUntil || 0))
                 continue;
-            const idSeed = String(bot.id || "").split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
-            const jitter = idSeed % 150;
-            bot.heistPlanUntil = now + 620 + jitter;
+            bot._planUntil = now + 580 + jitter;
             const team = String(bot?.team || "cyan") === "orange" ? "orange" : "cyan";
             const squad = squadByTeam[team];
             if (!squad?.ownBase || !squad?.enemyBase || !squad?.ownFlag || !squad?.enemyFlag)
                 continue;
             const role = this.normalizeCoreHeistRole(bot?.heistRole || "attacker");
-            const ownBase = squad.ownBase;
-            const enemyBase = squad.enemyBase;
-            const ownFlag = squad.ownFlag;
-            const enemyFlag = squad.enemyFlag;
-            const baseDistance = Math.hypot(Number(enemyBase.x || 0) - Number(ownBase.x || 0), Number(enemyBase.y || 0) - Number(ownBase.y || 0)) || 1;
-            const openingFarm = !combatReady;
-            const enemyCarrier = (squad.enemies || []).find((unit) => String(unit?.heistFlagId || "") === String(ownFlag.id || "")) || null;
-            const friendlyCarrier = (squad.members || []).find((unit) => Boolean(unit?.heistFlagId) && String(unit?.id || "") !== String(bot?.id || "")) || null;
-            const baseThreat = chooseThreat(ownBase, squad, 1850);
-            const nearbyThreat = chooseThreat(bot, squad, role === "attacker" ? 2250 : 1750);
-            const criticalEnergy = Number(bot.energy || 0) < 18;
-            const lowEnergy = Number(bot.energy || 0) < (role === "defender" ? 48 : 38);
+            const { ownBase, enemyBase, ownFlag, enemyFlag, enemies } = squad;
+            const baseDist = Math.hypot(Number(enemyBase.x || 0) - Number(ownBase.x || 0), Number(enemyBase.y || 0) - Number(ownBase.y || 0)) || 1;
             const hasFlag = Boolean(bot.heistFlagId);
-            let target = { x: Number(bot.x || 0), y: Number(bot.y || 0) };
-            let attackTarget = null;
+            const ownFlagId = String(ownFlag.id || "");
+            const enemyFlagId = String(enemyFlag.id || "");
+            const enemyCarrier = enemies.find((u) => String(u?.heistFlagId || "") === ownFlagId) || null;
+            const friendlyCarrier = squad.members.find((u) => Boolean(u?.heistFlagId) && String(u?.id || "") !== String(bot?.id || "") && String(u?.heistFlagId || "") === enemyFlagId) || null;
+            const fNeedRes = fuzzyNeedResource(bot);
+            const fLowHp = fuzzyLowHp(Number(bot?.hp || 0), Number(bot?.maxHp || 100));
+            const fLowEn = fuzzyLowEnergy(Number(bot?.energy || 0));
+            const critEnergy = Number(bot?.energy || 0) < 16;
+            const lowDrones = Number(bot?.drones || 0) === 0;
             let state = "idle";
-            let emergency = false;
-            if (openingFarm) {
-                const energy = criticalEnergy
-                    ? chooseResource(bot, room.energyCells || [], claimedEnergy, "opening-energy", { maxDistance: 2800 })
-                    : null;
-                const orb = !energy
-                    ? chooseResource(bot, room.orbs || [], claimedOrbs, "opening-orb", { maxDistance: 3300 })
-                    : null;
-                const resource = orb || energy;
-                if (resource) {
-                    target = { x: Number(resource.x || bot.x), y: Number(resource.y || bot.y) };
-                    state = orb ? "opening-farm-orbs" : "opening-critical-energy";
-                }
-                else {
-                    target = movePoint(ownBase, enemyBase, 950);
-                    state = "opening-search";
-                }
+            let targetPt = { x: Number(bot.x || 0), y: Number(bot.y || 0) };
+            let attackTarget = null;
+            let useShield = false;
+            let emergencyMode = false;
+            const evadePos = getProjectileEvade(bot);
+            if (evadePos) {
+                targetPt = evadePos;
+                state = "evade-projectile";
+                emergencyMode = true;
+                attackTarget = pickThreat(bot, enemies, 2000, ownFlagId);
+                useShield = combatReady && Number(bot?.energy || 0) >= 22 && fLowHp > 0.35;
             }
             else if (hasFlag) {
-                target = { x: Number(ownBase.x || bot.x), y: Number(ownBase.y || bot.y) };
-                attackTarget = chooseThreat(bot, squad, 1450);
-                state = String(bot.heistFlagId) === String(ownFlag.id) ? "return-own-flag" : "return-enemy-flag";
-                emergency = Boolean(attackTarget);
+                targetPt = { x: Number(ownBase.x || bot.x), y: Number(ownBase.y || bot.y) };
+                attackTarget = pickThreat(bot, enemies, 1600, ownFlagId);
+                state = String(bot.heistFlagId) === ownFlagId ? "return-own-flag" : "carry-enemy-flag";
+                emergencyMode = true;
+                useShield = combatReady && Number(bot?.energy || 0) >= 20;
+            }
+            else if (critEnergy && !hasFlag) {
+                const cell = pickResource(bot, "crit-energy", room.energyCells || [], claimedEnergy, { maxDist: 2200 });
+                if (cell) {
+                    targetPt = { x: Number(cell.x || bot.x), y: Number(cell.y || bot.y) };
+                    state = "emergency-energy";
+                    emergencyMode = true;
+                }
             }
             else if (role === "defender") {
-                if (enemyCarrier) {
-                    const maximumIntercept = Math.max(700, baseDistance * CORE_HEIST_DEFENDER_MAX_INTERCEPT_RATIO);
-                    target = clampFromBase(ownBase, enemyCarrier, maximumIntercept);
+                const flagStolen = String(ownFlag?.status || "") !== "home";
+                const maxIntercept = Math.max(800, baseDist * 0.45);
+                if (flagStolen && enemyCarrier) {
+                    const dx = Number(enemyCarrier.x || 0) - Number(ownBase.x || 0);
+                    const dy = Number(enemyCarrier.y || 0) - Number(ownBase.y || 0);
+                    const d = Math.hypot(dx, dy) || 1;
+                    const ratio = Math.min(1, maxIntercept / d);
+                    targetPt = clampW(Number(ownBase.x || 0) + dx * ratio, Number(ownBase.y || 0) + dy * ratio);
                     attackTarget = enemyCarrier;
-                    state = "defender-intercept-stolen-flag";
-                    emergency = true;
-                }
-                else if (baseThreat) {
-                    target = clampFromBase(ownBase, baseThreat, Math.max(900, baseDistance * 0.22));
-                    attackTarget = baseThreat;
-                    state = "defender-base-intercept";
-                    emergency = true;
+                    state = "defender-intercept-carrier";
+                    emergencyMode = true;
+                    useShield = combatReady && Number(bot?.energy || 0) >= 24 && (fLowHp > 0.25 || dist(bot, enemyCarrier) < 900);
                 }
                 else {
-                    const guardRadius = Math.min(1550, Math.max(900, baseDistance * 0.19));
-                    const energy = lowEnergy
-                        ? chooseResource(bot, room.energyCells || [], claimedEnergy, "defender-energy", {
-                            maxDistance: guardRadius + 520,
-                            anchor: ownBase,
-                            anchorRadius: guardRadius,
-                        })
-                        : null;
-                    const orb = !energy && Number(bot.drones || 0) < MAX_DRONES
-                        ? chooseResource(bot, room.orbs || [], claimedOrbs, "defender-orb", {
-                            maxDistance: guardRadius + 520,
-                            anchor: ownBase,
-                            anchorRadius: guardRadius,
-                        })
-                        : null;
-                    if (energy || orb) {
-                        const resource = energy || orb;
-                        target = { x: Number(resource.x || bot.x), y: Number(resource.y || bot.y) };
-                        state = energy ? "defender-safe-energy" : "defender-safe-orbs";
+                    const guardR = Math.min(1400, baseDist * 0.18 + 800);
+                    const threat = pickThreat(ownBase, enemies, guardR + 600, ownFlagId);
+                    const fuzzyTh = threat ? fuzzyThreat(bot, threat) : 0;
+                    if (threat && fuzzyTh > 0.15) {
+                        const cappedPos = (() => {
+                            const tdx = Number(threat.x || 0) - Number(ownBase.x || 0);
+                            const tdy = Number(threat.y || 0) - Number(ownBase.y || 0);
+                            const td = Math.hypot(tdx, tdy) || 1;
+                            const r = Math.min(td, guardR);
+                            return clampW(Number(ownBase.x || 0) + tdx / td * r, Number(ownBase.y || 0) + tdy / td * r);
+                        })();
+                        targetPt = cappedPos;
+                        attackTarget = threat;
+                        state = "defender-base-threat";
+                        emergencyMode = fuzzyTh > 0.4;
+                        useShield = combatReady && Number(bot?.energy || 0) >= 22 && dist(bot, threat) < 850;
+                    }
+                    else if (fNeedRes > 0.35 || lowDrones) {
+                        const orb = pickResource(bot, "def-orb", room.orbs || [], claimedOrbs, { maxDist: guardR + 400, anchor: ownBase, anchorR: guardR + 300 });
+                        const en = fLowEn > 0.3 ? pickResource(bot, "def-en", room.energyCells || [], claimedEnergy, { maxDist: guardR + 400, anchor: ownBase, anchorR: guardR + 300 }) : null;
+                        const res = en || orb;
+                        if (res) {
+                            targetPt = { x: Number(res.x || bot.x), y: Number(res.y || bot.y) };
+                            state = en ? "defender-farm-energy" : "defender-farm-orb";
+                        }
+                        else {
+                            targetPt = getDefenderPatrolTarget(bot, ownBase, enemyBase);
+                            state = "defender-patrol";
+                        }
                     }
                     else {
-                        const patrolIndex = Number(bot.heistPatrolIndex || 0) % 4;
-                        const inward = Number(enemyBase.x || 0) >= Number(ownBase.x || 0) ? 1 : -1;
-                        const points = [
-                            { x: inward * 700, y: -430 },
-                            { x: inward * 1120, y: -110 },
-                            { x: inward * 980, y: 330 },
-                            { x: inward * 460, y: 510 },
-                        ];
-                        const patrol = { x: Number(ownBase.x || 0) + points[patrolIndex].x, y: Number(ownBase.y || 0) + points[patrolIndex].y };
-                        if (pointDistanceSq(Number(bot.x || 0), Number(bot.y || 0), patrol) < 165 * 165) {
-                            bot.heistPatrolIndex = (patrolIndex + 1) % points.length;
-                        }
-                        target = patrol;
+                        targetPt = getDefenderPatrolTarget(bot, ownBase, enemyBase);
                         state = "defender-patrol";
+                        attackTarget = pickThreat(bot, enemies, guardR + 200, ownFlagId);
                     }
                 }
             }
             else if (role === "tank") {
-                if (friendlyCarrier) {
-                    const destination = String(friendlyCarrier.heistFlagId || "") === String(ownFlag.id || "")
-                        ? ownBase
-                        : ownBase;
-                    target = formationBehind(friendlyCarrier, destination, 0, 300);
-                    attackTarget = chooseThreat(bot, squad, 1650);
-                    state = "tank-carrier-escort";
-                    emergency = Boolean(attackTarget);
+                const openingFarm = elapsedMs < 22000;
+                if (openingFarm) {
+                    const orb = pickResource(bot, "tank-open-orb", room.orbs || [], claimedOrbs, { maxDist: 3200 });
+                    if (orb) {
+                        targetPt = { x: Number(orb.x || bot.x), y: Number(orb.y || bot.y) };
+                        state = "tank-opening-farm";
+                    }
+                    else {
+                        targetPt = { x: Number(enemyBase.x || 0), y: Number(enemyBase.y || 0) };
+                        state = "tank-opening-move";
+                    }
+                }
+                else if (friendlyCarrier && String(friendlyCarrier.heistFlagId || "") === enemyFlagId) {
+                    const dir = norm(Number(ownBase.x || 0) - Number(friendlyCarrier.x || 0), Number(ownBase.y || 0) - Number(friendlyCarrier.y || 0));
+                    targetPt = clampW(Number(friendlyCarrier.x || 0) + dir.x * -260, Number(friendlyCarrier.y || 0) + dir.y * -260);
+                    attackTarget = pickThreat(bot, enemies, 1700, ownFlagId);
+                    state = "tank-escort-carrier";
+                    emergencyMode = Boolean(attackTarget);
+                    useShield = combatReady && Number(bot?.energy || 0) >= 24 && Boolean(attackTarget) && dist(bot, attackTarget) < 900;
                 }
                 else {
-                    const laneTarget = { x: Number(enemyFlag.x || enemyBase.x), y: Number(enemyFlag.y || enemyBase.y) };
-                    const energy = criticalEnergy
-                        ? chooseResource(bot, room.energyCells || [], claimedEnergy, "tank-emergency-energy", {
-                            maxDistance: 1100,
-                            lane: laneTarget,
-                        })
-                        : null;
-                    target = energy
-                        ? { x: Number(energy.x || bot.x), y: Number(energy.y || bot.y) }
-                        : laneTarget;
-                    attackTarget = chooseThreat(bot, squad, 1420);
-                    state = energy ? "tank-critical-energy" : "tank-steal-flag";
-                    const projectileThreat = this.getZoneBotIncomingProjectileThreat(room, bot);
-                    if (projectileThreat?.incoming && Number(projectileThreat.distance || 0) < 360) {
-                        const velocity = normalize(Number(projectileThreat.vx || 0), Number(projectileThreat.vy || 0));
-                        target = clampWorld({
-                            x: Number(bot.x || 0) - velocity.y * 360,
-                            y: Number(bot.y || 0) + velocity.x * 360,
-                        });
-                        state = "tank-evade";
-                        emergency = true;
+                    const flagTarget = { x: Number(enemyFlag.x || enemyBase.x || 0), y: Number(enemyFlag.y || enemyBase.y || 0) };
+                    const nearThreat = pickThreat(bot, enemies, 1800, ownFlagId);
+                    const fThreat = nearThreat ? fuzzyThreat(bot, nearThreat) : 0;
+                    if (critEnergy) {
+                        const en = pickResource(bot, "tank-en", room.energyCells || [], claimedEnergy, { maxDist: 1400 });
+                        if (en) {
+                            targetPt = { x: Number(en.x || bot.x), y: Number(en.y || bot.y) };
+                            state = "tank-critical-energy";
+                        }
+                        else {
+                            targetPt = flagTarget;
+                            state = "tank-steal-flag";
+                        }
+                    }
+                    else if (fThreat > 0.55 && !hasFlag) {
+                        targetPt = { x: Number(nearThreat.x || 0), y: Number(nearThreat.y || 0) };
+                        attackTarget = nearThreat;
+                        state = "tank-engage-threat";
+                        emergencyMode = fThreat > 0.75;
+                        useShield = combatReady && Number(bot?.energy || 0) >= 24 && dist(bot, nearThreat) < 800;
+                    }
+                    else if (fNeedRes > 0.5 && !hasFlag) {
+                        const orb = pickResource(bot, "tank-orb", room.orbs || [], claimedOrbs, { maxDist: 1600 });
+                        if (orb) {
+                            targetPt = { x: Number(orb.x || bot.x), y: Number(orb.y || bot.y) };
+                            state = "tank-farm-orb";
+                            attackTarget = nearThreat;
+                        }
+                        else {
+                            targetPt = flagTarget;
+                            state = "tank-steal-flag";
+                            attackTarget = nearThreat;
+                        }
+                    }
+                    else {
+                        targetPt = flagTarget;
+                        attackTarget = nearThreat;
+                        state = "tank-steal-flag";
+                        useShield = combatReady && Number(bot?.energy || 0) >= 24 && Boolean(nearThreat) && dist(bot, nearThreat) < 700;
                     }
                 }
             }
             else {
-                const isHomeGuard = String(squad.homeGuardAttacker?.id || "") === String(bot.id || "");
-                const isTankGuard = String(squad.tankGuardAttacker?.id || "") === String(bot.id || "");
-                if (enemyCarrier && (isHomeGuard || !squad.tankGuardAttacker)) {
-                    const intercept = clampFromBase(ownBase, enemyCarrier, Math.max(900, baseDistance * 0.52));
-                    target = intercept;
+                const isHomeGuard = String(squad.homeGuard?.id || "") === String(bot.id || "");
+                const guardR = Math.min(1800, baseDist * 0.25 + 900);
+                if (enemyCarrier) {
+                    const capR = Math.max(1000, baseDist * (isHomeGuard ? 0.45 : 0.62));
+                    const dx = Number(enemyCarrier.x || 0) - Number(ownBase.x || 0);
+                    const dy = Number(enemyCarrier.y || 0) - Number(ownBase.y || 0);
+                    const d = Math.hypot(dx, dy) || 1;
+                    const ratio = Math.min(1, capR / d);
+                    targetPt = clampW(Number(ownBase.x || 0) + dx * ratio, Number(ownBase.y || 0) + dy * ratio);
                     attackTarget = enemyCarrier;
-                    state = "attacker-recover-stolen-flag";
-                    emergency = true;
+                    state = "attacker-chase-carrier";
+                    emergencyMode = true;
+                    useShield = combatReady && Number(bot?.energy || 0) >= 22 && dist(bot, enemyCarrier) < 800;
                 }
                 else if (isHomeGuard) {
-                    const supportAnchor = squad.defender || ownBase;
-                    const guardThreat = chooseThreat(supportAnchor, squad, 2050) || baseThreat;
-                    if (guardThreat) {
-                        target = clampFromBase(ownBase, guardThreat, Math.max(1000, baseDistance * 0.26));
-                        attackTarget = guardThreat;
-                        state = "attacker-home-intercept";
-                        emergency = true;
+                    const localThreat = pickThreat(ownBase, enemies, guardR + 500, ownFlagId);
+                    const fTh = localThreat ? fuzzyThreat(bot, localThreat) : 0;
+                    if (localThreat && fTh > 0.08) {
+                        const aggrMult = lerp(0.4, 1.0, fTh);
+                        const capDist = guardR * aggrMult;
+                        const dx = Number(localThreat.x || 0) - Number(ownBase.x || 0);
+                        const dy = Number(localThreat.y || 0) - Number(ownBase.y || 0);
+                        const d = Math.hypot(dx, dy) || 1;
+                        targetPt = clampW(Number(ownBase.x || 0) + dx / d * Math.min(d, capDist), Number(ownBase.y || 0) + dy / d * Math.min(d, capDist));
+                        attackTarget = localThreat;
+                        state = "homeguard-aggress";
+                        emergencyMode = fTh > 0.5;
+                        useShield = combatReady && Number(bot?.energy || 0) >= 22 && dist(bot, localThreat) < 750;
                     }
-                    else {
-                        const energy = lowEnergy
-                            ? chooseResource(bot, room.energyCells || [], claimedEnergy, "home-guard-energy", {
-                                maxDistance: 1600,
-                                anchor: ownBase,
-                                anchorRadius: 1500,
-                            })
-                            : null;
-                        const orb = !energy && Number(bot.drones || 0) < MAX_DRONES
-                            ? chooseResource(bot, room.orbs || [], claimedOrbs, "home-guard-orb", {
-                                maxDistance: 1600,
-                                anchor: ownBase,
-                                anchorRadius: 1500,
-                            })
-                            : null;
-                        if (energy || orb) {
-                            const resource = energy || orb;
-                            target = { x: Number(resource.x || bot.x), y: Number(resource.y || bot.y) };
-                            state = energy ? "attacker-home-energy" : "attacker-home-orbs";
+                    else if (fNeedRes > 0.3 || lowDrones) {
+                        const res = pickResource(bot, "hg-orb", room.orbs || [], claimedOrbs, { maxDist: guardR + 300, anchor: ownBase, anchorR: guardR + 200 });
+                        if (res) {
+                            targetPt = { x: Number(res.x || bot.x), y: Number(res.y || bot.y) };
+                            state = "homeguard-farm";
                         }
                         else {
-                            const protect = squad.defender || ownBase;
-                            target = formationBehind(protect, enemyBase, 220, 300);
-                            state = "attacker-home-guard";
+                            const support = squad.defender || ownBase;
+                            targetPt = clampW(Number(support.x || 0) + 80, Number(support.y || 0) + 120);
+                            state = "homeguard-support-defender";
                         }
+                    }
+                    else {
+                        const support = squad.defender || ownBase;
+                        targetPt = clampW(Number(support.x || 0) + 80, Number(support.y || 0) + 120);
+                        state = "homeguard-patrol";
+                        attackTarget = pickThreat(bot, enemies, guardR + 200, ownFlagId);
                     }
                 }
                 else {
                     const leader = friendlyCarrier || squad.tank;
                     if (leader) {
-                        const destination = friendlyCarrier ? ownBase : { x: Number(enemyFlag.x || enemyBase.x), y: Number(enemyFlag.y || enemyBase.y) };
-                        target = formationBehind(leader, destination, isTankGuard ? -220 : 220, friendlyCarrier ? 260 : 340);
-                        attackTarget = chooseThreat(bot, squad, 2050) || nearbyThreat;
-                        state = friendlyCarrier ? "attacker-carrier-escort" : "attacker-tank-escort";
-                        emergency = Boolean(attackTarget && distanceSq(bot, attackTarget) < 960 * 960);
+                        const leaderDest = friendlyCarrier
+                            ? { x: Number(ownBase.x || 0), y: Number(ownBase.y || 0) }
+                            : { x: Number(enemyFlag.x || enemyBase.x || 0), y: Number(enemyFlag.y || enemyBase.y || 0) };
+                        const fwd = norm(Number(leaderDest.x || 0) - Number(leader.x || 0), Number(leaderDest.y || 0) - Number(leader.y || 0));
+                        targetPt = clampW(Number(leader.x || 0) - fwd.x * 280 + fwd.y * 180, Number(leader.y || 0) - fwd.y * 280 - fwd.x * 180);
+                        attackTarget = pickThreat(bot, enemies, 2000, ownFlagId);
+                        state = friendlyCarrier ? "tankguard-escort-carrier" : "tankguard-escort-tank";
+                        emergencyMode = Boolean(attackTarget && dist(bot, attackTarget) < 1000);
+                        useShield = combatReady && Number(bot?.energy || 0) >= 22 && Boolean(attackTarget) && dist(bot, attackTarget) < 800;
+                    }
+                    else if (fNeedRes > 0.35 || lowDrones) {
+                        const orb = pickResource(bot, "tg-orb", room.orbs || [], claimedOrbs, { maxDist: 2200 });
+                        if (orb) {
+                            targetPt = { x: Number(orb.x || bot.x), y: Number(orb.y || bot.y) };
+                            state = "tankguard-farm";
+                        }
+                        else {
+                            targetPt = { x: Number(enemyBase.x || 0), y: Number(enemyBase.y || 0) };
+                            state = "tankguard-search";
+                            attackTarget = pickThreat(bot, enemies, 2200, ownFlagId);
+                        }
                     }
                     else {
-                        target = movePoint(ownBase, enemyBase, 1100);
-                        attackTarget = nearbyThreat;
-                        state = "attacker-search-tank";
+                        targetPt = { x: Number(enemyBase.x || 0), y: Number(enemyBase.y || 0) };
+                        attackTarget = pickThreat(bot, enemies, 2200, ownFlagId);
+                        state = "tankguard-push";
                     }
                 }
             }
-            const rawX = Number(target.x || bot.x) - Number(bot.x || 0);
-            const rawY = Number(target.y || bot.y) - Number(bot.y || 0);
-            const targetDistance = Math.hypot(rawX, rawY);
-            let desired = normalize(rawX, rawY);
-            let repelX = 0;
-            let repelY = 0;
-            for (const other of units) {
-                if (!other || String(other.id || "") === String(bot.id || ""))
-                    continue;
-                const dx = Number(bot.x || 0) - Number(other.x || 0);
-                const dy = Number(bot.y || 0) - Number(other.y || 0);
-                const distance = Math.hypot(dx, dy) || 1;
-                if (distance >= 260)
-                    continue;
-                const strength = Math.min(0.7, ((260 - distance) / 260) ** 2);
-                repelX += (dx / distance) * strength;
-                repelY += (dy / distance) * strength;
-            }
-            const resourceState = state.includes("orbs") || state.includes("energy") || state.includes("farm");
-            const patrolState = state.includes("patrol") || state.includes("guard") || state.includes("escort");
-            const arrivalRadius = resourceState ? 98 : patrolState ? 135 : 72;
-            const shouldHold = !attackTarget && targetDistance <= arrivalRadius;
-            if (shouldHold)
+            const rawDx = Number(targetPt.x || bot.x) - Number(bot.x || 0);
+            const rawDy = Number(targetPt.y || bot.y) - Number(bot.y || 0);
+            const tDist = Math.hypot(rawDx, rawDy);
+            let desired = tDist > 5 ? norm(rawDx, rawDy) : { x: 0, y: 0 };
+            const { rx, ry } = getSeparation(bot, allUnits);
+            desired = norm(desired.x + rx * 0.2, desired.y + ry * 0.2);
+            const arrR = state.includes("farm") || state.includes("orb") || state.includes("energy") ? 90
+                : state.includes("patrol") || state.includes("guard") ? 130 : 65;
+            const hold = !attackTarget && tDist <= arrR;
+            if (hold)
                 desired = { x: 0, y: 0 };
-            else
-                desired = normalize(desired.x + repelX * 0.22, desired.y + repelY * 0.22);
-            const previous = normalize(Number(bot.heistSteerX || 0), Number(bot.heistSteerY || 0));
-            const stateChanged = String(bot.heistAiState || "") !== state;
-            const blend = !previous.x && !previous.y
-                ? 1
-                : emergency
-                    ? 0.17
-                    : stateChanged
-                        ? 0.115
-                        : 0.075;
-            const movement = shouldHold
-                ? { x: 0, y: 0 }
-                : normalize(previous.x * (1 - blend) + desired.x * blend, previous.y * (1 - blend) + desired.y * blend);
-            bot.heistSteerX = movement.x;
-            bot.heistSteerY = movement.y;
-            bot.heistAiState = state;
-            const attackDistance = attackTarget ? Math.sqrt(distanceSq(bot, attackTarget)) : Number.POSITIVE_INFINITY;
-            const attackRange = role === "attacker" ? 1830 : role === "tank" ? 1380 : 1580;
-            const fireCadence = role === "attacker" ? 520 : role === "tank" ? 780 : 620;
-            const canAttack = Boolean(combatReady &&
+            const prev = norm(Number(bot._steerX || 0), Number(bot._steerY || 0));
+            const blendRate = emergencyMode ? 0.22 : state !== String(bot._aiState || "") ? 0.12 : 0.07;
+            const blendHasDir = prev.x !== 0 || prev.y !== 0;
+            const movement = hold ? { x: 0, y: 0 } : blendHasDir
+                ? norm(prev.x * (1 - blendRate) + desired.x * blendRate, prev.y * (1 - blendRate) + desired.y * blendRate)
+                : desired;
+            bot._steerX = movement.x;
+            bot._steerY = movement.y;
+            bot._aiState = state;
+            const atkDist = attackTarget ? dist(bot, attackTarget) : Infinity;
+            const atkRange = role === "attacker" ? 1900 : role === "tank" ? 1450 : 1650;
+            const fireCadenceMs = role === "attacker" ? 480 : role === "tank" ? 820 : 640;
+            const canFire = Boolean(combatReady &&
                 attackTarget &&
-                Number(bot.drones || 0) > 0 &&
-                attackDistance <= attackRange &&
-                now - Number(bot.lastFireAt || 0) >= fireCadence);
+                Number(bot?.drones || 0) > 0 &&
+                atkDist <= atkRange &&
+                now - Number(bot._lastFireAt || 0) >= fireCadenceMs);
+            if (canFire)
+                bot._lastFireAt = now;
             bot.input = {
                 mobileMove: true,
                 moveX: movement.x,
                 moveY: movement.y,
-                attacking: canAttack,
-                shield: Boolean(combatReady &&
-                    Number(bot.energy || 0) >= 20 &&
-                    (hasFlag ||
-                        (role === "defender" && attackTarget && attackDistance < 900) ||
-                        (role === "tank" && attackTarget && attackDistance < 760))),
-                mouseX: Number(attackTarget?.x ?? target.x ?? bot.x),
-                mouseY: Number(attackTarget?.y ?? target.y ?? bot.y),
-            };
-            bot.aiTargetX = Number(target.x || bot.x);
-            bot.aiTargetY = Number(target.y || bot.y);
-            bot.heistDecision = {
-                state,
-                role,
-                targetX: bot.aiTargetX,
-                targetY: bot.aiTargetY,
-                targetId: attackTarget?.id || null,
-                commitUntil: bot.heistPlanUntil,
-                updatedAt: now,
+                attacking: canFire,
+                shield: Boolean(useShield),
+                mouseX: Number(attackTarget?.x ?? targetPt.x ?? bot.x),
+                mouseY: Number(attackTarget?.y ?? targetPt.y ?? bot.y),
             };
             bot.aiState = `ctf-${role}-${state}`;
+            bot.aiTargetX = Number(targetPt.x || bot.x);
+            bot.aiTargetY = Number(targetPt.y || bot.y);
             bot.lastSeenAt = now;
             bot.lastInputReceivedAt = now;
         }
@@ -3716,7 +3755,8 @@ let GameGateway = class GameGateway {
         const heist = room?.heist;
         if (!heist || room.status !== "playing")
             return;
-        if (now >= Number(heist.matchEndsAt || 0)) {
+        const matchEndsAt = Number(heist.matchEndsAt || 0);
+        if (matchEndsAt > 0 && now >= matchEndsAt) {
             const cyan = Number(heist.score?.cyan || 0);
             const orange = Number(heist.score?.orange || 0);
             const winnerTeam = cyan === orange ? "cyan" : cyan > orange ? "cyan" : "orange";
@@ -4182,40 +4222,40 @@ let GameGateway = class GameGateway {
     getBodyCollisionOutcome(a, b) {
         const aHasDrones = (a.drones || 0) > 0;
         const bHasDrones = (b.drones || 0) > 0;
-        if (aHasDrones && bHasDrones) {
+        const aRole = a.heistRole ? String(a.heistRole).toLowerCase() : null;
+        const bRole = b.heistRole ? String(b.heistRole).toLowerCase() : null;
+        const isHeist = Boolean(aRole || bRole);
+        if (isHeist) {
+            const heistSide = (unit, role, hasDrones) => {
+                if (role === "tank") {
+                    unit.tankCollisionHits = (Number(unit.tankCollisionHits) || 0) + 1;
+                    const losesDrone = hasDrones && unit.tankCollisionHits >= 2;
+                    if (losesDrone)
+                        unit.tankCollisionHits = 0;
+                    return { hpDamage: losesDrone ? 10 : 20, droneLoss: losesDrone ? 1 : 0 };
+                }
+                return { hpDamage: hasDrones ? 20 : 30, droneLoss: hasDrones ? 1 : 0 };
+            };
+            const aOut = heistSide(a, aRole, aHasDrones);
+            const bOut = heistSide(b, bRole, bHasDrones);
             return {
-                aHpDamage: BODY_COLLISION_BOTH_HAVE_DRONES_DAMAGE,
-                bHpDamage: BODY_COLLISION_BOTH_HAVE_DRONES_DAMAGE,
-                aDroneLoss: 1,
-                bDroneLoss: 1,
+                aHpDamage: aOut.hpDamage,
+                bHpDamage: bOut.hpDamage,
+                aDroneLoss: aOut.droneLoss,
+                bDroneLoss: bOut.droneLoss,
                 push: BODY_COLLISION_MEDIUM_PUSH,
             };
         }
+        if (aHasDrones && bHasDrones) {
+            return { aHpDamage: BODY_COLLISION_BOTH_HAVE_DRONES_DAMAGE, bHpDamage: BODY_COLLISION_BOTH_HAVE_DRONES_DAMAGE, aDroneLoss: 1, bDroneLoss: 1, push: BODY_COLLISION_MEDIUM_PUSH };
+        }
         if (!aHasDrones && !bHasDrones) {
-            return {
-                aHpDamage: BODY_COLLISION_BOTH_NO_DRONES_DAMAGE,
-                bHpDamage: BODY_COLLISION_BOTH_NO_DRONES_DAMAGE,
-                aDroneLoss: 0,
-                bDroneLoss: 0,
-                push: BODY_COLLISION_STRONG_PUSH,
-            };
+            return { aHpDamage: BODY_COLLISION_BOTH_NO_DRONES_DAMAGE, bHpDamage: BODY_COLLISION_BOTH_NO_DRONES_DAMAGE, aDroneLoss: 0, bDroneLoss: 0, push: BODY_COLLISION_STRONG_PUSH };
         }
         if (aHasDrones && !bHasDrones) {
-            return {
-                aHpDamage: BODY_COLLISION_WITH_DRONES_DAMAGE,
-                bHpDamage: BODY_COLLISION_WITHOUT_DRONES_DAMAGE,
-                aDroneLoss: 1,
-                bDroneLoss: 0,
-                push: BODY_COLLISION_STRONG_PUSH,
-            };
+            return { aHpDamage: BODY_COLLISION_WITH_DRONES_DAMAGE, bHpDamage: BODY_COLLISION_WITHOUT_DRONES_DAMAGE, aDroneLoss: 1, bDroneLoss: 0, push: BODY_COLLISION_STRONG_PUSH };
         }
-        return {
-            aHpDamage: BODY_COLLISION_WITHOUT_DRONES_DAMAGE,
-            bHpDamage: BODY_COLLISION_WITH_DRONES_DAMAGE,
-            aDroneLoss: 0,
-            bDroneLoss: 1,
-            push: BODY_COLLISION_STRONG_PUSH,
-        };
+        return { aHpDamage: BODY_COLLISION_WITHOUT_DRONES_DAMAGE, bHpDamage: BODY_COLLISION_WITH_DRONES_DAMAGE, aDroneLoss: 0, bDroneLoss: 1, push: BODY_COLLISION_STRONG_PUSH };
     }
     applyBodyCollisionDamage(player, hpDamage, droneLoss = 0) {
         const nextDrones = Math.max(0, (player.drones || 0) - droneLoss);
