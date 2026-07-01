@@ -102,6 +102,8 @@ const CORE_HEIST_OPENING_ENERGY_PER_BASE = 12;
 const CORE_HEIST_MIDFIELD_ENERGY_COUNT = 70;
 const CORE_HEIST_BASE_CLOSE_ORBS_PER_BASE = 14;
 const CORE_HEIST_BASE_CLOSE_ENERGY_PER_BASE = 6;
+const CORE_HEIST_CORRIDOR_ORB_COUNT = 110;
+const CORE_HEIST_CORRIDOR_ENERGY_COUNT = 28;
 const CORE_HEIST_ORB_TARGET = 440;
 const CORE_HEIST_ENERGY_TARGET = 110;
 const CORE_HEIST_ORB_COLLECT_DISTANCE = 235;
@@ -2964,6 +2966,32 @@ let GameGateway = class GameGateway {
                 y: point.y,
             });
         }
+        const cyanBase = bases.find((b) => String(b?.team || "") === "cyan") || { x: CORE_HEIST_BASE_X_OFFSET, y: WORLD_HEIGHT * 0.5 };
+        const orangeBase = bases.find((b) => String(b?.team || "") === "orange") || { x: WORLD_WIDTH - CORE_HEIST_BASE_X_OFFSET, y: WORLD_HEIGHT * 0.5 };
+        const midX = (Number(cyanBase.x || 0) + Number(orangeBase.x || 0)) / 2;
+        const midY = (Number(cyanBase.y || 0) + Number(orangeBase.y || 0)) / 2;
+        const corridorHalfW = Math.abs(Number(orangeBase.x || 0) - Number(cyanBase.x || 0)) * 0.42;
+        const corridorHalfH = 2800;
+        for (let ci = 0; ci < CORE_HEIST_CORRIDOR_ORB_COUNT; ci++) {
+            const t = (ci + 0.5) / CORE_HEIST_CORRIDOR_ORB_COUNT;
+            const rx = (Math.random() - 0.5) * 2 * corridorHalfW;
+            const ry = (Math.random() - 0.5) * 2 * corridorHalfH;
+            seededOrbs.push({
+                id: crypto.randomUUID(),
+                x: this.clamp(midX + rx, 200, WORLD_WIDTH - 200),
+                y: this.clamp(midY + ry, 200, WORLD_HEIGHT - 200),
+                color: COLORS[Math.floor(Math.random() * COLORS.length)],
+            });
+        }
+        for (let ci = 0; ci < CORE_HEIST_CORRIDOR_ENERGY_COUNT; ci++) {
+            const rx = (Math.random() - 0.5) * 2 * corridorHalfW;
+            const ry = (Math.random() - 0.5) * 2 * corridorHalfH * 0.7;
+            seededEnergy.push({
+                id: crypto.randomUUID(),
+                x: this.clamp(midX + rx, 200, WORLD_WIDTH - 200),
+                y: this.clamp(midY + ry, 200, WORLD_HEIGHT - 200),
+            });
+        }
         room.orbs = seededOrbs;
         room.energyCells = seededEnergy;
         room.itemSpatialDirty = true;
@@ -3301,6 +3329,7 @@ let GameGateway = class GameGateway {
         const combatReady = !this.isBattlePrepareLocked(room, now);
         const matchStartedAt = Number(room.matchStartedAt || 0);
         const elapsedMs = matchStartedAt > 0 ? now - matchStartedAt : 0;
+        const heistScore = room?.heist?.score || { cyan: 0, orange: 0 };
         const sq = (a, b) => {
             const dx = Number(a?.x || 0) - Number(b?.x || 0);
             const dy = Number(a?.y || 0) - Number(b?.y || 0);
@@ -3510,68 +3539,97 @@ let GameGateway = class GameGateway {
             }
             else if (role === "defender") {
                 const flagStolen = String(ownFlag?.status || "") !== "home";
-                const maxIntercept = Math.max(800, baseDist * 0.45);
-                if (flagStolen && enemyCarrier) {
-                    const dx = Number(enemyCarrier.x || 0) - Number(ownBase.x || 0);
-                    const dy = Number(enemyCarrier.y || 0) - Number(ownBase.y || 0);
-                    const d = Math.hypot(dx, dy) || 1;
-                    const ratio = Math.min(1, maxIntercept / d);
-                    targetPt = clampW(Number(ownBase.x || 0) + dx * ratio, Number(ownBase.y || 0) + dy * ratio);
-                    attackTarget = enemyCarrier;
-                    state = "defender-intercept-carrier";
-                    emergencyMode = true;
-                    useShield = combatReady && Number(bot?.energy || 0) >= 24 && (fLowHp > 0.25 || dist(bot, enemyCarrier) < 900);
+                if (!combatReady) {
+                    const midX = (Number(squad.ownBase?.x || 0) + Number(squad.enemyBase?.x || 0)) / 2;
+                    const midY = (Number(squad.ownBase?.y || 0) + Number(squad.enemyBase?.y || 0)) / 2;
+                    const orbAnchor = { x: midX, y: midY };
+                    const guardR2 = Math.min(1200, baseDist * 0.35);
+                    const orb = pickResource(bot, "def-open-orb", room.orbs || [], claimedOrbs, { maxDist: guardR2 + 1500, anchor: ownBase, anchorR: guardR2 + 1200 });
+                    if (orb) {
+                        targetPt = { x: Number(orb.x || bot.x), y: Number(orb.y || bot.y) };
+                        state = "defender-opening-farm";
+                    }
+                    else {
+                        targetPt = getDefenderPatrolTarget(bot, ownBase, enemyBase);
+                        state = "defender-opening-patrol";
+                    }
                 }
                 else {
-                    const guardR = Math.min(1400, baseDist * 0.18 + 800);
-                    const threat = pickThreat(ownBase, enemies, guardR + 600, ownFlagId);
-                    const fuzzyTh = threat ? fuzzyThreat(bot, threat) : 0;
-                    if (threat && fuzzyTh > 0.15) {
-                        const cappedPos = (() => {
-                            const tdx = Number(threat.x || 0) - Number(ownBase.x || 0);
-                            const tdy = Number(threat.y || 0) - Number(ownBase.y || 0);
-                            const td = Math.hypot(tdx, tdy) || 1;
-                            const r = Math.min(td, guardR);
-                            return clampW(Number(ownBase.x || 0) + tdx / td * r, Number(ownBase.y || 0) + tdy / td * r);
-                        })();
-                        targetPt = cappedPos;
-                        attackTarget = threat;
-                        state = "defender-base-threat";
-                        emergencyMode = fuzzyTh > 0.4;
-                        useShield = combatReady && Number(bot?.energy || 0) >= 22 && dist(bot, threat) < 850;
+                    const maxIntercept = Math.max(800, baseDist * 0.45);
+                    if (flagStolen && enemyCarrier) {
+                        const dx = Number(enemyCarrier.x || 0) - Number(ownBase.x || 0);
+                        const dy = Number(enemyCarrier.y || 0) - Number(ownBase.y || 0);
+                        const d = Math.hypot(dx, dy) || 1;
+                        const ratio = Math.min(1, maxIntercept / d);
+                        targetPt = clampW(Number(ownBase.x || 0) + dx * ratio, Number(ownBase.y || 0) + dy * ratio);
+                        attackTarget = enemyCarrier;
+                        state = "defender-intercept-carrier";
+                        emergencyMode = true;
+                        useShield = combatReady && Number(bot?.energy || 0) >= 24 && (fLowHp > 0.25 || dist(bot, enemyCarrier) < 900);
                     }
-                    else if (fNeedRes > 0.35 || lowDrones) {
-                        const orb = pickResource(bot, "def-orb", room.orbs || [], claimedOrbs, { maxDist: guardR + 400, anchor: ownBase, anchorR: guardR + 300 });
-                        const en = fLowEn > 0.3 ? pickResource(bot, "def-en", room.energyCells || [], claimedEnergy, { maxDist: guardR + 400, anchor: ownBase, anchorR: guardR + 300 }) : null;
-                        const res = en || orb;
-                        if (res) {
-                            targetPt = { x: Number(res.x || bot.x), y: Number(res.y || bot.y) };
-                            state = en ? "defender-farm-energy" : "defender-farm-orb";
+                    else {
+                        const guardR = Math.min(1400, baseDist * 0.18 + 800);
+                        const threat = pickThreat(ownBase, enemies, guardR + 600, ownFlagId);
+                        const fuzzyTh = threat ? fuzzyThreat(bot, threat) : 0;
+                        if (threat && fuzzyTh > 0.15) {
+                            const cappedPos = (() => {
+                                const tdx = Number(threat.x || 0) - Number(ownBase.x || 0);
+                                const tdy = Number(threat.y || 0) - Number(ownBase.y || 0);
+                                const td = Math.hypot(tdx, tdy) || 1;
+                                const r = Math.min(td, guardR);
+                                return clampW(Number(ownBase.x || 0) + tdx / td * r, Number(ownBase.y || 0) + tdy / td * r);
+                            })();
+                            targetPt = cappedPos;
+                            attackTarget = threat;
+                            state = "defender-base-threat";
+                            emergencyMode = fuzzyTh > 0.4;
+                            useShield = combatReady && Number(bot?.energy || 0) >= 22 && dist(bot, threat) < 850;
+                        }
+                        else if (fNeedRes > 0.35 || lowDrones) {
+                            const orb = pickResource(bot, "def-orb", room.orbs || [], claimedOrbs, { maxDist: guardR + 400, anchor: ownBase, anchorR: guardR + 300 });
+                            const en = fLowEn > 0.3 ? pickResource(bot, "def-en", room.energyCells || [], claimedEnergy, { maxDist: guardR + 400, anchor: ownBase, anchorR: guardR + 300 }) : null;
+                            const res = en || orb;
+                            if (res) {
+                                targetPt = { x: Number(res.x || bot.x), y: Number(res.y || bot.y) };
+                                state = en ? "defender-farm-energy" : "defender-farm-orb";
+                            }
+                            else {
+                                targetPt = getDefenderPatrolTarget(bot, ownBase, enemyBase);
+                                state = "defender-patrol";
+                            }
                         }
                         else {
                             targetPt = getDefenderPatrolTarget(bot, ownBase, enemyBase);
                             state = "defender-patrol";
+                            attackTarget = pickThreat(bot, enemies, guardR + 200, ownFlagId);
                         }
-                    }
-                    else {
-                        targetPt = getDefenderPatrolTarget(bot, ownBase, enemyBase);
-                        state = "defender-patrol";
-                        attackTarget = pickThreat(bot, enemies, guardR + 200, ownFlagId);
                     }
                 }
             }
             else if (role === "tank") {
-                const openingFarm = elapsedMs < 21000;
+                const openingFarm = !combatReady;
+                const teamScore = Number(heistScore[team] || 0);
+                const flagUrgent = teamScore > 0 || Number(heistScore[this.getCoreHeistEnemyTeam(team)] || 0) >= CORE_HEIST_TARGET_SCORE - 1;
                 if (openingFarm) {
-                    const orb = pickResource(bot, "tank-open-orb", room.orbs || [], claimedOrbs, { maxDist: 3200 });
+                    const midX = (Number(squad.ownBase?.x || 0) + Number(squad.enemyBase?.x || 0)) / 2;
+                    const midY = (Number(squad.ownBase?.y || 0) + Number(squad.enemyBase?.y || 0)) / 2;
+                    const orbAnchor = { x: midX, y: midY };
+                    const orb = pickResource(bot, "tank-open-orb", room.orbs || [], claimedOrbs, { maxDist: 4000, anchor: orbAnchor, anchorR: 3500 });
                     if (orb) {
                         targetPt = { x: Number(orb.x || bot.x), y: Number(orb.y || bot.y) };
                         state = "tank-opening-farm";
                     }
                     else {
-                        targetPt = { x: Number(enemyBase.x || 0), y: Number(enemyBase.y || 0) };
+                        targetPt = { x: Number(midX), y: Number(midY) };
                         state = "tank-opening-move";
                     }
+                }
+                else if (flagUrgent && !friendlyCarrier) {
+                    const flagTarget2 = { x: Number(enemyFlag.x || enemyBase.x || 0), y: Number(enemyFlag.y || enemyBase.y || 0) };
+                    targetPt = flagTarget2;
+                    attackTarget = pickThreat(bot, enemies, 2000, ownFlagId);
+                    state = "tank-urgent-steal";
+                    useShield = combatReady && Number(bot?.energy || 0) >= 24 && Boolean(attackTarget) && dist(bot, attackTarget) < 700;
                 }
                 else if (friendlyCarrier && String(friendlyCarrier.heistFlagId || "") === enemyFlagId) {
                     const dir = norm(Number(ownBase.x || 0) - Number(friendlyCarrier.x || 0), Number(ownBase.y || 0) - Number(friendlyCarrier.y || 0));
@@ -3640,7 +3698,8 @@ let GameGateway = class GameGateway {
                     useShield = combatReady && Number(bot?.energy || 0) >= 22 && dist(bot, enemyCarrier) < 800;
                 }
                 else if (isHomeGuard) {
-                    const localThreat = pickThreat(ownBase, enemies, guardR + 500, ownFlagId);
+                    const extendedGuardR = combatReady ? guardR + 800 : guardR;
+                    const localThreat = pickThreat(ownBase, enemies, extendedGuardR + 500, ownFlagId);
                     const fTh = localThreat ? fuzzyThreat(bot, localThreat) : 0;
                     if (localThreat && fTh > 0.08) {
                         const aggrMult = lerp(0.4, 1.0, fTh);
@@ -3667,10 +3726,21 @@ let GameGateway = class GameGateway {
                         }
                     }
                     else {
-                        const support = squad.defender || ownBase;
-                        targetPt = clampW(Number(support.x || 0) + 80, Number(support.y || 0) + 120);
+                        const midX = (Number(squad.ownBase?.x || 0) + Number(squad.enemyBase?.x || 0)) / 2;
+                        const midY = (Number(squad.ownBase?.y || 0) + Number(squad.enemyBase?.y || 0)) / 2;
+                        const towardMid = { x: midX, y: midY };
+                        const distToMid = dist(bot, towardMid);
+                        const maxAdvance = baseDist * 0.40;
+                        if (distToMid > maxAdvance) {
+                            const dir = norm(midX - Number(bot.x || 0), midY - Number(bot.y || 0));
+                            targetPt = clampW(Number(bot.x || 0) + dir.x * 400, Number(bot.y || 0) + dir.y * 400);
+                        }
+                        else {
+                            const support = squad.defender || ownBase;
+                            targetPt = clampW(Number(support.x || 0) + 80, Number(support.y || 0) + 120);
+                        }
                         state = "homeguard-patrol";
-                        attackTarget = pickThreat(bot, enemies, guardR + 200, ownFlagId);
+                        attackTarget = pickThreat(bot, enemies, extendedGuardR + 200, ownFlagId);
                     }
                 }
                 else {
@@ -3686,22 +3756,21 @@ let GameGateway = class GameGateway {
                         emergencyMode = Boolean(attackTarget && dist(bot, attackTarget) < 1000);
                         useShield = combatReady && Number(bot?.energy || 0) >= 22 && Boolean(attackTarget) && dist(bot, attackTarget) < 800;
                     }
-                    else if (fNeedRes > 0.35 || lowDrones) {
-                        const orb = pickResource(bot, "tg-orb", room.orbs || [], claimedOrbs, { maxDist: 2200 });
+                    else {
+                        const flagPos = { x: Number(enemyFlag.x || enemyBase.x || 0), y: Number(enemyFlag.y || enemyBase.y || 0) };
+                        const needRes = fNeedRes > 0.45 || lowDrones;
+                        const orbAnchor = flagPos;
+                        const orb = needRes ? pickResource(bot, "tg-orb", room.orbs || [], claimedOrbs, { maxDist: 2000, anchor: orbAnchor, anchorR: 2500 }) : null;
                         if (orb) {
                             targetPt = { x: Number(orb.x || bot.x), y: Number(orb.y || bot.y) };
                             state = "tankguard-farm";
+                            attackTarget = pickThreat(bot, enemies, 2000, ownFlagId);
                         }
                         else {
-                            targetPt = { x: Number(enemyBase.x || 0), y: Number(enemyBase.y || 0) };
-                            state = "tankguard-search";
+                            targetPt = flagPos;
                             attackTarget = pickThreat(bot, enemies, 2200, ownFlagId);
+                            state = "tankguard-push-flag";
                         }
-                    }
-                    else {
-                        targetPt = { x: Number(enemyBase.x || 0), y: Number(enemyBase.y || 0) };
-                        attackTarget = pickThreat(bot, enemies, 2200, ownFlagId);
-                        state = "tankguard-push";
                     }
                 }
             }
@@ -6203,6 +6272,7 @@ let GameGateway = class GameGateway {
                     Math.round(Number(unit.moveAngle || 0) * 10000) / 10000,
                     flags,
                     Math.max(0, Math.min(MAX_DRONES, Number(unit.drones || 0))),
+                    unit.skin || "cyan",
                 ];
             });
             const projectileRows = this.filterNear(viewAnchor, room.projectiles || [], range + 460, ZONE_TRANSFORM_PROJECTILE_LIMIT).map((projectile) => {

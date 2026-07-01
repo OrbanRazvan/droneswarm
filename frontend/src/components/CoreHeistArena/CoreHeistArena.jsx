@@ -1057,6 +1057,9 @@ function decodeZonePlayerRow(row, meta = {}) {
   if (!Array.isArray(row)) return { ...(meta || {}), ...(row || {}) };
   const flags = Number(row[6] || 0);
   const netId = Number(row[0] || 0);
+  // row[8] carries the skin string when available (CoreHeist role variants).
+  // Falls back to meta.skin so non-heist modes are unaffected.
+  const rowSkin = row[8] ? String(row[8]) : null;
   return {
     ...(meta || {}),
     id: meta?.id || zoneNetKey(netId),
@@ -1072,7 +1075,7 @@ function decodeZonePlayerRow(row, meta = {}) {
     alive: Boolean(flags & 8),
     isBot: Boolean(flags & 16) || Boolean(meta?.isBot),
     drones: Number(row[7] ?? meta?.drones ?? 0),
-    skin: normalizeSkin(meta?.skin || 'cyan'),
+    skin: normalizeSkin(rowSkin || meta?.skin || 'cyan'),
   };
 }
 
@@ -4645,18 +4648,21 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         </div>
       </div>
 
+      {heist && !isMatchmaking && (
       <div className="core-heist-team-panel">
         <strong>{teamLabel} TEAM · {heistRoleMeta.label}</strong>
         <span>{playersAlive} DRONES ONLINE · {Math.max(0, 2 - heistDeaths)} LIVES LEFT · MAX {maxPlayers}</span>
       </div>
+      )}
 
-      {!isFinished && !isMatchmaking && (
+      {heist && !isFinished && !isMatchmaking && (
         <div className="core-heist-match-timer">
           <span>MATCH TIME</span>
           <strong>{heistMinutes}:{heistSeconds}</strong>
         </div>
       )}
 
+      {heist && !isMatchmaking && (
       <div className="core-heist-scoreboard" aria-label="Capture the Flag score">
         <div className={`core-heist-score-side cyan ${heistTeam === "cyan" ? "is-your-team" : ""}`}>
           <span>BLUE</span>
@@ -4671,6 +4677,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           <span>RED</span>
         </div>
       </div>
+      )}
 
       {heistAnnouncement && !isMatchmaking && !isFinished && (
         <div

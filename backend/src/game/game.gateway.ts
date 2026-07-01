@@ -152,6 +152,9 @@ const CORE_HEIST_MIDFIELD_ENERGY_COUNT = 70;
 // and long routes are rewarding.
 const CORE_HEIST_BASE_CLOSE_ORBS_PER_BASE = 14;
 const CORE_HEIST_BASE_CLOSE_ENERGY_PER_BASE = 6;
+// Culoar central - banda densa de orb-uri care forteaza conflictul in mijloc
+const CORE_HEIST_CORRIDOR_ORB_COUNT = 110;
+const CORE_HEIST_CORRIDOR_ENERGY_COUNT = 28;
 // Core Heist is only 4v4, so it can sustain a denser world economy. Clients
 // still receive only their nearby, server-authoritative subset.
 const CORE_HEIST_ORB_TARGET = 440;
@@ -3816,6 +3819,36 @@ export class GameGateway {
       });
     }
 
+    // CORRIDOR: banda densa de orb-uri pe culoarul central intre cele doua baze.
+    // Forteaza toate dronele (umane si AI) sa treaca prin zona de mijloc,
+    // creand conflicte naturale si prevenind strategia de stat in baza.
+    const cyanBase  = bases.find((b: any) => String(b?.team || "") === "cyan")  || { x: CORE_HEIST_BASE_X_OFFSET, y: WORLD_HEIGHT * 0.5 };
+    const orangeBase = bases.find((b: any) => String(b?.team || "") === "orange") || { x: WORLD_WIDTH - CORE_HEIST_BASE_X_OFFSET, y: WORLD_HEIGHT * 0.5 };
+    const midX  = (Number(cyanBase.x || 0) + Number(orangeBase.x || 0)) / 2;
+    const midY  = (Number(cyanBase.y || 0) + Number(orangeBase.y || 0)) / 2;
+    const corridorHalfW = Math.abs(Number(orangeBase.x || 0) - Number(cyanBase.x || 0)) * 0.42;
+    const corridorHalfH = 2800;
+    for (let ci = 0; ci < CORE_HEIST_CORRIDOR_ORB_COUNT; ci++) {
+      const t   = (ci + 0.5) / CORE_HEIST_CORRIDOR_ORB_COUNT;
+      const rx  = (Math.random() - 0.5) * 2 * corridorHalfW;
+      const ry  = (Math.random() - 0.5) * 2 * corridorHalfH;
+      seededOrbs.push({
+        id: crypto.randomUUID(),
+        x: this.clamp(midX + rx, 200, WORLD_WIDTH - 200),
+        y: this.clamp(midY + ry, 200, WORLD_HEIGHT - 200),
+        color: COLORS[Math.floor(Math.random() * COLORS.length)],
+      });
+    }
+    for (let ci = 0; ci < CORE_HEIST_CORRIDOR_ENERGY_COUNT; ci++) {
+      const rx = (Math.random() - 0.5) * 2 * corridorHalfW;
+      const ry = (Math.random() - 0.5) * 2 * corridorHalfH * 0.7;
+      seededEnergy.push({
+        id: crypto.randomUUID(),
+        x: this.clamp(midX + rx, 200, WORLD_WIDTH - 200),
+        y: this.clamp(midY + ry, 200, WORLD_HEIGHT - 200),
+      });
+    }
+
     room.orbs = seededOrbs;
     room.energyCells = seededEnergy;
     room.itemSpatialDirty = true;
@@ -4204,6 +4237,8 @@ export class GameGateway {
     const combatReady = !this.isBattlePrepareLocked(room, now);
     const matchStartedAt = Number(room.matchStartedAt || 0);
     const elapsedMs = matchStartedAt > 0 ? now - matchStartedAt : 0;
+    // Score curent: daca echipa a mai capturat steaguri, urgenta creste
+    const heistScore = room?.heist?.score || { cyan: 0, orange: 0 };
 
     // ── UTILITARE ────────────────────────────────────────────────
     const sq = (a: any, b: any) => {
@@ -4443,6 +4478,16 @@ export class GameGateway {
         // ── DEFENDER: Gardian al bazei proprii ───────────────
         // Stari: INTERCEPT_CARRIER > BASE_THREAT > PATROL > FARM_NEARBY
         const flagStolen   = String(ownFlag?.status||"")!=="home";
+        // Defender in opening phase: merge spre culoar sa ia orbs, nu sta in baza
+        if (!combatReady) {
+          const midX = (Number(squad.ownBase?.x||0) + Number(squad.enemyBase?.x||0)) / 2;
+          const midY = (Number(squad.ownBase?.y||0) + Number(squad.enemyBase?.y||0)) / 2;
+          const orbAnchor = { x: midX, y: midY };
+          const guardR2 = Math.min(1200, baseDist * 0.35);
+          const orb = pickResource(bot,"def-open-orb",room.orbs||[],claimedOrbs,{maxDist:guardR2+1500, anchor:ownBase, anchorR:guardR2+1200});
+          if (orb) { targetPt={x:Number(orb.x||bot.x),y:Number(orb.y||bot.y)}; state="defender-opening-farm"; }
+          else { targetPt=getDefenderPatrolTarget(bot,ownBase,enemyBase); state="defender-opening-patrol"; }
+        } else {
         const maxIntercept = Math.max(800, baseDist * 0.45); // max jumatate din drum
 
         if (flagStolen && enemyCarrier) {
@@ -4489,19 +4534,34 @@ export class GameGateway {
             state    = "defender-patrol";
             attackTarget = pickThreat(bot, enemies, guardR+200, ownFlagId);
           }
-        }
-      }
+        } // close outer else (combatReady)
+        } // end combatReady else block for defender
+      } // end role === "defender"
 
       else if (role === "tank") {
         // ── TANK: Raider greu care ia steagul inamic ─────────
         // Stari: ESCORT_CARRIER > STEAL_FLAG > ENGAGE > FARM > EVADE
-        const openingFarm = elapsedMs < 21000; // aliniat cu CORE_HEIST_BATTLE_PREPARE_DURATION
+        // Opening farm doar cat e locked combatul; dupa aceea tank merge imediat la steag
+        const openingFarm = !combatReady;
+        // Urgenta mare daca echipa are deja un punct (graba dupa al doilea steag)
+        const teamScore = Number(heistScore[team] || 0);
+        const flagUrgent = teamScore > 0 || Number(heistScore[this.getCoreHeistEnemyTeam(team)] || 0) >= CORE_HEIST_TARGET_SCORE - 1;
 
         if (openingFarm) {
-          // Farm agresiv in opening phase
-          const orb = pickResource(bot,"tank-open-orb",room.orbs||[],claimedOrbs,{maxDist:3200});
+          // Farm agresiv in opening phase - merge spre culoarul central pentru orbs
+          const midX = (Number(squad.ownBase?.x||0) + Number(squad.enemyBase?.x||0)) / 2;
+          const midY = (Number(squad.ownBase?.y||0) + Number(squad.enemyBase?.y||0)) / 2;
+          const orbAnchor = { x: midX, y: midY };
+          const orb = pickResource(bot,"tank-open-orb",room.orbs||[],claimedOrbs,{maxDist:4000, anchor:orbAnchor, anchorR:3500});
           if (orb) { targetPt={x:Number(orb.x||bot.x),y:Number(orb.y||bot.y)}; state="tank-opening-farm"; }
-          else { targetPt={x:Number(enemyBase.x||0),y:Number(enemyBase.y||0)}; state="tank-opening-move"; }
+          else { targetPt={x:Number(midX),y:Number(midY)}; state="tank-opening-move"; }
+        } else if (flagUrgent && !friendlyCarrier) {
+          // Urgenta: merge direct la steagul inamic, fara farm intermediar
+          const flagTarget2 = {x:Number(enemyFlag.x||enemyBase.x||0), y:Number(enemyFlag.y||enemyBase.y||0)};
+          targetPt = flagTarget2;
+          attackTarget = pickThreat(bot, enemies, 2000, ownFlagId);
+          state = "tank-urgent-steal";
+          useShield = combatReady && Number(bot?.energy||0)>=24 && Boolean(attackTarget) && dist(bot,attackTarget)<700;
         } else if (friendlyCarrier && String(friendlyCarrier.heistFlagId||"")===enemyFlagId) {
           // Escorta carrier inapoi la baza
           const dir = norm(Number(ownBase.x||0)-Number(friendlyCarrier.x||0), Number(ownBase.y||0)-Number(friendlyCarrier.y||0));
@@ -4560,8 +4620,10 @@ export class GameGateway {
           emergencyMode = true;
           useShield   = combatReady && Number(bot?.energy||0)>=22 && dist(bot,enemyCarrier)<800;
         } else if (isHomeGuard) {
-          // homeGuard: ramane aproape de baza, extrem de agresiv cu inamicii care se apropie
-          const localThreat = pickThreat(ownBase, enemies, guardR+500, ownFlagId);
+          // homeGuard: agresiv cu inamicii care se apropie, dar nu sta complet in baza -
+          // patruleaza spre culoarul central sa atraga conflicte
+          const extendedGuardR = combatReady ? guardR + 800 : guardR;
+          const localThreat = pickThreat(ownBase, enemies, extendedGuardR+500, ownFlagId);
           const fTh = localThreat ? fuzzyThreat(bot, localThreat) : 0;
 
           if (localThreat && fTh > 0.08) {
@@ -4585,10 +4647,23 @@ export class GameGateway {
               state = "homeguard-support-defender";
             }
           } else {
-            const support = squad.defender||ownBase;
-            targetPt = clampW(Number(support.x||0)+80, Number(support.y||0)+120);
+            // Cand nu e amenintat, homeGuard patruleaza spre culoarul central
+            // pentru a provoca conflicte si a colecta orbs din zona de mijloc
+            const midX = (Number(squad.ownBase?.x||0) + Number(squad.enemyBase?.x||0)) / 2;
+            const midY = (Number(squad.ownBase?.y||0) + Number(squad.enemyBase?.y||0)) / 2;
+            const towardMid = { x: midX, y: midY };
+            const distToMid = dist(bot, towardMid);
+            // Merge pana la 40% din drum spre mijloc, apoi se intoarce
+            const maxAdvance = baseDist * 0.40;
+            if (distToMid > maxAdvance) {
+              const dir = norm(midX - Number(bot.x||0), midY - Number(bot.y||0));
+              targetPt = clampW(Number(bot.x||0) + dir.x * 400, Number(bot.y||0) + dir.y * 400);
+            } else {
+              const support = squad.defender||ownBase;
+              targetPt = clampW(Number(support.x||0)+80, Number(support.y||0)+120);
+            }
             state = "homeguard-patrol";
-            attackTarget = pickThreat(bot, enemies, guardR+200, ownFlagId);
+            attackTarget = pickThreat(bot, enemies, extendedGuardR+200, ownFlagId);
           }
         } else {
           // tankGuard: asista tankul sau carrier-ul
@@ -4603,14 +4678,19 @@ export class GameGateway {
             state = friendlyCarrier ? "tankguard-escort-carrier" : "tankguard-escort-tank";
             emergencyMode = Boolean(attackTarget&&dist(bot,attackTarget)<1000);
             useShield = combatReady && Number(bot?.energy||0)>=22 && Boolean(attackTarget) && dist(bot,attackTarget)<800;
-          } else if (fNeedRes > 0.35 || lowDrones) {
-            const orb = pickResource(bot,"tg-orb",room.orbs||[],claimedOrbs,{maxDist:2200});
-            if (orb) { targetPt={x:Number(orb.x||bot.x),y:Number(orb.y||bot.y)}; state="tankguard-farm"; }
-            else { targetPt={x:Number(enemyBase.x||0),y:Number(enemyBase.y||0)}; state="tankguard-search"; attackTarget=pickThreat(bot,enemies,2200,ownFlagId); }
           } else {
-            targetPt = {x:Number(enemyBase.x||0),y:Number(enemyBase.y||0)};
-            attackTarget = pickThreat(bot, enemies, 2200, ownFlagId);
-            state = "tankguard-push";
+            // tankGuard fara lider: merge spre steagul inamic ca sa sustina
+            // viitorul raider sau sa ia el steagul daca nu e altcineva
+            const flagPos = {x:Number(enemyFlag.x||enemyBase.x||0), y:Number(enemyFlag.y||enemyBase.y||0)};
+            const needRes = fNeedRes > 0.45 || lowDrones;
+            const orbAnchor = flagPos; // ia orbs pe drum spre steag
+            const orb = needRes ? pickResource(bot,"tg-orb",room.orbs||[],claimedOrbs,{maxDist:2000, anchor:orbAnchor, anchorR:2500}) : null;
+            if (orb) { targetPt={x:Number(orb.x||bot.x),y:Number(orb.y||bot.y)}; state="tankguard-farm"; attackTarget=pickThreat(bot,enemies,2000,ownFlagId); }
+            else {
+              targetPt = flagPos;
+              attackTarget = pickThreat(bot, enemies, 2200, ownFlagId);
+              state = "tankguard-push-flag";
+            }
           }
         }
       }
@@ -7899,6 +7979,10 @@ export class GameGateway {
           Math.round(Number(unit.moveAngle || 0) * 10000) / 10000,
           flags,
           Math.max(0, Math.min(MAX_DRONES, Number(unit.drones || 0))),
+          // Index 8: skin — critical for CoreHeist role variants (heist-attacker-cyan etc).
+          // Without this, bots appear as plain cyan drones until the slow state packet
+          // (260ms) arrives. The skin string is short and worth the extra bytes.
+          unit.skin || "cyan",
         ];
       });
 
