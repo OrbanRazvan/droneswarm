@@ -129,6 +129,7 @@ export declare class GameGateway {
     private assignCoreHeistTeamRoles;
     private createCoreHeistState;
     private seedCoreHeistOpeningResources;
+    private createCoreHeistDistributedItem;
     private ensureCoreHeistResources;
     private initializeCoreHeistRoom;
     private serializeCoreHeist;
@@ -143,6 +144,7 @@ export declare class GameGateway {
     private reportCoreHeistStepError;
     private applyCoreHeistImpactDamage;
     private updateCoreHeistBots;
+    private tickCoreHeistRoom;
     private updateCoreHeistObjective;
     private finishCoreHeistMatch;
     updateZonePvpRoomStatus(room: any, now: any): void;
@@ -281,6 +283,7 @@ export declare class GameGateway {
     cleanupBattleRoyaleOnlineRoom(room: any, now: any): void;
     getBattleRoyaleOnlineZoneRadius(room: any): number;
     broadcastBattleRoyaleOnlineRoomState(room: any, now: any): void;
+    private releaseCoreHeistBotSeat;
     findOrCreateZonePvpRoom(participantId?: string | null, userId?: string | null, coreHeistMode?: boolean): any;
     getZonePvpRoomBySocket(socketId: any): any;
     removeZonePvpPlayer(socketId: string, options?: {

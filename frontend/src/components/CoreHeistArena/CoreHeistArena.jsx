@@ -60,6 +60,9 @@ const PROJECTILE_STREAM_MISSING_MS = 190;
 // last authoritative position until a fresh transform arrives.
 const REMOTE_STALE_TIMEOUT_MS = 5000;
 const ZONE_PACKET_SILENCE_BEFORE_CHECK_MS = 20000;
+// Core Heist runs a compact 50 Hz transform lane. Detect a genuine silence
+// much sooner than the large Zone PvP lobby, then request a reliable resync.
+const CORE_HEIST_PACKET_SILENCE_BEFORE_CHECK_MS = 7000;
 const ZONE_SESSION_CHECK_TIMEOUT_MS = 8000;
 const ZONE_BINARY_PROTOCOL_VERSION = 1;
 const ZONE_BINARY_PLAYER_BYTES = 32;
@@ -3140,7 +3143,9 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       // live transport merely because one frame burst was skipped.
       if (
         Date.now() - Number(lastZoneServerPacketAtRef.current || 0) >
-        ZONE_PACKET_SILENCE_BEFORE_CHECK_MS
+        (String(worldRef.current?.mode || "") === "core-heist"
+          ? CORE_HEIST_PACKET_SILENCE_BEFORE_CHECK_MS
+          : ZONE_PACKET_SILENCE_BEFORE_CHECK_MS)
       ) {
         verifyZoneSession();
       }
@@ -3563,7 +3568,10 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           motions.delete(id);
           continue;
         }
-        if (now - Number(motion?.lastSeenAt || now) > REMOTE_STALE_TIMEOUT_MS) {
+        const remoteStaleTimeout = String(data?.mode || "") === "core-heist"
+          ? 15000
+          : REMOTE_STALE_TIMEOUT_MS;
+        if (now - Number(motion?.lastSeenAt || now) > remoteStaleTimeout) {
           motions.delete(id);
           continue;
         }
