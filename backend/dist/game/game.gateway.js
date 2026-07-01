@@ -3336,7 +3336,7 @@ let GameGateway = class GameGateway {
         const claimedOrbs = new Set();
         const claimedEnergy = new Set();
         const pickResource = (bot, key, items, claims, opts) => {
-            const locks = bot._hlocks || (bot._hlocks = {});
+            const locks = bot.heistResourceLocks || (bot.heistResourceLocks = {});
             const lock = locks[key];
             const maxD = opts.maxDist || 3500;
             const ok = (it) => {
@@ -3428,10 +3428,10 @@ let GameGateway = class GameGateway {
                 { x: inward * R * 0.9, y: R * 0.52 },
                 { x: inward * R * 0.4, y: R * 0.28 },
             ];
-            const idx = Number(bot._patrolIdx || 0) % pts.length;
+            const idx = Number(bot.heistPatrolIndex || 0) % pts.length;
             const pt = { x: Number(ownBase.x || 0) + pts[idx].x, y: Number(ownBase.y || 0) + pts[idx].y };
             if (sq(bot, pt) < 160 * 160)
-                bot._patrolIdx = (idx + 1) % pts.length;
+                bot.heistPatrolIndex = (idx + 1) % pts.length;
             return clampW(pt.x, pt.y);
         };
         const allUnits = [...room.players.values()].filter((u) => u?.alive !== false && !u?.heistPermanentElimination);
@@ -3460,9 +3460,9 @@ let GameGateway = class GameGateway {
         for (const bot of bots) {
             const seed = String(bot.id || "").split("").reduce((s, c) => s + c.charCodeAt(0), 0);
             const jitter = seed % 140;
-            if (now < Number(bot._planUntil || 0))
+            if (now < Number(bot.heistPlanUntil || 0))
                 continue;
-            bot._planUntil = now + 580 + jitter;
+            bot.heistPlanUntil = now + 580 + jitter;
             const team = String(bot?.team || "cyan") === "orange" ? "orange" : "cyan";
             const squad = squadByTeam[team];
             if (!squad?.ownBase || !squad?.enemyBase || !squad?.ownFlag || !squad?.enemyFlag)
@@ -3561,7 +3561,7 @@ let GameGateway = class GameGateway {
                 }
             }
             else if (role === "tank") {
-                const openingFarm = elapsedMs < 22000;
+                const openingFarm = elapsedMs < 21000;
                 if (openingFarm) {
                     const orb = pickResource(bot, "tank-open-orb", room.orbs || [], claimedOrbs, { maxDist: 3200 });
                     if (orb) {
@@ -3705,6 +3705,11 @@ let GameGateway = class GameGateway {
                     }
                 }
             }
+            if (!attackTarget) {
+                const nearby = pickThreat(bot, enemies, 1600, ownFlagId);
+                if (nearby)
+                    attackTarget = nearby;
+            }
             const rawDx = Number(targetPt.x || bot.x) - Number(bot.x || 0);
             const rawDy = Number(targetPt.y || bot.y) - Number(bot.y || 0);
             const tDist = Math.hypot(rawDx, rawDy);
@@ -3716,25 +3721,20 @@ let GameGateway = class GameGateway {
             const hold = !attackTarget && tDist <= arrR;
             if (hold)
                 desired = { x: 0, y: 0 };
-            const prev = norm(Number(bot._steerX || 0), Number(bot._steerY || 0));
-            const blendRate = emergencyMode ? 0.22 : state !== String(bot._aiState || "") ? 0.12 : 0.07;
+            const prev = norm(Number(bot.heistSteerX || 0), Number(bot.heistSteerY || 0));
+            const blendRate = emergencyMode ? 0.22 : state !== String(bot.heistAiState || "") ? 0.12 : 0.07;
             const blendHasDir = prev.x !== 0 || prev.y !== 0;
             const movement = hold ? { x: 0, y: 0 } : blendHasDir
                 ? norm(prev.x * (1 - blendRate) + desired.x * blendRate, prev.y * (1 - blendRate) + desired.y * blendRate)
                 : desired;
-            bot._steerX = movement.x;
-            bot._steerY = movement.y;
-            bot._aiState = state;
-            const atkDist = attackTarget ? dist(bot, attackTarget) : Infinity;
-            const atkRange = role === "attacker" ? 1900 : role === "tank" ? 1450 : 1650;
-            const fireCadenceMs = role === "attacker" ? 480 : role === "tank" ? 820 : 640;
+            bot.heistSteerX = movement.x;
+            bot.heistSteerY = movement.y;
+            bot.heistAiState = state;
+            const atkRange = role === "attacker" ? 2000 : role === "tank" ? 1600 : 1800;
             const canFire = Boolean(combatReady &&
                 attackTarget &&
                 Number(bot?.drones || 0) > 0 &&
-                atkDist <= atkRange &&
-                now - Number(bot._lastFireAt || 0) >= fireCadenceMs);
-            if (canFire)
-                bot._lastFireAt = now;
+                dist(bot, attackTarget) <= atkRange);
             bot.input = {
                 mobileMove: true,
                 moveX: movement.x,
@@ -3830,6 +3830,7 @@ let GameGateway = class GameGateway {
                     ownFlag.droppedAt = 0;
                     player.heistFlagId = ownFlag.id;
                     this.pushCombatEvent(room, player, "OWN FLAG RECOVERED", "heal", now);
+                    this.broadcastZonePvpRoomState(room, now, true);
                     continue;
                 }
             }
@@ -3851,6 +3852,7 @@ let GameGateway = class GameGateway {
                         actor: player,
                         flag: enemyFlag,
                     }, now);
+                    this.broadcastZonePvpRoomState(room, now, true);
                 }
             }
         }
