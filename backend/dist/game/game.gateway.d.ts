@@ -140,6 +140,8 @@ export declare class GameGateway {
     private reviveCoreHeistPlayers;
     private getCoreHeistEnemyTeam;
     private applyCoreHeistRolePassives;
+    private reportCoreHeistStepError;
+    private applyCoreHeistImpactDamage;
     private updateCoreHeistBots;
     private updateCoreHeistObjective;
     private finishCoreHeistMatch;

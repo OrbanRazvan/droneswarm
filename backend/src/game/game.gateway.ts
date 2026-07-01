@@ -127,7 +127,9 @@ const CORE_HEIST_TARGET_SCORE = 3;
 const CORE_HEIST_RESPAWN_MS = 3500;
 const CORE_HEIST_FLAG_PICKUP_DISTANCE = 215;
 const CORE_HEIST_BASE_CAPTURE_RADIUS = 520;
-const CORE_HEIST_FLAG_RETURN_MS = 12000;
+// Dropped flags stay exactly where the carrier died until a drone physically
+// recovers them. There is no automatic teleport back to base in Core Heist.
+const CORE_HEIST_FLAG_RETURN_MS = 0;
 const CORE_HEIST_CARRIER_SPEED_MULTIPLIER = 0.80;
 const CORE_HEIST_BOT_TARGET_TOTAL = CORE_HEIST_ROOM_MAX_PLAYERS;
 // Core Heist is a compact testing lane inside the shared 15k world. Other
@@ -174,14 +176,24 @@ const CORE_HEIST_EVENT_TTL_MS = 6500;
 // authoritative HUD/objective state much more often than 60-seat Zone PvP.
 // Motion still uses the separate 50 Hz transform lane below.
 const CORE_HEIST_STATE_INTERVAL_MS = 140;
-const CORE_HEIST_BOT_REPLAN_MIN_MS = 440;
-const CORE_HEIST_BOT_REPLAN_MAX_MS = 620;
-const CORE_HEIST_BOT_RESOURCE_LOCK_MS = 5200;
-const CORE_HEIST_BOT_STEER_BLEND = 0.088;
-const CORE_HEIST_BOT_EMERGENCY_STEER_BLEND = 0.20;
+const CORE_HEIST_BOT_REPLAN_MIN_MS = 560;
+const CORE_HEIST_BOT_REPLAN_MAX_MS = 820;
+const CORE_HEIST_BOT_RESOURCE_LOCK_MS = 6200;
+// Deliberately low steering blends prevent AI from looking like rapid WASD taps.
+const CORE_HEIST_BOT_STEER_BLEND = 0.062;
+const CORE_HEIST_BOT_EMERGENCY_STEER_BLEND = 0.135;
 const CORE_HEIST_BOT_ARRIVAL_RADIUS = 112;
 const CORE_HEIST_TANK_HP = 200;
 const CORE_HEIST_PROJECTILE_DAMAGE = 10;
+const CORE_HEIST_ROLE_DAMAGE_WITH_ESCORT = 20;
+const CORE_HEIST_ROLE_DAMAGE_WITHOUT_ESCORT = 30;
+const CORE_HEIST_TANK_DAMAGE_WITHOUT_ESCORT = 20;
+const CORE_HEIST_TANK_DAMAGE_AFTER_TWO_IMPACTS = 10;
+const CORE_HEIST_TANK_IMPACTS_PER_ESCORT_LOSS = 2;
+// Dense enough to farm, but nowhere near the old full-screen loot flood.
+const CORE_HEIST_VIEWPORT_ITEM_STATE_INTERVAL_MS = 620;
+const CORE_HEIST_VIEWPORT_ORB_LIMIT = 180;
+const CORE_HEIST_VIEWPORT_ENERGY_LIMIT = 52;
 // Other Core Heist roles move at the normal Zone speed. Attackers receive an
 // actual +2 world-units-per-frame advantage after the shared base multiplier.
 const CORE_HEIST_ATTACKER_MOVE_SPEED_BONUS = 2;
@@ -1240,6 +1252,8 @@ export class GameGateway {
   private getZoneBotIncomingProjectileThreat(room: any, bot: any) {
     let nearestDistance = Infinity;
     let severity = 0;
+    let nearestVx = 0;
+    let nearestVy = 0;
 
     for (const projectile of room?.projectiles || []) {
       if (!projectile || String(projectile.ownerId || "") === String(bot.id)) continue;
@@ -1254,7 +1268,11 @@ export class GameGateway {
         (velocityLength * distance);
 
       if (approaching <= 0.22) continue;
-      nearestDistance = Math.min(nearestDistance, distance);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestVx = Number(projectile.vx || 0);
+        nearestVy = Number(projectile.vy || 0);
+      }
       severity = Math.max(
         severity,
         (1 - distance / ZONE_PVP_BOT_PROJECTILE_WARNING_RANGE) * approaching,
@@ -1265,6 +1283,8 @@ export class GameGateway {
       incoming: Number.isFinite(nearestDistance),
       distance: nearestDistance,
       severity,
+      vx: nearestVx,
+      vy: nearestVy,
     };
   }
 
@@ -3358,33 +3378,60 @@ export class GameGateway {
             const zoneRadius = this.getZonePvpZoneRadius(room);
 
             if (room?.coreHeistMode) {
-              // Capture the Flag reuses Zone PvP's protected 60 Hz
-              // movement/projectile lane. The objective state is tiny: two flags
-              // and two bases, so gameplay stays smooth on phones and old PCs.
-              this.reviveCoreHeistPlayers(room, now);
-              this.updateCoreHeistBots(room, now);
-              this.updatePlayers(room, now, zoneRadius, deltaFrames);
-              this.applyCoreHeistRolePassives(room, now, deltaFrames);
-              this.updateProjectiles(room, deltaFrames, now);
+              // Each Core Heist stage is isolated. A malformed bot/item must not
+              // abort the rest of the room tick and leave match time/transforms frozen.
+              try {
+                this.reviveCoreHeistPlayers(room, now);
+              } catch (error) {
+                this.reportCoreHeistStepError(room, "respawn", error, now);
+              }
+              try {
+                this.updateCoreHeistBots(room, now);
+              } catch (error) {
+                this.reportCoreHeistStepError(room, "bot-ai", error, now);
+              }
+              try {
+                this.updatePlayers(room, now, zoneRadius, deltaFrames);
+                this.applyCoreHeistRolePassives(room, now, deltaFrames);
+                this.updateProjectiles(room, deltaFrames, now);
+              } catch (error) {
+                this.reportCoreHeistStepError(room, "movement-combat", error, now);
+              }
 
               if (!room.lastZoneCollisionAt || now - room.lastZoneCollisionAt >= ZONE_COLLISION_TICK_INTERVAL_MS) {
                 room.lastZoneCollisionAt = now;
-                this.handleBodyCollisions(room, now, zoneRadius);
+                try {
+                  this.handleBodyCollisions(room, now, zoneRadius);
+                } catch (error) {
+                  this.reportCoreHeistStepError(room, "collisions", error, now);
+                }
               }
 
               if (!room.lastZoneLootAt || now - room.lastZoneLootAt >= ZONE_LOOT_TICK_INTERVAL_MS) {
                 room.lastZoneLootAt = now;
-                this.collectOrbs(room, zoneRadius);
-                this.collectEnergy(room, zoneRadius);
+                try {
+                  this.collectOrbs(room, zoneRadius);
+                  this.collectEnergy(room, zoneRadius);
+                } catch (error) {
+                  this.reportCoreHeistStepError(room, "loot", error, now);
+                }
               }
 
               if (!room.lastZoneItemMaintenanceAt || now - room.lastZoneItemMaintenanceAt >= ZONE_ITEM_MAINTENANCE_INTERVAL_MS) {
                 room.lastZoneItemMaintenanceAt = now;
-                this.maintainWorldItems(room, zoneRadius, now);
-                this.cleanupCombatEvents(room, now);
+                try {
+                  this.maintainWorldItems(room, zoneRadius, now);
+                  this.cleanupCombatEvents(room, now);
+                } catch (error) {
+                  this.reportCoreHeistStepError(room, "world-maintenance", error, now);
+                }
               }
 
-              this.updateCoreHeistObjective(room, now);
+              try {
+                this.updateCoreHeistObjective(room, now);
+              } catch (error) {
+                this.reportCoreHeistStepError(room, "objective", error, now);
+              }
             } else {
               // Core movement/projectiles remain 60 Hz.  Expensive collision, loot
               // and respawn work is sampled at a lower fixed cadence; this removes
@@ -3975,7 +4022,7 @@ export class GameGateway {
     flag.x = Number(player?.x || flag.x || flag.homeX || 0);
     flag.y = Number(player?.y || flag.y || flag.homeY || 0);
     flag.droppedAt = now;
-    flag.returnAt = now + CORE_HEIST_FLAG_RETURN_MS;
+    flag.returnAt = 0;
     player.heistFlagId = null;
     this.pushCombatEvent(room, player, "FLAG DROPPED", "damage", now);
     this.pushCoreHeistEvent(room, {
@@ -4057,6 +4104,89 @@ export class GameGateway {
         Number(player?.energy || 0) + CORE_HEIST_DEFENDER_ENERGY_REGEN_PER_SECOND * deltaSeconds,
       );
     }
+  }
+
+  private reportCoreHeistStepError(room: any, stage: string, error: any, now = Date.now()) {
+    room.coreHeistStepErrorCount = Number(room.coreHeistStepErrorCount || 0) + 1;
+    room.lastCoreHeistStepErrorAt = now;
+    const lastLogAt = Number(room.lastCoreHeistStepErrorLogAt || 0);
+    if (now - lastLogAt < 5000) return;
+    room.lastCoreHeistStepErrorLogAt = now;
+    // eslint-disable-next-line no-console
+    console.error(`[Core Heist] recovered ${stage} step in room ${room.id}`, error);
+  }
+
+  /**
+   * One authoritative impact rule for both launched-drone hits and body rams.
+   * Attackers/Defenders lose one escort + 20 HP, or 30 HP with no escort.
+   * Tank armor consumes two impacts per escort loss; that resolved loss costs
+   * one escort + 10 HP. A Tank without escorts takes 20 HP per impact.
+   */
+  private applyCoreHeistImpactDamage(room: any, target: any, now = Date.now(), source = "impact") {
+    const role = this.normalizeCoreHeistRole(target?.heistRole || "attacker");
+    const hasEscort = Number(target?.drones || 0) > 0;
+    let hpDamage = 0;
+    let droneLoss = 0;
+    let armorCharge = 0;
+
+    if (role === "tank") {
+      if (hasEscort) {
+        armorCharge = Math.max(0, Number(target.heistTankImpactCharge || 0)) + 1;
+        if (armorCharge >= CORE_HEIST_TANK_IMPACTS_PER_ESCORT_LOSS) {
+          armorCharge = 0;
+          droneLoss = 1;
+          hpDamage = CORE_HEIST_TANK_DAMAGE_AFTER_TWO_IMPACTS;
+        }
+        target.heistTankImpactCharge = armorCharge;
+      } else {
+        target.heistTankImpactCharge = 0;
+        hpDamage = CORE_HEIST_TANK_DAMAGE_WITHOUT_ESCORT;
+      }
+    } else if (hasEscort) {
+      droneLoss = 1;
+      hpDamage = CORE_HEIST_ROLE_DAMAGE_WITH_ESCORT;
+    } else {
+      hpDamage = CORE_HEIST_ROLE_DAMAGE_WITHOUT_ESCORT;
+    }
+
+    const hpBefore = Math.max(0, Number(target?.hp || 0));
+    if (droneLoss > 0) {
+      target.drones = Math.max(0, Number(target?.drones || 0) - droneLoss);
+      this.resetDroneProgress(target);
+    }
+    target.hp = Math.max(0, hpBefore - hpDamage);
+    target.alive = target.hp > 0;
+
+    if (hpDamage > 0) {
+      this.pushCombatEvent(room, target, `-${hpDamage} HP`, "damage", now);
+    }
+    if (droneLoss > 0) {
+      this.pushCombatEvent(room, target, "-1 DRONE", "drone-loss", now);
+    } else if (role === "tank" && hasEscort && armorCharge > 0) {
+      this.pushCombatEvent(
+        room,
+        target,
+        `TANK ARMOR ${armorCharge}/${CORE_HEIST_TANK_IMPACTS_PER_ESCORT_LOSS}`,
+        "shield",
+        now,
+      );
+    }
+
+    if (!target.alive) {
+      target.killStreak = 0;
+      target.rapidFireUntil = 0;
+      target.attackCooldownMultiplier = 1;
+      target.input = {};
+      target.shieldActive = false;
+      target.shieldUntil = 0;
+    }
+
+    return {
+      hpDamage,
+      droneLoss,
+      armorCharge,
+      source,
+    };
   }
 
   private updateCoreHeistBots(room: any, now: number) {
@@ -4196,7 +4326,31 @@ export class GameGateway {
       const isTankEscortAttacker = Boolean(
         tankEscortAttacker && String(tankEscortAttacker.id || "") === String(bot.id || ""),
       );
-      const nearbyEnemy = findNearest(bot, enemies, 1900);
+      // Utility-scored threat selection. This is a small fuzzy decision layer:
+      // flag carrier >> tank >> attacker >> defender, while distance and health
+      // still influence the result. It makes bots predictable without robotic
+      // nearest-target tunnel vision.
+      const choosePriorityEnemy = (origin: any, candidates: any[], maxDistance = 2200) => {
+        let chosen: any = null;
+        let bestScore = Number.NEGATIVE_INFINITY;
+        for (const enemy of candidates) {
+          if (!enemy || enemy.alive === false) continue;
+          const dSq = distanceSq(origin, enemy);
+          if (dSq > maxDistance * maxDistance) continue;
+          const enemyRole = this.normalizeCoreHeistRole(enemy.heistRole || "attacker");
+          const carryingOurFlag = String(enemy.heistFlagId || "") === String(ownFlag?.id || "");
+          const roleWeight = enemyRole === "tank" ? 118 : enemyRole === "attacker" ? 82 : 48;
+          const carrierWeight = carryingOurFlag ? 950 : 0;
+          const lowHpWeight = Math.max(0, 100 - Number(enemy.hp || 0)) * 0.35;
+          const score = carrierWeight + roleWeight + lowHpWeight - Math.sqrt(dSq) * 0.045;
+          if (score > bestScore) {
+            bestScore = score;
+            chosen = enemy;
+          }
+        }
+        return chosen;
+      };
+      const nearbyEnemy = choosePriorityEnemy(bot, enemies, 2050);
       const enemyCarrier = enemies.find(
         (unit: any) => String(unit.heistFlagId || "") === String(ownFlag?.id || ""),
       ) || null;
@@ -4211,7 +4365,8 @@ export class GameGateway {
         Math.min(3300, baseDistance * 0.25),
       );
       const baseThreats = enemies.filter((enemy: any) => distanceSq(enemy, ownBase) <= homeThreatRadius * homeThreatRadius);
-      const baseThreat = findNearest(bot, baseThreats, homeThreatRadius + 600);
+      const baseThreat = choosePriorityEnemy(bot, baseThreats, homeThreatRadius + 600);
+      const projectileThreat = this.getZoneBotIncomingProjectileThreat(room, bot);
 
       const energyLow = Number(bot.energy || 0) <= CORE_HEIST_BOT_LOW_ENERGY;
       const drones = Number(bot.drones || 0);
@@ -4250,14 +4405,20 @@ export class GameGateway {
       } else if (ownFlag?.status === "dropped") {
         if (role === "defender") {
           const intercept = defenderInterceptPoint(ownFlag);
-          targetX = intercept.x;
-          targetY = intercept.y;
-          attackTarget = nearbyEnemy && distanceSq(bot, nearbyEnemy) <= 1850 * 1850 ? nearbyEnemy : null;
-          nextState = "defender-halfway-flag-recover";
+          const flagDx = Number(ownFlag.x || ownBase?.x || bot.x) - Number(ownBase?.x || bot.x);
+          const flagDy = Number(ownFlag.y || ownBase?.y || bot.y) - Number(ownBase?.y || bot.y);
+          const flagFromBase = Math.hypot(flagDx, flagDy);
+          const maxDefenderRecover = Math.max(520, baseDistance * CORE_HEIST_DEFENDER_MAX_INTERCEPT_RATIO);
+          const canPhysicallyRecover = flagFromBase <= maxDefenderRecover + 180;
+          targetX = canPhysicallyRecover ? Number(ownFlag.x || bot.x) : intercept.x;
+          targetY = canPhysicallyRecover ? Number(ownFlag.y || bot.y) : intercept.y;
+          attackTarget = choosePriorityEnemy(bot, enemies, 2050) || null;
+          nextState = canPhysicallyRecover ? "defender-recover-own-flag" : "defender-halfway-flag-recover";
+          emergencyMove = Boolean(attackTarget);
         } else {
           targetX = Number(ownFlag.x || ownBase?.x || bot.x);
           targetY = Number(ownFlag.y || ownBase?.y || bot.y);
-          attackTarget = nearbyEnemy || baseThreat;
+          attackTarget = choosePriorityEnemy(bot, enemies, 2400) || baseThreat;
           nextState = "recover-own-flag";
           emergencyMove = true;
         }
@@ -4327,8 +4488,8 @@ export class GameGateway {
           const interceptDistance = Math.min(homeThreatRadius - 170, Math.max(500, distance - 300));
           targetX = Number(ownBase?.x || bot.x) + (dx / distance) * interceptDistance;
           targetY = Number(ownBase?.y || bot.y) + (dy / distance) * interceptDistance;
-          attackTarget = baseThreat;
-          nextState = "intercept-base-threat";
+          attackTarget = enemyCarrier || baseThreat;
+          nextState = enemyCarrier ? "intercept-flag-carrier" : "intercept-base-threat";
           emergencyMove = true;
         } else {
           // A defender must build an actual reserve instead of spinning in
@@ -4336,7 +4497,7 @@ export class GameGateway {
           // immediately abandoning that route when an enemy enters the threat
           // radius above.
           const defenderNeedsEnergy = Number(bot.energy || 0) < CORE_HEIST_BOT_DEFENDER_ENERGY_TARGET;
-          const defenderNeedsOrbs = drones < CORE_HEIST_BOT_DEFENDER_MIN_DRONES;
+          const defenderNeedsOrbs = drones < CORE_HEIST_BOT_DEFENDER_MIN_DRONES || Number(bot.progress || 0) < Math.max(5, Number(bot.nextDroneAt || 15) * 0.45);
           const defenderFarmRadius = Math.min(
             CORE_HEIST_BOT_HOME_FARM_RADIUS,
             Math.max(1500, homeThreatRadius - 360),
@@ -4418,13 +4579,24 @@ export class GameGateway {
           if (emergencyEnergy) {
             targetX = Number(emergencyEnergy.x || bot.x);
             targetY = Number(emergencyEnergy.y || bot.y);
-            attackTarget = nearbyEnemy && distanceSq(nearbyEnemy, bot) < 1250 * 1250 ? nearbyEnemy : null;
+            attackTarget = choosePriorityEnemy(bot, enemies, 1500) || null;
             nextState = "tank-push-emergency-energy";
           } else {
             targetX = Number(assaultTarget?.x || bot.x);
             targetY = Number(assaultTarget?.y || bot.y);
-            attackTarget = nearbyEnemy && distanceSq(nearbyEnemy, bot) < 1400 * 1400 ? nearbyEnemy : null;
-            nextState = "lead-flag-push";
+            attackTarget = choosePriorityEnemy(bot, enemies, 1550) || null;
+            if (projectileThreat?.incoming && Number(projectileThreat?.distance || 0) < 420) {
+              const dx = Number(projectileThreat?.vx || 0);
+              const dy = Number(projectileThreat?.vy || 0);
+              const length = Math.hypot(dx, dy) || 1;
+              // Strafe across the incoming line instead of making a 180-degree panic turn.
+              targetX = Number(bot.x || 0) + (-dy / length) * 430;
+              targetY = Number(bot.y || 0) + (dx / length) * 430;
+              nextState = "tank-dodge-and-push";
+              emergencyMove = true;
+            } else {
+              nextState = "lead-flag-push";
+            }
           }
         }
       } else {
@@ -4491,7 +4663,7 @@ export class GameGateway {
                 carrier?.heistFlagId ? 250 : (isTankEscortAttacker ? 300 : 380),
               )
             : { x: Number(assaultTarget?.x || bot.x), y: Number(assaultTarget?.y || bot.y) };
-          const formationThreat = leader ? findNearest(leader, enemies, 2350) : nearbyEnemy;
+          const formationThreat = leader ? choosePriorityEnemy(leader, enemies, 2350) : nearbyEnemy;
           const closeToFormation = !leader || distanceSq(bot, formation) <= 760 * 760;
           const safeToFarm = !formationThreat && !baseThreat && !carrier && closeToFormation;
           const attackerEnergy = safeToFarm && (isTankEscortAttacker ? Number(bot.energy || 0) < 35 : energyLow)
@@ -4522,7 +4694,7 @@ export class GameGateway {
           } else {
             targetX = Number(formation.x || bot.x);
             targetY = Number(formation.y || bot.y);
-            attackTarget = formationThreat || nearbyEnemy;
+            attackTarget = formationThreat || choosePriorityEnemy(bot, enemies, 2200) || nearbyEnemy;
             nextState = carrier?.heistFlagId
               ? "protect-carrier"
               : (isTankEscortAttacker ? "tank-guard" : "follow-tank");
@@ -4578,7 +4750,7 @@ export class GameGateway {
       const shouldHoldAtTarget = !attackTarget && targetDistance <= arrivalRadius;
       const wanted = shouldHoldAtTarget
         ? { x: 0, y: 0 }
-        : this.normalizeZoneBotMove(desiredX + repelX * 0.34, desiredY + repelY * 0.34);
+        : this.normalizeZoneBotMove(desiredX + repelX * 0.22, desiredY + repelY * 0.22);
 
       let movement = wanted;
       if (!shouldHoldAtTarget && (Math.abs(wanted.x) > 0.001 || Math.abs(wanted.y) > 0.001)) {
@@ -4603,7 +4775,7 @@ export class GameGateway {
       const attackDistance = Math.hypot(attackDx, attackDy);
       const attackRange = role === "attacker" ? 1760 : role === "tank" ? 1320 : 1560;
       const fireCadence = role === "attacker" ? 470 : role === "tank" ? 760 : 580;
-      const canFireRoleWeapon = role === "tank" || Number(bot.drones || 0) > 0;
+      const canFireRoleWeapon = Number(bot.drones || 0) > 0;
       const canAttack = Boolean(
         combatReady &&
         attackTarget &&
@@ -4633,6 +4805,17 @@ export class GameGateway {
       };
       bot.aiTargetX = targetX;
       bot.aiTargetY = targetY;
+      // Explicit finite-state-machine snapshot, kept server-side for stable
+      // state transitions and debugging without exposing extra client traffic.
+      bot.heistDecision = {
+        state: nextState,
+        role,
+        targetX,
+        targetY,
+        targetId: attackTarget?.id || null,
+        commitUntil: now + Math.max(420, CORE_HEIST_BOT_REPLAN_MIN_MS),
+        updatedAt: now,
+      };
       bot.aiState = `ctf-${role}-${nextState}`;
       bot.lastSeenAt = now;
       bot.lastInputReceivedAt = now;
@@ -4652,46 +4835,49 @@ export class GameGateway {
       return;
     }
 
-    const flags = heist.flags || [];
     const alivePlayers = [...room.players.values()].filter((player: any) => player?.alive !== false);
 
-    // Returned flags are deterministic; this runs once per simulation frame but
-    // touches just two objects.
-    for (const flag of flags) {
-      if (flag.status === "dropped" && Number(flag.returnAt || 0) > 0 && now >= Number(flag.returnAt)) {
-        this.resetCoreHeistFlag(flag);
-        this.pushCombatEvent(room, { id: `flag-${flag.id}`, x: flag.x, y: flag.y }, `${this.getCoreHeistTeamLabel(flag.team)} FLAG RETURNED`, "heal", now);
-        this.pushCoreHeistEvent(room, {
-          type: "returned",
-          actorName: "SYSTEM",
-          flag,
-        }, now);
-      }
-    }
-
     for (const player of alivePlayers) {
-      const team = String(player.team || "cyan");
+      const team = String(player.team || "cyan") === "orange" ? "orange" : "cyan";
       const enemyTeam = this.getCoreHeistEnemyTeam(team);
       const ownBase = this.getCoreHeistBase(room, team);
       const ownFlag = this.getCoreHeistFlag(room, team);
       const enemyFlag = this.getCoreHeistFlag(room, enemyTeam);
 
-      // A carrier scores instantly on reaching their own base. A channel is not
-      // used in CTF: the exciting moment is crossing the perimeter while chased.
+      // A drone can carry exactly one objective. Enemy flag => capture. Own
+      // dropped flag => physically carry it back to its own base to return it.
       if (player.heistFlagId) {
         const carried = this.getCoreHeistFlag(room, String(player.heistFlagId));
-        if (carried && ownBase) {
-          carried.x = Number(player.x);
-          carried.y = Number(player.y);
-          const dx = Number(player.x) - Number(ownBase.x);
-          const dy = Number(player.y) - Number(ownBase.y);
-          if (dx * dx + dy * dy <= CORE_HEIST_BASE_CAPTURE_RADIUS * CORE_HEIST_BASE_CAPTURE_RADIUS) {
+        if (!carried || !ownBase) {
+          player.heistFlagId = null;
+          continue;
+        }
+
+        carried.status = "carried";
+        carried.carrierId = player.id;
+        carried.x = Number(player.x || carried.x || 0);
+        carried.y = Number(player.y || carried.y || 0);
+        carried.returnAt = 0;
+
+        const dx = Number(player.x || 0) - Number(ownBase.x || 0);
+        const dy = Number(player.y || 0) - Number(ownBase.y || 0);
+        if (dx * dx + dy * dy <= CORE_HEIST_BASE_CAPTURE_RADIUS * CORE_HEIST_BASE_CAPTURE_RADIUS) {
+          carried.lastCarrierId = player.id;
+          carried.lastCarrierName = this.getCoreHeistPlayerName(player);
+          carried.lastCarrierTeam = team;
+          player.heistFlagId = null;
+
+          if (String(carried.team || "") === team) {
+            this.resetCoreHeistFlag(carried);
+            this.pushCombatEvent(room, player, "FLAG RETURNED", "heal", now);
+            this.pushCoreHeistEvent(room, {
+              type: "returned",
+              actor: player,
+              flag: carried,
+            }, now);
+          } else {
             heist.score[team] = Number(heist.score?.[team] || 0) + 1;
             heist.lastScoreAt = now;
-            carried.lastCarrierId = player.id;
-            carried.lastCarrierName = this.getCoreHeistPlayerName(player);
-            carried.lastCarrierTeam = team;
-            player.heistFlagId = null;
             this.pushCombatEvent(room, player, "FLAG CAPTURED", "drone-reward", now);
             this.pushCoreHeistEvent(room, {
               type: "captured",
@@ -4709,26 +4895,30 @@ export class GameGateway {
         continue;
       }
 
-      // Touching your dropped flag returns it home; your own home flag is never
-      // picked up. Touching the enemy home/dropped flag steals it.
+      // Your home flag can never be picked up while it is safe at base. When
+      // it was dropped, any teammate may recover it and physically carry it
+      // home; it does not teleport or auto-return after a timeout.
       if (ownFlag?.status === "dropped") {
-        const dx = Number(player.x) - Number(ownFlag.x);
-        const dy = Number(player.y) - Number(ownFlag.y);
+        const dx = Number(player.x || 0) - Number(ownFlag.x || 0);
+        const dy = Number(player.y || 0) - Number(ownFlag.y || 0);
         if (dx * dx + dy * dy <= CORE_HEIST_FLAG_PICKUP_DISTANCE * CORE_HEIST_FLAG_PICKUP_DISTANCE) {
-          this.resetCoreHeistFlag(ownFlag);
-          this.pushCombatEvent(room, player, "FLAG RETURNED", "heal", now);
-          this.pushCoreHeistEvent(room, {
-            type: "returned",
-            actor: player,
-            flag: ownFlag,
-          }, now);
+          ownFlag.status = "carried";
+          ownFlag.carrierId = player.id;
+          ownFlag.lastCarrierId = player.id;
+          ownFlag.lastCarrierName = this.getCoreHeistPlayerName(player);
+          ownFlag.lastCarrierTeam = team;
+          ownFlag.returnAt = 0;
+          ownFlag.droppedAt = 0;
+          player.heistFlagId = ownFlag.id;
+          this.pushCombatEvent(room, player, "OWN FLAG RECOVERED", "heal", now);
           continue;
         }
       }
 
+      // Enemy home or dropped flags can be carried by any opposing drone.
       if (enemyFlag && (enemyFlag.status === "home" || enemyFlag.status === "dropped")) {
-        const dx = Number(player.x) - Number(enemyFlag.x);
-        const dy = Number(player.y) - Number(enemyFlag.y);
+        const dx = Number(player.x || 0) - Number(enemyFlag.x || 0);
+        const dy = Number(player.y || 0) - Number(enemyFlag.y || 0);
         if (dx * dx + dy * dy <= CORE_HEIST_FLAG_PICKUP_DISTANCE * CORE_HEIST_FLAG_PICKUP_DISTANCE) {
           enemyFlag.status = "carried";
           enemyFlag.carrierId = player.id;
@@ -4755,8 +4945,6 @@ export class GameGateway {
     room.locked = true;
     room.countdownStartedAt = null;
     room.battlePrepareUntil = null;
-    room.heistRoleRevealUntil = null;
-    room.heistRoleRevealUntil = null;
     room.heistRoleRevealUntil = null;
     room.battleBeginFlashUntil = null;
     room.winnerId = winner?.id || null;
@@ -5479,11 +5667,28 @@ export class GameGateway {
     if (now - lastAt < BODY_COLLISION_COOLDOWN) return;
 
     room.collisionCooldowns.set(key, now);
-    const outcome = this.getBodyCollisionOutcome(a, b);
     const aWasAlive = a.alive;
     const bWasAlive = b.alive;
-    this.applyBodyCollisionDamage(a, outcome.aHpDamage, outcome.aDroneLoss);
-    this.applyBodyCollisionDamage(b, outcome.bHpDamage, outcome.bDroneLoss);
+    const outcome = room?.coreHeistMode
+      ? {
+          ...this.getBodyCollisionOutcome(a, b),
+          aHpDamage: 0,
+          bHpDamage: 0,
+          aDroneLoss: 0,
+          bDroneLoss: 0,
+          push: BODY_COLLISION_MEDIUM_PUSH,
+        }
+      : this.getBodyCollisionOutcome(a, b);
+
+    if (room?.coreHeistMode) {
+      // Contact counts as a real impact for both sides, so each role follows
+      // the exact escort/armor rules used by launched attack drones.
+      this.applyCoreHeistImpactDamage(room, a, now, "collision");
+      this.applyCoreHeistImpactDamage(room, b, now, "collision");
+    } else {
+      this.applyBodyCollisionDamage(a, outcome.aHpDamage, outcome.aDroneLoss);
+      this.applyBodyCollisionDamage(b, outcome.bHpDamage, outcome.bDroneLoss);
+    }
 
     // Battle Royale-style contact physics is deliberately enabled for both PvP
     // modes. The server remains the sole authority; clients only replay the
@@ -5564,16 +5769,14 @@ export class GameGateway {
   tryFireProjectile(room, player, now) {
     if (this.isBattlePrepareLocked(room, now)) return;
 
-    // Core Heist Tank has an integrated cannon. Unlike the other roles, it is
-    // not dependent on a collected escort drone, so a Tank can always fire by
-    // click/tap once the prepare phase has ended. Normal modes and all other
-    // Core Heist roles keep the existing "one escort drone is spent" rule.
+    // Core Heist Tank launches an orbiting escort drone too. It cannot fire
+    // with zero escorts, so its offensive pressure is tied to orb farming.
     const isCoreHeistTank = Boolean(
       room?.coreHeistMode &&
       this.normalizeCoreHeistRole(player?.heistRole || "attacker") === "tank",
     );
     const hasEscortDrone = Number(player?.drones || 0) > 0;
-    if (!hasEscortDrone && !isCoreHeistTank) return;
+    if (!hasEscortDrone) return;
 
     if (this.hasActiveAttackDrone(room, player.id)) return;
     const cooldown = this.getFireCooldown(player, now);
@@ -5599,12 +5802,10 @@ export class GameGateway {
       progressionAttackDroneMultiplier;
     player.lastFireAt = now;
 
-    // A Tank fires from its chassis cannon. Keep any collected escort drones
-    // orbiting it instead of consuming one for this role-specific attack.
-    if (!isCoreHeistTank) {
-      player.drones = Math.max(0, player.drones - 1);
-      this.resetDroneProgress(player);
-    }
+    // Every Core Heist attack is a launched small drone. Tank visuals can use
+    // the tank projectile flag, but one orbiting escort is always consumed.
+    player.drones = Math.max(0, player.drones - 1);
+    this.resetDroneProgress(player);
 
     room.projectiles.push({
       id: crypto.randomUUID(),
@@ -5707,16 +5908,35 @@ export class GameGateway {
           projectile.pierceLeft = 0;
         } else if (!damageBlocked) {
           const hpBefore = Number(target.hp || 0);
-          target.hp = Math.max(0, hpBefore - projectile.damage);
+          const heistImpact = room?.coreHeistMode
+            ? this.applyCoreHeistImpactDamage(room, target, now, "projectile")
+            : null;
 
-          let removedDrone = false;
-          if (
-            this.usesProgressionPvpCombat(room) &&
-            (target.drones || 0) > 0
-          ) {
-            target.drones = Math.max(0, Number(target.drones || 0) - 1);
-            target.nextDroneAt = this.getNextDroneAt(target.drones || 0);
-            removedDrone = true;
+          if (!room?.coreHeistMode) {
+            target.hp = Math.max(0, hpBefore - projectile.damage);
+
+            let removedDrone = false;
+            if (
+              this.usesProgressionPvpCombat(room) &&
+              (target.drones || 0) > 0
+            ) {
+              target.drones = Math.max(0, Number(target.drones || 0) - 1);
+              target.nextDroneAt = this.getNextDroneAt(target.drones || 0);
+              removedDrone = true;
+            }
+
+            if (this.usesProgressionPvpCombat(room)) {
+              this.pushCombatEvent(
+                room,
+                target,
+                `-${Math.max(0, hpBefore - target.hp)} HP`,
+                "damage",
+                now,
+              );
+              if (removedDrone) {
+                this.pushCombatEvent(room, target, "-1 DRONE", "drone-loss", now);
+              }
+            }
           }
 
           if (owner && owner.id !== target.id) {
@@ -5724,23 +5944,13 @@ export class GameGateway {
             target.lastDamageAt = now;
           }
           if (owner && owner.vampireUntil && owner.vampireUntil > now) {
+            const actualDamage = room?.coreHeistMode
+              ? Number(heistImpact?.hpDamage || 0)
+              : Math.max(0, hpBefore - Number(target.hp || 0));
             owner.hp = Math.min(
               owner.maxHp,
-              owner.hp + Math.floor(projectile.damage * VAMPIRE_HEAL_RATIO),
+              owner.hp + Math.floor(actualDamage * VAMPIRE_HEAL_RATIO),
             );
-          }
-
-          if (this.usesProgressionPvpCombat(room)) {
-            this.pushCombatEvent(
-              room,
-              target,
-              `-${Math.max(0, hpBefore - target.hp)} HP`,
-              "damage",
-              now,
-            );
-            if (removedDrone) {
-              this.pushCombatEvent(room, target, "-1 DRONE", "drone-loss", now);
-            }
           }
 
           if (target.hp <= 0) {
@@ -7484,6 +7694,9 @@ export class GameGateway {
       zoneLoopErrorCount: 0,
       lastZoneLoopErrorAt: 0,
       lastZoneLoopErrorLogAt: 0,
+      coreHeistStepErrorCount: 0,
+      lastCoreHeistStepErrorAt: 0,
+      lastCoreHeistStepErrorLogAt: 0,
       lastNoAliveAt: null,
       players: new Map(),
       orbs: Array.from({ length: MAX_ORBS }, () =>
@@ -7896,11 +8109,11 @@ export class GameGateway {
         ? secondsUntilCoreDrop
         : null;
 
-    if (includeStaticState) {
-      const minimapOrbStride = room.coreHeistMode ? 1 : 3;
-      const minimapOrbLimit = room.coreHeistMode ? 420 : 120;
-      const minimapEnergyStride = room.coreHeistMode ? 1 : 2;
-      const minimapEnergyLimit = room.coreHeistMode ? 240 : 60;
+    if (includeStaticState && !room.coreHeistMode) {
+      const minimapOrbStride = 3;
+      const minimapOrbLimit = 120;
+      const minimapEnergyStride = 2;
+      const minimapEnergyLimit = 60;
       minimapOrbs = [...room.orbs]
         .sort((a, b) => a.id.localeCompare(b.id))
         .filter((_, index) => index % minimapOrbStride === 0)
@@ -7941,13 +8154,15 @@ export class GameGateway {
       }
 
       const viewAnchor = spectatorTarget || player;
-      // Core Heist has only eight pilots and a dense economy. Send its nearby
-      // pickups in every state packet so local/deployed clients never wait on
-      // a stale spatial-index refresh before seeing world loot.
+      // Nearby loot is intentionally sampled, not sent in every 140 ms Core
+      // Heist snapshot. Sending hundreds of objects every snapshot can build a
+      // Socket.IO queue after a minute or two and freeze time/transforms.
+      const viewportItemInterval = room?.coreHeistMode
+        ? CORE_HEIST_VIEWPORT_ITEM_STATE_INTERVAL_MS
+        : VIEWPORT_ITEM_STATE_INTERVAL_MS;
       const includeViewportItems =
-        Boolean(room?.coreHeistMode) ||
         !player.lastViewportItemStateAt ||
-        now - player.lastViewportItemStateAt >= VIEWPORT_ITEM_STATE_INTERVAL_MS;
+        now - player.lastViewportItemStateAt >= viewportItemInterval;
       if (includeViewportItems) player.lastViewportItemStateAt = now;
 
       // Static definitions (name, skin, netId) are resent occasionally or on a
@@ -8065,8 +8280,8 @@ export class GameGateway {
       };
 
       if (includeViewportItems) {
-        const visibleOrbLimit = room.coreHeistMode ? 380 : 140;
-        const visibleEnergyLimit = room.coreHeistMode ? 150 : 30;
+        const visibleOrbLimit = room.coreHeistMode ? CORE_HEIST_VIEWPORT_ORB_LIMIT : 140;
+        const visibleEnergyLimit = room.coreHeistMode ? CORE_HEIST_VIEWPORT_ENERGY_LIMIT : 30;
 
         if (room.coreHeistMode) {
           // Do not depend on a cached index for the 4v4 resource lane. A full
