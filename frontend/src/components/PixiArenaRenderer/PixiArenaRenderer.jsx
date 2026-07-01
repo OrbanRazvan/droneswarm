@@ -58,6 +58,12 @@ const SKIN_THEMES = {
   "emerald-rift-a": [0x00ff99, 0xa7ffd7, 0x00291a, 0xffffff],
   "emerald-rift-b": [0x00d47a, 0x7cffc4, 0x001f14, 0xffffff],
   "emerald-rift-c": [0x45ffb0, 0xd8ffef, 0x003322, 0xffffff],
+  "heist-attacker-cyan": [0x00dffc, 0x8ff7ff, 0x052538, 0xf4fdff],
+  "heist-defender-cyan": [0x0b9fe8, 0x9aeaff, 0x06223b, 0xf5fdff],
+  "heist-tank-cyan": [0x182b3d, 0x00d9ff, 0x050c16, 0xc9f8ff],
+  "heist-attacker-orange": [0xff5e43, 0xffd1b8, 0x3d110c, 0xfff7ef],
+  "heist-defender-orange": [0x0d82c7, 0xff8c73, 0x061927, 0xf5fcff],
+  "heist-tank-orange": [0x2a2428, 0xff935a, 0x08090d, 0xffe4c9],
 };
 
 const MAX_MINI_DRONES = 5;
@@ -315,7 +321,491 @@ function createRotorModule(ctx, x, y, radius, colors, mini = false) {
     .fill({ color: highlight, alpha: 0.92 });
 }
 
-function createDroneContext(colors) {
+function getHeistRoleVariantFromSkin(skin) {
+  const value = String(skin || "").trim().toLowerCase();
+  if (value.startsWith("heist-attacker-")) return "attacker";
+  if (value.startsWith("heist-defender-")) return "defender";
+  if (value.startsWith("heist-tank-")) return "tank";
+  return null;
+}
+
+
+function getHeistRotorLayout(variant) {
+  if (variant === "attacker") {
+    // Three compact vector-thrusters: two wing pods and one central tail pod.
+    return [[-54, 20], [54, 20], [0, 54], null];
+  }
+
+  if (variant === "defender") {
+    // Four compact lift pods around a rounded guardian hull. They are close to
+    // the fuselage so the craft stays elegant rather than wide or balloon-like.
+    return [[-39, -4], [39, -4], [-33, 37], [33, 37]];
+  }
+
+  if (variant === "tank") {
+    // Heavy dropship layout, deliberately broad but not round.
+    return [[-61, -14], [61, -14], [-58, 34], [58, 34]];
+  }
+
+  return MAIN_ROTOR_POINTS.map(([x, y]) => [x, y]);
+}
+
+function createHeistRotorPod(ctx, x, y, size, colors, accentMode = "standard") {
+  const [primary, secondary, dark, highlight] = colors;
+  const width = size;
+  const height = size * 0.78;
+  const podDark = accentMode === "tank" ? 0x102638 : dark;
+
+  // Mechanical pod: faceted shell instead of a large circular outline.
+  ctx.poly([
+    x, y - height,
+    x + width * 0.72, y - height * 0.44,
+    x + width * 0.84, y + height * 0.28,
+    x + width * 0.36, y + height * 0.76,
+    x - width * 0.36, y + height * 0.76,
+    x - width * 0.84, y + height * 0.28,
+    x - width * 0.72, y - height * 0.44,
+  ]).fill({ color: podDark, alpha: 0.98 });
+
+  ctx.poly([
+    x, y - height * 0.78,
+    x + width * 0.55, y - height * 0.34,
+    x + width * 0.62, y + height * 0.20,
+    x + width * 0.27, y + height * 0.52,
+    x - width * 0.27, y + height * 0.52,
+    x - width * 0.62, y + height * 0.20,
+    x - width * 0.55, y - height * 0.34,
+  ]).fill({ color: primary, alpha: accentMode === "tank" ? 0.48 : 0.66 });
+
+  ctx.roundRect(x - width * 0.29, y - height * 0.22, width * 0.58, height * 0.56, height * 0.17)
+    .fill({ color: 0x020914, alpha: 0.92 });
+  ctx.circle(x, y + height * 0.03, height * 0.22).fill({ color: secondary, alpha: 0.72 });
+  ctx.circle(x, y + height * 0.03, height * 0.105).fill({ color: highlight, alpha: 0.96 });
+  ctx.roundRect(x - width * 0.19, y - height * 0.52, width * 0.38, height * 0.10, height * 0.04)
+    .fill({ color: highlight, alpha: 0.72 });
+}
+
+function createHeistAttackerContext(colors) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+
+  // Fast interceptor: clean swept body, pointed nose and a three-engine tail.
+  ctx.poly([
+    0, -88,
+    15, -65,
+    31, -44,
+    79, -12,
+    84, 1,
+    49, 14,
+    27, 10,
+    18, 42,
+    0, 66,
+    -18, 42,
+    -27, 10,
+    -49, 14,
+    -84, 1,
+    -79, -12,
+    -31, -44,
+    -15, -65,
+  ]).fill({ color: dark, alpha: 1 });
+
+  ctx.poly([
+    0, -82,
+    10, -61,
+    25, -41,
+    70, -10,
+    73, -2,
+    43, 7,
+    22, 2,
+    12, 35,
+    0, 56,
+    -12, 35,
+    -22, 2,
+    -43, 7,
+    -73, -2,
+    -70, -10,
+    -25, -41,
+    -10, -61,
+  ]).fill({ color: primary, alpha: 1 });
+
+  // Thin swept wings, layered as solid armor panels rather than wire outlines.
+  ctx.poly([-27, -30, -96, 0, -74, 16, -22, -5]).fill({ color: dark, alpha: 0.98 });
+  ctx.poly([27, -30, 96, 0, 74, 16, 22, -5]).fill({ color: dark, alpha: 0.98 });
+  ctx.poly([-29, -26, -86, 0, -68, 8, -20, -8]).fill({ color: primary, alpha: 0.88 });
+  ctx.poly([29, -26, 86, 0, 68, 8, 20, -8]).fill({ color: primary, alpha: 0.88 });
+  ctx.poly([-67, 1, -35, -10, -28, -5, -58, 8]).fill({ color: secondary, alpha: 0.52 });
+  ctx.poly([67, 1, 35, -10, 28, -5, 58, 8]).fill({ color: secondary, alpha: 0.52 });
+
+  // Long dark canopy with a bright central targeting slit.
+  ctx.poly([0, -67, 9, -45, 8, -15, 0, -5, -8, -15, -9, -45]).fill({ color: 0x06111d, alpha: 1 });
+  ctx.poly([0, -61, 4.4, -44, 3.5, -22, 0, -15, -3.5, -22, -4.4, -44]).fill({ color: secondary, alpha: 0.82 });
+  ctx.poly([0, -56, 2.1, -42, 0, -29, -2.1, -42]).fill({ color: highlight, alpha: 0.98 });
+
+  // Integrated weapon rails and nacelle status lights.
+  [-1, 1].forEach((side) => {
+    ctx.roundRect(side * 27 - 2.6, -14, 5.2, 29, 1.6).fill({ color: 0x06111d, alpha: 0.9 });
+    ctx.roundRect(side * 27 - 0.9, -11, 1.8, 21, 0.8).fill({ color: highlight, alpha: 0.9 });
+    ctx.circle(side * 47, 4, 2.8).fill({ color: secondary, alpha: 0.94 });
+  });
+  ctx.roundRect(-9, 30, 18, 12, 3).fill({ color: 0x06111d, alpha: 0.94 });
+  ctx.roundRect(-5, 33, 10, 5.4, 2).fill({ color: highlight, alpha: 0.94 });
+
+  createHeistRotorPod(ctx, -54, 20, 19, colors, "attacker");
+  createHeistRotorPod(ctx, 54, 20, 19, colors, "attacker");
+  createHeistRotorPod(ctx, 0, 54, 17, colors, "attacker");
+
+  return ctx;
+}
+
+function createHeistDefenderContext(colors) {
+  const ctx = new PIXI.GraphicsContext();
+
+  // Defender = shield frigate / guardian drone. More visibly "protective":
+  // central blue hull, curved guard vanes and a luminous forward aegis emitter.
+  const shadow = 0x031420;
+  const darkSteel = 0x0a3048;
+  const hull = 0x1187c8;
+  const armor = 0x26b7ff;
+  const shieldBlue = 0x37d8ff;
+  const shieldEdge = 0x99f4ff;
+  const hot = 0xf3fdff;
+  const coreBlue = 0x0c5b84;
+
+  // Main guardian hull: compact teardrop with an armored defensive spine.
+  ctx.poly([
+    0, -88,
+    18, -70,
+    28, -32,
+    24, 18,
+    12, 52,
+    0, 76,
+    -12, 52,
+    -24, 18,
+    -28, -32,
+    -18, -70,
+  ]).fill({ color: shadow, alpha: 1 });
+
+  ctx.poly([
+    0, -80,
+    13, -64,
+    21, -30,
+    18, 15,
+    9, 45,
+    0, 66,
+    -9, 45,
+    -18, 15,
+    -21, -30,
+    -13, -64,
+  ]).fill({ color: hull, alpha: 1 });
+
+  // Forward bridge / nose projector.
+  ctx.poly([0, -96, 11, -72, 8, -41, 0, -24, -8, -41, -11, -72]).fill({ color: shadow, alpha: 1 });
+  ctx.poly([0, -88, 5, -69, 4, -48, 0, -36, -4, -48, -5, -69]).fill({ color: shieldBlue, alpha: 0.96 });
+  ctx.poly([0, -82, 2.1, -65, 0, -53, -2.1, -65]).fill({ color: hot, alpha: 0.98 });
+
+  // Guard vanes: unmistakable defender silhouette, like deployable shield wings.
+  [-1, 1].forEach((side) => {
+    ctx.poly([
+      side * 18, -40,
+      side * 62, -52,
+      side * 78, -26,
+      side * 67, 8,
+      side * 24, -2,
+    ]).fill({ color: darkSteel, alpha: 0.98 });
+
+    ctx.poly([
+      side * 22, -36,
+      side * 55, -44,
+      side * 66, -24,
+      side * 59, 1,
+      side * 27, -6,
+    ]).fill({ color: armor, alpha: 0.92 });
+
+    ctx.poly([
+      side * 32, -31,
+      side * 50, -35,
+      side * 56, -22,
+      side * 48, -5,
+      side * 33, -9,
+    ]).fill({ color: shieldEdge, alpha: 0.78 });
+
+    ctx.roundRect(side * 29 - 2.1, -10, 4.2, 23, 1.8).fill({ color: shieldBlue, alpha: 0.68 });
+    ctx.circle(side * 27, 3, 2.4).fill({ color: hot, alpha: 0.96 });
+  });
+
+  // Central body details / shield core.
+  ctx.roundRect(-17, -4, 34, 39, 13).fill({ color: darkSteel, alpha: 0.94 });
+  ctx.roundRect(-11, 3, 22, 25, 10).fill({ color: coreBlue, alpha: 0.94 });
+  ctx.ellipse(0, 15, 8.2, 10.2).fill({ color: shieldBlue, alpha: 0.92 });
+  ctx.circle(0, 15, 3.4).fill({ color: hot, alpha: 0.98 });
+  ctx.poly([0, 46, 12, 62, 0, 86, -12, 62]).fill({ color: shadow, alpha: 1 });
+  ctx.poly([0, 53, 5.5, 66, 0, 79, -5.5, 66]).fill({ color: shieldBlue, alpha: 0.88 });
+
+  // Decorative shield lens plates.
+  ctx.poly([-11, -18, -4, -11, -4, 1, -11, 7, -17, 0, -17, -12]).fill({ color: shieldEdge, alpha: 0.72 });
+  ctx.poly([11, -18, 4, -11, 4, 1, 11, 7, 17, 0, 17, -12]).fill({ color: shieldEdge, alpha: 0.72 });
+
+  createHeistRotorPod(ctx, -38, -1, 12.8, [hull, shieldBlue, shadow, hot], "defender");
+  createHeistRotorPod(ctx, 38, -1, 12.8, [hull, shieldBlue, shadow, hot], "defender");
+  createHeistRotorPod(ctx, -30, 38, 12.2, [hull, shieldBlue, shadow, hot], "defender");
+  createHeistRotorPod(ctx, 30, 38, 12.2, [hull, shieldBlue, shadow, hot], "defender");
+
+  return ctx;
+}
+function createHeistTankContext(colors) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+  const isOrangeTeam = primary > 0xf00000;
+  // Tank stays dark/gunmetal, but never blacked-out: readable charcoal-blue armor.
+  const hull = isOrangeTeam ? 0x573139 : 0x173b55;
+  const plate = isOrangeTeam ? 0x9a5848 : 0x2b6f99;
+  const shadow = isOrangeTeam ? 0x241319 : 0x071827;
+  const steel = isOrangeTeam ? 0x6d3e3c : 0x25516d;
+  const reactor = isOrangeTeam ? 0xffa46d : 0x55d9ff;
+
+  // TANK — compact sci-fi gunship. Wide armored bow, rear twin-thruster spine.
+  ctx.poly([
+    0, -78,
+    30, -65,
+    72, -38,
+    98, -4,
+    94, 30,
+    63, 49,
+    26, 63,
+    0, 71,
+    -26, 63,
+    -63, 49,
+    -94, 30,
+    -98, -4,
+    -72, -38,
+    -30, -65,
+  ]).fill({ color: shadow, alpha: 1 });
+
+  ctx.poly([
+    0, -70,
+    24, -58,
+    62, -34,
+    85, -5,
+    80, 23,
+    54, 39,
+    20, 53,
+    0, 59,
+    -20, 53,
+    -54, 39,
+    -80, 23,
+    -85, -5,
+    -62, -34,
+    -24, -58,
+  ]).fill({ color: hull, alpha: 1 });
+
+  // Heavy top armor: layered filled plates only, no wireframe contours.
+  ctx.poly([-54, -32, -18, -54, -9, -7, -47, 15]).fill({ color: plate, alpha: 0.88 });
+  ctx.poly([54, -32, 18, -54, 9, -7, 47, 15]).fill({ color: plate, alpha: 0.88 });
+  ctx.poly([-39, 13, 0, 42, 39, 13, 24, 8, 0, 23, -24, 8]).fill({ color: steel, alpha: 0.96 });
+  ctx.poly([-25, 18, 0, 35, 25, 18, 11, 18, 0, 27, -11, 18]).fill({ color: primary, alpha: 0.48 });
+
+  // Angular bridge / armored sensor wedge.
+  ctx.poly([0, -73, 15, -53, 10, -27, 0, -17, -10, -27, -15, -53]).fill({ color: 0x071522, alpha: 1 });
+  ctx.poly([0, -66, 6.5, -50, 4.4, -35, 0, -28, -4.4, -35, -6.5, -50]).fill({ color: reactor, alpha: 0.74 });
+  ctx.poly([0, -61, 2.4, -49, 0, -40, -2.4, -49]).fill({ color: 0xeaffff, alpha: 0.96 });
+
+  // Distinct armored "hammer" wings / heavy weapon nacelles.
+  [-1, 1].forEach((side) => {
+    ctx.poly([
+      side * 55, -25,
+      side * 102, -11,
+      side * 102, 18,
+      side * 67, 34,
+      side * 45, 16,
+      side * 42, -8,
+    ]).fill({ color: shadow, alpha: 1 });
+    ctx.poly([
+      side * 60, -19,
+      side * 90, -9,
+      side * 90, 12,
+      side * 66, 24,
+      side * 53, 12,
+      side * 51, -5,
+    ]).fill({ color: plate, alpha: 0.90 });
+    ctx.poly([
+      side * 75, -13,
+      side * 92, -6,
+      side * 91, 1,
+      side * 73, -3,
+    ]).fill({ color: reactor, alpha: 0.62 });
+    ctx.roundRect(side * 67 - 4.2, 4, 8.4, 14, 2.2).fill({ color: 0x06131f, alpha: 0.94 });
+    ctx.roundRect(side * 67 - 1.0, 7, 2.0, 8, 1).fill({ color: reactor, alpha: 0.94 });
+    ctx.circle(side * 67, 21, 3.4).fill({ color: 0xeaffff, alpha: 0.94 });
+  });
+
+  // Rear reactor pack plus two visible exhaust nodes.
+  ctx.poly([-29, 32, -13, 58, 0, 68, 13, 58, 29, 32, 10, 37, 0, 52, -10, 37]).fill({ color: 0x06131f, alpha: 0.98 });
+  ctx.poly([-18, 39, 0, 59, 18, 39, 7, 40, 0, 52, -7, 40]).fill({ color: primary, alpha: 0.64 });
+  ctx.circle(0, 50, 5.1).fill({ color: reactor, alpha: 0.96 });
+  ctx.circle(0, 50, 2.2).fill({ color: 0xffffff, alpha: 0.92 });
+
+  createHeistRotorPod(ctx, -67, -3, 16.8, colors, "tank");
+  createHeistRotorPod(ctx, 67, -3, 16.8, colors, "tank");
+  createHeistRotorPod(ctx, -52, 38, 16.1, colors, "tank");
+  createHeistRotorPod(ctx, 52, 38, 16.1, colors, "tank");
+
+  return ctx;
+}
+
+function createHeistMiniContext(colors, variant, scale = 1) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+  const s = scale;
+
+  if (variant === "attacker") {
+    ctx.poly([0,-34*s,7*s,-23*s,27*s,-10*s,36*s,0,20*s,6*s,8*s,4*s,0,24*s,-8*s,4*s,-20*s,6*s,-36*s,0,-27*s,-10*s,-7*s,-23*s]).fill({ color: dark, alpha: 1 });
+    ctx.poly([0,-29*s,4*s,-20*s,22*s,-8*s,29*s,0,16*s,4*s,5*s,1*s,0,18*s,-5*s,1*s,-16*s,4*s,-29*s,0,-22*s,-8*s,-4*s,-20*s]).fill({ color: primary, alpha: 1 });
+    ctx.poly([0,-25*s,2*s,-16*s,0,-8*s,-2*s,-16*s]).fill({ color: highlight, alpha: .95 });
+    [-1,1].forEach((side) => ctx.circle(side*23*s,4*s,2*s).fill({ color: secondary, alpha: .9 }));
+    ctx.circle(0,18*s,2.2*s).fill({ color: highlight, alpha: .9 });
+  } else if (variant === "defender") {
+    const shieldBlue = 0x32d8ff;
+    const shieldHot = 0xf0fdff;
+    const hullBlue = 0x1187c8;
+    ctx.poly([0,-33*s,7*s,-24*s,11*s,-9*s,9*s,7*s,4*s,19*s,0,28*s,-4*s,19*s,-9*s,7*s,-11*s,-9*s,-7*s,-24*s]).fill({ color: 0x041725, alpha: 1 });
+    ctx.poly([0,-29*s,5*s,-22*s,8*s,-8*s,6*s,6*s,3*s,15*s,0,23*s,-3*s,15*s,-6*s,6*s,-8*s,-8*s,-5*s,-22*s]).fill({ color: hullBlue, alpha: 0.98 });
+    [-1,1].forEach((side) => {
+      ctx.poly([side*8*s,-13*s,side*23*s,-18*s,side*27*s,-9*s,side*24*s,4*s,side*11*s,0]).fill({ color: shieldBlue, alpha: 0.82 });
+      ctx.circle(side*15*s,2*s,1.9*s).fill({ color: shieldHot, alpha: 0.96 });
+    });
+    ctx.arc(0, -31*s, 16*s, Math.PI * 1.16, Math.PI * 1.84)
+      .stroke({ color: shieldBlue, width: 1.9*s, alpha: 0.78 });
+    ctx.circle(0, 8*s, 2.4*s).fill({ color: shieldHot, alpha: 0.98 });
+  } else if (variant === "tank") {
+    const isOrangeTeam = primary > 0xf00000;
+    const miniHull = isOrangeTeam ? 0x573139 : 0x173b55;
+    ctx.poly([0,-34*s,14*s,-26*s,37*s,-11*s,41*s,8*s,25*s,21*s,0,29*s,-25*s,21*s,-41*s,8*s,-37*s,-11*s,-14*s,-26*s]).fill({ color: 0x071827, alpha: 1 });
+    ctx.poly([0,-30*s,11*s,-23*s,31*s,-9*s,34*s,5*s,20*s,15*s,0,23*s,-20*s,15*s,-34*s,5*s,-31*s,-9*s,-11*s,-23*s]).fill({ color: miniHull, alpha: 1 });
+    [-1,1].forEach((side) => { ctx.poly([side*22*s,-12*s,side*44*s,-5*s,side*42*s,14*s,side*24*s,17*s]).fill({ color: primary, alpha:.62 }); ctx.circle(side*30*s,12*s,2*s).fill({ color: highlight, alpha:.9 }); });
+    ctx.circle(0,19*s,2.8*s).fill({ color: secondary, alpha:.92 });
+  }
+
+  return ctx;
+}
+
+function createRoleTechContext(colors, variant) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+
+  if (variant === "attacker") {
+    [-1, 1].forEach((side) => {
+      ctx.roundRect(side * 45 - 2, -4, 4, 11, 1.2).fill({ color: highlight, alpha: 0.92 });
+      ctx.circle(side * 28, -2, 1.8).fill({ color: secondary, alpha: 0.86 });
+    });
+    ctx.circle(0, -38, 2.2).fill({ color: highlight, alpha: 0.96 });
+    ctx.circle(0, 34, 2.6).fill({ color: secondary, alpha: 0.90 });
+  } else if (variant === "defender") {
+    // Shield frigate emitters along the guard vanes.
+    const shieldBlue = 0x35d8ff;
+    const hot = 0xf0fdff;
+    [-1, 1].forEach((side) => {
+      ctx.circle(side * 27, 2, 4.0).fill({ color: shieldBlue, alpha: 0.16 });
+      ctx.circle(side * 27, 2, 1.85).fill({ color: hot, alpha: 0.98 });
+      ctx.roundRect(side * 45 - 1.6, -28, 3.2, 15, 1.2).fill({ color: shieldBlue, alpha: 0.72 });
+      ctx.roundRect(side * 38 - 1.3, -14, 2.6, 10, 1).fill({ color: shieldBlue, alpha: 0.54 });
+    });
+    ctx.ellipse(0, -60, 5.8, 8.8).fill({ color: shieldBlue, alpha: 0.82 });
+    ctx.circle(0, 15, 3.0).fill({ color: hot, alpha: 0.98 });
+  } else if (variant === "tank") {
+    [-1, 1].forEach((side) => {
+      ctx.roundRect(side * 67 - 2.4, 4, 4.8, 15, 1.2).fill({ color: secondary, alpha: 0.82 });
+      ctx.circle(side * 67, 21, 2.3).fill({ color: highlight, alpha: 0.92 });
+      ctx.roundRect(side * 53 - 1.4, 24, 2.8, 11, 1).fill({ color: secondary, alpha: 0.54 });
+    });
+    ctx.circle(0, 50, 3.7).fill({ color: highlight, alpha: 0.98 });
+  }
+
+  return ctx;
+}
+function createRolePulseContext(colors, variant) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+
+  if (variant === "attacker") {
+    [-1, 1].forEach((side) => {
+      ctx.circle(side * 45, 4, 5.4).fill({ color: secondary, alpha: 0.12 });
+      ctx.circle(side * 45, 4, 2.1).fill({ color: highlight, alpha: 0.86 });
+    });
+    ctx.circle(0, 35, 6.4).fill({ color: highlight, alpha: 0.13 });
+  } else if (variant === "defender") {
+    // Elegant forward Aegis: three layered arcs and two side shield anchors.
+    const shieldBlue = 0x22d2ff;
+    const shieldEdge = 0x9ef5ff;
+    const shieldHot = 0xf1feff;
+
+    ctx.ellipse(0, -94, 42, 16).fill({ color: shieldBlue, alpha: 0.05 });
+    ctx.arc(0, -86, 47, Math.PI * 1.15, Math.PI * 1.85)
+      .stroke({ color: shieldBlue, width: 4.0, alpha: 0.34 });
+    ctx.arc(0, -86, 38, Math.PI * 1.16, Math.PI * 1.84)
+      .stroke({ color: shieldEdge, width: 1.7, alpha: 0.92 });
+    ctx.arc(0, -86, 30, Math.PI * 1.18, Math.PI * 1.82)
+      .stroke({ color: shieldBlue, width: 1.05, alpha: 0.52 });
+
+    [-1, 1].forEach((side) => {
+      const x = side * 39;
+      const y = -98;
+      ctx.circle(x, y, 4.2).fill({ color: shieldBlue, alpha: 0.16 });
+      ctx.circle(x, y, 1.95).fill({ color: shieldHot, alpha: 0.96 });
+      ctx.roundRect(x - 1.15, y + 4, 2.3, 7.8, 1.05).fill({ color: shieldEdge, alpha: 0.70 });
+    });
+
+    ctx.poly([0, -111, 4, -104, 0, -98, -4, -104]).fill({ color: shieldHot, alpha: 0.96 });
+  } else if (variant === "tank") {
+    [-1, 1].forEach((side) => {
+      ctx.circle(side * 67, 21, 6.6).fill({ color: secondary, alpha: 0.13 });
+      ctx.circle(side * 67, 21, 2.4).fill({ color: highlight, alpha: 0.90 });
+    });
+    ctx.circle(0, 50, 9).fill({ color: secondary, alpha: 0.15 });
+    ctx.circle(0, 50, 3.5).fill({ color: highlight, alpha: 0.94 });
+  }
+
+  return ctx;
+}
+function createTeamBeaconContext(team) {
+  const isOrange = String(team || "cyan") === "orange";
+  const color = isOrange ? 0xff405b : 0x20cfff;
+  const light = isOrange ? 0xffe0e5 : 0xe9fbff;
+  const dark = isOrange ? 0x31050d : 0x041b2a;
+  const ctx = new PIXI.GraphicsContext();
+
+  // Prominent tactical IFF: a compact floating chevron plus an illuminated
+  // team bar. It remains readable above every role without covering the ship.
+  ctx.roundRect(-18, -3.4, 36, 10.2, 4).fill({ color: dark, alpha: 0.95 });
+  ctx.roundRect(-15.2, -1.3, 30.4, 5.5, 2.5).fill({ color, alpha: 0.96 });
+  ctx.roundRect(-9.5, 0, 19, 1.9, 0.9).fill({ color: light, alpha: 0.92 });
+
+  ctx.poly([0, -18, 11, -5.2, 5.2, -5.2, 0, -0.3, -5.2, -5.2, -11, -5.2])
+    .fill({ color: dark, alpha: 0.96 });
+  ctx.poly([0, -15.4, 7.1, -6.3, 3.1, -6.3, 0, -3.0, -3.1, -6.3, -7.1, -6.3])
+    .fill({ color, alpha: 0.98 });
+  ctx.poly([0, -12.8, 2.7, -7.2, 0, -4.6, -2.7, -7.2])
+    .fill({ color: light, alpha: 1 });
+
+  [-1, 1].forEach((side) => {
+    ctx.circle(side * 11.4, 1.4, 2.05).fill({ color, alpha: 0.32 });
+    ctx.circle(side * 11.4, 1.4, 0.95).fill({ color: light, alpha: 0.98 });
+  });
+  return ctx;
+}
+
+function getCoreHeistTeamMarker(unit) {
+  const explicit = String(unit?.team || "").trim().toLowerCase();
+  if (explicit === "cyan" || explicit === "orange") return explicit;
+  const skin = String(unit?.skin || "").trim().toLowerCase();
+  if (skin.startsWith("heist-")) return skin.endsWith("-orange") ? "orange" : "cyan";
+  return null;
+}
+
+function createDroneContext(colors, variant = null) {
+  if (variant === "attacker") return createHeistAttackerContext(colors);
+  if (variant === "defender") return createHeistDefenderContext(colors);
+  if (variant === "tank") return createHeistTankContext(colors);
+
   const [primary, secondary, dark, highlight] = colors;
   const ctx = new PIXI.GraphicsContext();
 
@@ -435,10 +925,52 @@ function createDroneContext(colors) {
     -17, -34,
   ]).stroke({ color: highlight, width: 1.7, alpha: 0.38 });
 
+  if (variant === "attacker") {
+    // Aggressive assault silhouette: blade-fin nose, side blade wings and bright weapon rails.
+    ctx.poly([0, -69, 12, -50, 0, -34, -12, -50]).fill({ color: secondary, alpha: 0.94 });
+    ctx.poly([-39, -7, -13, 3, -38, 22]).fill({ color: secondary, alpha: 0.38 });
+    ctx.poly([39, -7, 13, 3, 38, 22]).fill({ color: secondary, alpha: 0.38 });
+    ctx.roundRect(-22, -30, 7, 42, 3).fill({ color: dark, alpha: 0.92 });
+    ctx.roundRect(15, -30, 7, 42, 3).fill({ color: dark, alpha: 0.92 });
+    ctx.roundRect(-20, -27, 3, 36, 2).fill({ color: highlight, alpha: 0.82 });
+    ctx.roundRect(17, -27, 3, 36, 2).fill({ color: highlight, alpha: 0.82 });
+    ctx.circle(-10, 24, 3.1).fill({ color: secondary, alpha: 0.86 });
+    ctx.circle(10, 24, 3.1).fill({ color: secondary, alpha: 0.86 });
+    ctx.poly([0, -58, 6, -46, 0, -41, -6, -46]).fill({ color: highlight, alpha: 0.96 });
+  } else if (variant === "defender") {
+    // Front shield wall: a visible half-shield mounted in front of the drone.
+    ctx.arc(0, -24, 33, Math.PI * 1.08, Math.PI * 1.92).stroke({ color: secondary, width: 6, alpha: 0.42 });
+    ctx.arc(0, -24, 28, Math.PI * 1.08, Math.PI * 1.92).stroke({ color: highlight, width: 2.2, alpha: 0.86 });
+    ctx.roundRect(-30, -58, 60, 16, 8).fill({ color: dark, alpha: 0.9 });
+    ctx.roundRect(-24, -54, 48, 8, 4).fill({ color: secondary, alpha: 0.46 });
+    ctx.poly([-38, -10, -18, -4, -26, 22, -43, 13]).fill({ color: dark, alpha: 0.94 });
+    ctx.poly([38, -10, 18, -4, 26, 22, 43, 13]).fill({ color: dark, alpha: 0.94 });
+    ctx.poly([-34, -8, -21, -3, -27, 17, -38, 11]).fill({ color: secondary, alpha: 0.44 });
+    ctx.poly([34, -8, 21, -3, 27, 17, 38, 11]).fill({ color: secondary, alpha: 0.44 });
+    ctx.circle(0, 3, 35).stroke({ color: secondary, width: 1.4, alpha: 0.22 });
+    ctx.circle(0, -18, 4.2).fill({ color: highlight, alpha: 0.92 });
+  } else if (variant === "tank") {
+    // Heavy armored hull: broad shoulder plates, top armor band and glowing core blocks.
+    ctx.roundRect(-34, -14, 16, 34, 6).fill({ color: dark, alpha: 0.98 });
+    ctx.roundRect(18, -14, 16, 34, 6).fill({ color: dark, alpha: 0.98 });
+    ctx.roundRect(-31, -10, 10, 24, 4).fill({ color: primary, alpha: 0.86 });
+    ctx.roundRect(21, -10, 10, 24, 4).fill({ color: primary, alpha: 0.86 });
+    ctx.roundRect(-22, -56, 44, 15, 5).fill({ color: dark, alpha: 0.95 });
+    ctx.roundRect(-17, -52, 34, 6, 3).fill({ color: secondary, alpha: 0.58 });
+    ctx.roundRect(-18, 18, 36, 20, 6).fill({ color: dark, alpha: 0.98 });
+    ctx.roundRect(-14, 22, 28, 12, 4).fill({ color: primary, alpha: 0.74 });
+    ctx.circle(-10, 28, 2.8).fill({ color: highlight, alpha: 0.94 });
+    ctx.circle(10, 28, 2.8).fill({ color: highlight, alpha: 0.94 });
+    ctx.circle(0, -31, 5.4).fill({ color: secondary, alpha: 0.82 });
+    ctx.circle(0, -31, 2.4).fill({ color: highlight, alpha: 0.96 });
+  }
+
   return ctx;
 }
 
-function createMiniDroneContext(colors) {
+function createMiniDroneContext(colors, variant = null) {
+  if (variant) return createHeistMiniContext(colors, variant, 0.72);
+
   const [primary, secondary, dark, highlight] = colors;
   const ctx = new PIXI.GraphicsContext();
 
@@ -491,6 +1023,24 @@ function createMiniDroneContext(colors) {
   ctx.circle(0, 9, 2.6).fill({ color: highlight, alpha: 0.9 });
   ctx.poly([0, -15, 6, -10, 8, -2, 6, 7, 3, 12, 0, 14, -3, 12, -6, 7, -8, -2, -6, -10])
     .stroke({ color: highlight, width: 0.8, alpha: 0.36 });
+
+  if (variant === "attacker") {
+    ctx.poly([0, -26, 5.6, -17, 0, -11, -5.6, -17]).fill({ color: secondary, alpha: 0.9 });
+    ctx.roundRect(-8.4, -11.5, 3, 14, 1.5).fill({ color: highlight, alpha: 0.8 });
+    ctx.roundRect(5.4, -11.5, 3, 14, 1.5).fill({ color: highlight, alpha: 0.8 });
+  } else if (variant === "defender") {
+    ctx.arc(0, -8, 12, Math.PI * 1.05, Math.PI * 1.95).stroke({ color: secondary, width: 2.6, alpha: 0.48 });
+    ctx.arc(0, -8, 10, Math.PI * 1.05, Math.PI * 1.95).stroke({ color: highlight, width: 1.05, alpha: 0.82 });
+    ctx.roundRect(-8, -20, 16, 4.8, 2).fill({ color: secondary, alpha: 0.38 });
+    ctx.roundRect(-11, -3, 4.5, 10, 2).fill({ color: secondary, alpha: 0.38 });
+    ctx.roundRect(6.5, -3, 4.5, 10, 2).fill({ color: secondary, alpha: 0.38 });
+  } else if (variant === "tank") {
+    ctx.roundRect(-10.2, 7.2, 5.5, 6.6, 1.8).fill({ color: dark, alpha: 0.95 });
+    ctx.roundRect(4.7, 7.2, 5.5, 6.6, 1.8).fill({ color: dark, alpha: 0.95 });
+    ctx.roundRect(-9.1, 8.2, 3.6, 3.8, 1.2).fill({ color: primary, alpha: 0.84 });
+    ctx.roundRect(5.5, 8.2, 3.6, 3.8, 1.2).fill({ color: primary, alpha: 0.84 });
+    ctx.roundRect(-7.8, -19.5, 15.6, 4.8, 2).fill({ color: secondary, alpha: 0.4 });
+  }
 
   return ctx;
 }
@@ -750,7 +1300,9 @@ function createZoneContext() {
   return ctx;
 }
 
-function createLiteDroneContext(colors) {
+function createLiteDroneContext(colors, variant = null) {
+  if (variant) return createHeistMiniContext(colors, variant, 1.18);
+
   const [primary, secondary, dark, highlight] = colors;
   const ctx = new PIXI.GraphicsContext();
 
@@ -800,6 +1352,23 @@ function createLiteDroneContext(colors) {
   ctx.circle(0, -7.5, 2.2).fill({ color: highlight, alpha: 0.9 });
   ctx.roundRect(-4.5, 8.5, 9, 4.8, 1.8).fill({ color: dark, alpha: 0.92 });
   ctx.roundRect(-2.6, 9.7, 5.2, 2.2, 1).fill({ color: highlight, alpha: 0.74 });
+
+  if (variant === "attacker") {
+    ctx.poly([0, -29, 6.4, -20, 0, -14.5, -6.4, -20]).fill({ color: secondary, alpha: 0.86 });
+    ctx.roundRect(-9.5, -12.6, 3.3, 15, 1.4).fill({ color: highlight, alpha: 0.74 });
+    ctx.roundRect(6.2, -12.6, 3.3, 15, 1.4).fill({ color: highlight, alpha: 0.74 });
+  } else if (variant === "defender") {
+    ctx.poly([0, -26, 4.8, -17, 2.8, -8, 0, -4, -2.8, -8, -4.8, -17]).fill({ color: 0x2fd6ff, alpha: 0.9 });
+    ctx.poly([-12, -7, -24, 0, -18, 6, -8, 1]).fill({ color: primary, alpha: 0.76 });
+    ctx.poly([12, -7, 24, 0, 18, 6, 8, 1]).fill({ color: primary, alpha: 0.76 });
+    ctx.circle(0, 10, 2.4).fill({ color: highlight, alpha: 0.94 });
+  } else if (variant === "tank") {
+    ctx.roundRect(-12.2, 8.2, 6.6, 6.6, 2).fill({ color: dark, alpha: 0.94 });
+    ctx.roundRect(5.6, 8.2, 6.6, 6.6, 2).fill({ color: dark, alpha: 0.94 });
+    ctx.roundRect(-11, 9.3, 4.6, 3.6, 1.3).fill({ color: primary, alpha: 0.84 });
+    ctx.roundRect(6.5, 9.3, 4.6, 3.6, 1.3).fill({ color: primary, alpha: 0.84 });
+    ctx.roundRect(-8.5, -22, 17, 5, 2).fill({ color: secondary, alpha: 0.36 });
+  }
 
   return ctx;
 }
@@ -856,6 +1425,16 @@ function createUnitVisual(resources) {
   const body = new PIXI.Graphics(resources.droneContexts.cyan);
   vehicle.addChild(body);
 
+  // Role trim uses cached contexts and transform-only animation. This layer is
+  // purely cosmetic: it never changes hitboxes, controls, movement or combat.
+  const roleTech = new PIXI.Graphics(resources.roleTechContexts.cyan);
+  const rolePulse = new PIXI.Graphics(resources.rolePulseContexts.cyan);
+  roleTech.eventMode = "none";
+  rolePulse.eventMode = "none";
+  roleTech.visible = false;
+  rolePulse.visible = false;
+  vehicle.addChild(roleTech, rolePulse);
+
   // One tiny transform per rotor. Contexts are shared, so these spinning blades
   // cost only transform updates and make the drone feel far more alive.
   const rotorSpins = MAIN_ROTOR_POINTS.map(([x, y]) => {
@@ -887,6 +1466,11 @@ function createUnitVisual(resources) {
   });
   root.addChild(miniLayer, shieldRing, shieldGlyphs, shieldPulse);
 
+  const teamBeacon = new PIXI.Graphics(resources.teamBeaconContexts.cyan);
+  teamBeacon.eventMode = "none";
+  teamBeacon.visible = false;
+  root.addChild(teamBeacon);
+
   return {
     root,
     aura,
@@ -894,6 +1478,8 @@ function createUnitVisual(resources) {
     vehicle,
     engineVector,
     engineGlow,
+    roleTech,
+    rolePulse,
     miniBeacons,
     rotorSpins,
     shieldShell,
@@ -902,7 +1488,10 @@ function createUnitVisual(resources) {
     shieldPulse,
     orbit,
     minis,
+    teamBeacon,
+    team: null,
     skin: "cyan",
+    rotorLayout: MAIN_ROTOR_POINTS.map(([x, y]) => [x, y]),
     unitId: "",
     facing: 0,
     facingReady: false,
@@ -948,6 +1537,11 @@ function createSimpleVisual(resources) {
   });
   root.addChild(escortLayer);
 
+  const teamBeacon = new PIXI.Graphics(resources.teamBeaconContexts.cyan);
+  teamBeacon.eventMode = "none";
+  teamBeacon.visible = false;
+  root.addChild(teamBeacon);
+
   const rotors = [
     [-23, -18],
     [23, -18],
@@ -969,6 +1563,8 @@ function createSimpleVisual(resources) {
     engine,
     minis,
     rotors,
+    teamBeacon,
+    team: null,
     skin: "",
     facing: 0,
     facingReady: false,
@@ -1319,12 +1915,15 @@ function updateLaggedTrail(trail, targetX, targetY, response, scale, alpha, delt
 
 function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = false, effectTier = 0, animateDecor = true) {
   const skin = normalizeSkin(unit.skin);
+  const roleVariant = getHeistRoleVariantFromSkin(skin);
   if (visual.skin !== skin) {
     visual.skin = skin;
     visual.body.context = resources.droneContexts[skin] || resources.droneContexts.cyan;
     visual.aura.context = resources.droneAuraContexts[skin] || resources.droneAuraContexts.cyan;
     visual.engineVector.context = resources.engineVectorContexts[skin] || resources.engineVectorContexts.cyan;
     visual.engineGlow.context = resources.engineGlowContexts[skin] || resources.engineGlowContexts.cyan;
+    visual.roleTech.context = resources.roleTechContexts[skin] || resources.roleTechContexts.cyan;
+    visual.rolePulse.context = resources.rolePulseContexts[skin] || resources.rolePulseContexts.cyan;
     visual.miniBeacons.forEach((beacon) => {
       beacon.context = resources.miniBeaconContexts[skin] || resources.miniBeaconContexts.cyan;
     });
@@ -1338,6 +1937,26 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
     visual.shieldRing.context = resources.shieldRingContexts[skin] || resources.shieldRingContexts.cyan;
     visual.shieldGlyphs.context = resources.shieldGlyphContexts[skin] || resources.shieldGlyphContexts.cyan;
     visual.shieldPulse.context = resources.shieldPulseContexts[skin] || resources.shieldPulseContexts.cyan;
+
+    visual.rotorLayout = getHeistRotorLayout(roleVariant);
+    visual.rotorSpins.forEach((rotor, index) => {
+      const point = visual.rotorLayout[index];
+      rotor.visible = Boolean(point);
+      if (point) rotor.position.set(point[0], point[1]);
+    });
+  }
+
+  const teamMarker = getCoreHeistTeamMarker(unit);
+  if (visual.team !== teamMarker) {
+    visual.team = teamMarker;
+    visual.teamBeacon.context = resources.teamBeaconContexts[teamMarker || "cyan"] || resources.teamBeaconContexts.cyan;
+  }
+  visual.teamBeacon.visible = Boolean(teamMarker);
+  if (teamMarker) {
+    visual.teamBeacon.position.set(0, -145);
+    const teamPulse = 1.05 + Math.sin(now * 0.008 + visual.hoverSeed) * 0.06;
+    visual.teamBeacon.scale.set(teamPulse);
+    visual.teamBeacon.alpha = 0.92 + Math.sin(now * 0.011 + visual.hoverSeed) * 0.08;
   }
 
   const deltaSeconds = clamp((now - (visual.lastFrameAt || now)) / 1000, 1 / 240, 0.05);
@@ -1434,34 +2053,80 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
   // extras and escort drones are optional; engines and propellers are not.
   // That keeps every visible player/bot alive and readable on old laptops.
   const compactMotionScale = reducedRemoteVisual ? 0.68 : 1;
+  const roleEngineProfile = roleVariant === "attacker"
+    ? { y: 58, width: 0.86, length: 1.20, pulse: 1.14 }
+    : roleVariant === "defender"
+      ? { y: 59, width: 0.72, length: 0.98, pulse: 0.94 }
+      : roleVariant === "tank"
+        ? { y: 58, width: 1.18, length: 1.02, pulse: 1.08 }
+        : { y: 47, width: 1, length: 1, pulse: 1 };
+
+  visual.body.alpha = roleVariant
+    ? 0.96 + Math.sin(now * 0.0058 + visual.hoverSeed) * 0.035
+    : 1;
   visual.engineGlow.visible = true;
   visual.engineVector.visible = true;
-  visual.engineGlow.position.set(0, 47);
+  visual.engineGlow.position.set(0, roleEngineProfile.y);
   visual.engineGlow.scale.set(
-    (0.94 + throttle * 0.22 + Math.sin(now * 0.010 + visual.hoverSeed) * 0.04) * compactMotionScale,
+    (0.94 + throttle * 0.22 + Math.sin(now * 0.010 + visual.hoverSeed) * 0.04) * compactMotionScale * roleEngineProfile.width,
+    (0.94 + throttle * 0.22 + Math.sin(now * 0.010 + visual.hoverSeed) * 0.04) * compactMotionScale * roleEngineProfile.length,
   );
   visual.engineGlow.alpha =
-    (hasMovement ? 0.84 : 0.52) *
+    (hasMovement ? 0.84 : 0.52) * roleEngineProfile.pulse *
     (reducedRemoteVisual ? 0.58 : 1) *
     (safeEffectTier === 2 && !isPlayer ? 0.72 : 1);
 
-  visual.engineVector.position.set(0, 49);
+  visual.engineVector.position.set(0, roleEngineProfile.y + 2);
   visual.engineVector.scale.set(
-    (0.78 + throttle * 0.38) * compactMotionScale,
-    (0.72 + throttle * 0.54 + Math.sin(now * 0.014 + visual.hoverSeed) * 0.08) * compactMotionScale,
+    (0.78 + throttle * 0.38) * compactMotionScale * roleEngineProfile.width,
+    (0.72 + throttle * 0.54 + Math.sin(now * 0.014 + visual.hoverSeed) * 0.08) * compactMotionScale * roleEngineProfile.length,
   );
   visual.engineVector.alpha =
     (hasMovement ? 0.82 : 0.38) *
     (reducedRemoteVisual ? 0.62 : 1) *
     (safeEffectTier === 2 && !isPlayer ? 0.68 : 1);
 
+  const hasRoleTech = Boolean(roleVariant);
+  visual.roleTech.visible = hasRoleTech;
+  visual.rolePulse.visible = hasRoleTech && !reducedRemoteVisual;
+
+  if (hasRoleTech) {
+    const roleBlink = 0.5 + 0.5 * Math.sin(now * (roleVariant === "attacker" ? 0.015 : roleVariant === "defender" ? 0.0105 : 0.0085) + visual.hoverSeed);
+    const roleBreath = 1 + Math.sin(now * 0.0062 + visual.hoverSeed) * 0.028;
+    visual.roleTech.position.set(0, 0);
+    visual.roleTech.rotation = 0;
+    visual.roleTech.scale.set(roleBreath);
+    visual.roleTech.alpha = (0.44 + roleBlink * 0.52) * (reducedRemoteVisual ? 0.7 : 1);
+
+    visual.rolePulse.position.set(0, 0);
+    if (roleVariant === "defender") {
+      // Forward Aegis is permanent cosmetic role identity. The animation uses
+      // only transforms/alpha and remains inside the vehicle, so it rotates
+      // naturally with the defender without changing any gameplay hitbox.
+      visual.rolePulse.rotation = Math.sin(now * 0.00125 + visual.hoverSeed) * 0.012;
+      visual.rolePulse.scale.set(0.92 + roleBlink * 0.032);
+      visual.rolePulse.alpha = 0.58 + roleBlink * 0.24;
+    } else if (roleVariant === "tank") {
+      visual.rolePulse.rotation = now * 0.00072;
+      visual.rolePulse.scale.set(0.96 + roleBlink * 0.045);
+      visual.rolePulse.alpha = 0.20 + roleBlink * 0.42;
+    } else {
+      visual.rolePulse.rotation = 0;
+      visual.rolePulse.scale.set(0.98 + roleBlink * 0.03);
+      visual.rolePulse.alpha = 0.22 + roleBlink * 0.40;
+    }
+  }
+
   const rotorSpeed = reducedRemoteVisual ? 0.013 : 0.016;
   const rotorAlpha = reducedRemoteVisual ? 0.38 : 0.48;
+  const rotorLayout = visual.rotorLayout || getHeistRotorLayout(roleVariant);
   visual.rotorSpins.forEach((rotor, index) => {
+    const activeRotor = Boolean(rotorLayout[index]);
+    rotor.visible = activeRotor;
+    if (!activeRotor) return;
     const direction = index % 2 === 0 ? 1 : -1;
-    rotor.visible = true;
     rotor.rotation = direction * now * rotorSpeed + index * Math.PI * 0.5;
-    rotor.alpha = rotorAlpha;
+    rotor.alpha = rotorAlpha * (roleVariant === "defender" ? 0.9 : 1);
   });
 
   const shieldActive = Boolean(unit.shieldActive || unit.isShieldActive || Number(unit.shieldUntil || 0) > Date.now());
@@ -1528,7 +2193,7 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
     const miniY = Math.sin(angle) * orbitRadius + aimY + miniHover;
     mini.position.set(miniX, miniY);
     mini.rotation = visual.facing + Math.sin(now * 0.003 + index) * 0.045;
-    const miniScale = 1 + Math.sin(now * 0.0045 + index * 1.3) * 0.035;
+    const miniScale = 0.32 + Math.sin(now * 0.0045 + index * 1.3) * 0.014;
     mini.scale.set(miniScale);
 
     // Color-specific energy beacon: clearer and more playful than smoke,
@@ -1563,6 +2228,19 @@ function updateSimpleVisual(visual, unit, resources, now, animateDecor = true) {
   const unitId = String(unit.id || "");
   const unitChanged = visual.unitId !== unitId;
   if (unitChanged) visual.unitId = unitId;
+
+  const teamMarker = getCoreHeistTeamMarker(unit);
+  if (visual.team !== teamMarker) {
+    visual.team = teamMarker;
+    visual.teamBeacon.context = resources.teamBeaconContexts[teamMarker || "cyan"] || resources.teamBeaconContexts.cyan;
+  }
+  visual.teamBeacon.visible = Boolean(teamMarker);
+  if (teamMarker) {
+    visual.teamBeacon.position.set(0, -80);
+    const teamPulse = 0.82 + Math.sin(now * 0.008 + visual.hoverSeed) * 0.05;
+    visual.teamBeacon.scale.set(teamPulse);
+    visual.teamBeacon.alpha = 0.84 + Math.sin(now * 0.01 + visual.hoverSeed) * 0.08;
+  }
 
   const deltaSeconds = clamp((now - (visual.lastFrameAt || now)) / 1000, 1 / 240, 0.05);
   visual.lastFrameAt = now;
@@ -1630,7 +2308,7 @@ function updateSimpleVisual(visual, unit, resources, now, animateDecor = true) {
       Math.sin(angle) * escortRadius + Math.sin(now * 0.004 + index * 1.7) * 1.45,
     );
     mini.rotation = Math.sin(now * 0.003 + index) * 0.05;
-    const pulse = 0.50 + Math.sin(now * 0.0045 + index) * 0.018;
+    const pulse = 0.18 + Math.sin(now * 0.0045 + index) * 0.008;
     mini.scale.set(pulse);
     mini.alpha = 0.93;
   });
@@ -1657,7 +2335,9 @@ function updateSimpleProjectileVisual(visual, projectile, resources, now) {
   visual.root.visible = true;
   visual.root.position.set(Number(projectile.x || 0), Number(projectile.y || 0));
   visual.root.rotation = heading + Math.PI * 0.5;
-  visual.root.scale.set(1.02);
+  // The launched attack drone reuses the same silhouette as its owner,
+  // but must read as a compact combat unit rather than a second main craft.
+  visual.root.scale.set(0.28);
   visual.root.alpha = 0.96;
   visual.body.position.set(0, Math.sin(phase) * 0.42);
   visual.rotors.forEach((rotor, index) => {
@@ -1687,7 +2367,9 @@ function updateProjectileVisual(visual, projectile, resources, now, compact = fa
 
   // Mini drone artwork faces up in local space; add 90° so its nose points
   // precisely along its real flight vector (angle 0 = moving right).
-  const flightScale = projectile.pierceLeft > 1 ? 1.24 : 1.12;
+  // Projectiles share the owner's role silhouette, rendered at a true
+  // attack-drone size. Piercing shots gain only a subtle size boost.
+  const flightScale = projectile.pierceLeft > 1 ? 0.38 : 0.32;
   const phase = now * 0.016 + visual.flightSeed;
   const hover = Math.sin(phase * 1.12) * 0.72;
   const pulse = 1 + Math.sin(phase * 1.45) * 0.08;
@@ -1814,6 +2496,8 @@ function createResources(coreTypes = []) {
   const droneAuraContexts = {};
   const engineGlowContexts = {};
   const engineVectorContexts = {};
+  const roleTechContexts = {};
+  const rolePulseContexts = {};
   const miniBeaconContexts = {};
   const projectileAuraContexts = {};
   const projectileJetContexts = {};
@@ -1821,14 +2505,23 @@ function createResources(coreTypes = []) {
   const shieldRingContexts = {};
   const shieldGlyphContexts = {};
   const shieldPulseContexts = {};
+  const teamBeaconContexts = {
+    cyan: createTeamBeaconContext("cyan"),
+    orange: createTeamBeaconContext("orange"),
+  };
 
   Object.entries(SKIN_THEMES).forEach(([skin, colors]) => {
-    droneContexts[skin] = createDroneContext(colors);
-    miniContexts[skin] = createMiniDroneContext(colors);
+    const roleVariant = getHeistRoleVariantFromSkin(skin);
+    droneContexts[skin] = createDroneContext(colors, roleVariant);
+    // Use the same main drone silhouette for escort/orbit drones so they match
+    // the primary craft visually instead of using a simplified mini-only design.
+    miniContexts[skin] = createDroneContext(colors, roleVariant);
     rotorSpinContexts[skin] = createRotorSpinContext(colors);
     droneAuraContexts[skin] = createDroneAuraContext(colors);
     engineGlowContexts[skin] = createEngineGlowContext(colors);
     engineVectorContexts[skin] = createEngineVectorContext(colors);
+    roleTechContexts[skin] = createRoleTechContext(colors, roleVariant);
+    rolePulseContexts[skin] = createRolePulseContext(colors, roleVariant);
     miniBeaconContexts[skin] = createMiniBeaconContext(colors);
     projectileAuraContexts[skin] = createProjectileAuraContext(colors);
     projectileJetContexts[skin] = createProjectileJetContext(colors);
@@ -1837,7 +2530,7 @@ function createResources(coreTypes = []) {
     shieldGlyphContexts[skin] = createShieldGlyphContext(colors);
     shieldPulseContexts[skin] = createShieldPulseContext(colors);
 
-    simpleContexts[skin] = createLiteDroneContext(colors);
+    simpleContexts[skin] = createLiteDroneContext(colors, roleVariant);
 
     const simpleProjectile = new PIXI.GraphicsContext();
     simpleProjectile.poly([9, 0, -6, -5, -6, 5]).fill({ color: colors[0], alpha: 0.96 });
@@ -1858,6 +2551,8 @@ function createResources(coreTypes = []) {
     droneAuraContexts,
     engineGlowContexts,
     engineVectorContexts,
+    roleTechContexts,
+    rolePulseContexts,
     miniBeaconContexts,
     projectileAuraContexts,
     projectileJetContexts,
@@ -1865,6 +2560,7 @@ function createResources(coreTypes = []) {
     shieldRingContexts,
     shieldGlyphContexts,
     shieldPulseContexts,
+    teamBeaconContexts,
     orbContexts: Object.fromEntries(Object.entries(ORB_COLORS).map(([name, color]) => [name, createOrbContext(color)])),
     energyContext: createEnergyContext(),
     coreContexts,

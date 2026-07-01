@@ -42,6 +42,16 @@ function mapPoint(item, worldWidth, worldHeight, w, h, margin = 6) {
   };
 }
 
+function resolveMiniMapSkin(player) {
+  const rawSkin = String(player?.skin || "").toLowerCase();
+  if (rawSkin.includes("orange") || String(player?.team || "cyan") === "orange") return "orange";
+  if (rawSkin.includes("red")) return "red";
+  if (rawSkin.includes("purple")) return "purple";
+  if (rawSkin.includes("green")) return "green";
+  if (rawSkin.includes("pink")) return "pink";
+  return "cyan";
+}
+
 function MiniMap({
   player,
   worldWidth,
@@ -50,11 +60,16 @@ function MiniMap({
   cores = [],
   safeZoneRadius = null,
   bases = [],
+  flags = [],
+  players = [],
 }) {
   const canvasRef = useRef(null);
   const stableOrbsRef = useRef([]);
   const stableCoresRef = useRef([]);
   const basesRef = useRef([]);
+  const flagsRef = useRef([]);
+  const teammatesRef = useRef([]);
+  const viewerTeamRef = useRef("cyan");
   const lastOrbsUpdateRef = useRef(0);
 
   // Valorile dinamice sunt citite din refs in RAF, fara restartarea buclei.
@@ -72,6 +87,41 @@ function MiniMap({
           Number.isFinite(Number(base.x)) &&
           Number.isFinite(Number(base.y))
       )
+    : [];
+  flagsRef.current = Array.isArray(flags)
+    ? flags.filter(
+        (flag) =>
+          flag &&
+          Number.isFinite(Number(flag.x)) &&
+          Number.isFinite(Number(flag.y))
+      )
+    : [];
+
+  // Core Heist teammates are intentionally visible on the tactical map.
+  // The current camera/player keeps the large DOM marker; the other friendly
+  // drones are drawn on canvas so they remain cheap even on mobile.
+  const viewerTeam = String(player?.team || "cyan") === "orange" ? "orange" : "cyan";
+  viewerTeamRef.current = viewerTeam;
+  const viewerId = String(player?.id || "");
+  teammatesRef.current = Array.isArray(players)
+    ? players
+        .filter((candidate) => {
+          if (!candidate || candidate.alive === false) return false;
+          if (viewerId && String(candidate?.id || "") === viewerId) return false;
+          return String(candidate?.team || "cyan") === viewerTeam &&
+            Number.isFinite(Number(candidate?.x)) &&
+            Number.isFinite(Number(candidate?.y));
+        })
+        .slice(0, 7)
+        .map((candidate) => ({
+          id: String(candidate?.id || ""),
+          x: Number(candidate.x || 0),
+          y: Number(candidate.y || 0),
+          moveAngle: Number(candidate?.moveAngle || 0),
+          isMoving: Boolean(candidate?.isMoving),
+          role: String(candidate?.heistRole || ""),
+          team: viewerTeam,
+        }))
     : [];
 
   const playerX = clamp(((player?.x || 0) / Math.max(1, worldWidth || 1)) * 100, 0, 100);
@@ -201,7 +251,45 @@ function MiniMap({
 
         ctx.save();
 
-        ctx.globalAlpha = 1;
+        for (const flag of flagsRef.current) {
+        const point = mapPoint(flag, currentWorldWidth, currentWorldHeight, w, h, 10);
+        const isOwnFlag = Boolean(flag.isOwnFlag);
+        const status = String(flag?.status || "home");
+        const color = isOwnFlag ? "#00eaff" : "#ff4d5f";
+
+        ctx.save();
+        ctx.translate(point.x, point.y);
+        ctx.globalAlpha = status === "carried" ? 1 : 0.96;
+        if (status === "carried") {
+          ctx.beginPath();
+          ctx.arc(0, 0, 7.2, 0, Math.PI * 2);
+          ctx.strokeStyle = isOwnFlag ? "rgba(0, 234, 255, 0.35)" : "rgba(255, 77, 95, 0.35)";
+          ctx.lineWidth = 1.4;
+          ctx.stroke();
+        }
+        ctx.beginPath();
+        ctx.moveTo(-1.5, 5.5);
+        ctx.lineTo(-1.5, -6.5);
+        ctx.strokeStyle = "rgba(255,255,255,0.96)";
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(-1.5, -6.2);
+        ctx.lineTo(6.5, -3.9);
+        ctx.lineTo(-1.5, -1.3);
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+        if (status === "dropped") {
+          ctx.beginPath();
+          ctx.arc(0, 3.2, 1.8, 0, Math.PI * 2);
+          ctx.fillStyle = "#ffffff";
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+
+      ctx.globalAlpha = 1;
         ctx.beginPath();
         ctx.arc(point.x, point.y, perimeterRadius, 0, Math.PI * 2);
         ctx.fillStyle = isOwnBase
@@ -235,6 +323,42 @@ function MiniMap({
         ctx.restore();
       }
 
+      // Friendly squad markers: bright IFF chevrons with a small role core.
+      // They identify team position instantly without exposing enemy locations.
+      const currentViewerTeam = viewerTeamRef.current;
+      const teammateColor = currentViewerTeam === "orange" ? "#ff6b76" : "#35d8ff";
+      const teammateLight = currentViewerTeam === "orange" ? "#ffe0e4" : "#e8fbff";
+      for (const teammate of teammatesRef.current) {
+        const point = mapPoint(teammate, currentWorldWidth, currentWorldHeight, w, h, 9);
+        const heading = teammate.isMoving && Number.isFinite(teammate.moveAngle)
+          ? teammate.moveAngle + Math.PI / 2
+          : 0;
+
+        ctx.save();
+        ctx.translate(point.x, point.y);
+        ctx.rotate(heading);
+        ctx.globalAlpha = 0.98;
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = teammateColor;
+        ctx.beginPath();
+        ctx.moveTo(0, -6.2);
+        ctx.lineTo(5.2, 4.6);
+        ctx.lineTo(0, 2.2);
+        ctx.lineTo(-5.2, 4.6);
+        ctx.closePath();
+        ctx.fillStyle = teammateColor;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.beginPath();
+        ctx.moveTo(0, -3.5);
+        ctx.lineTo(2.25, 1.5);
+        ctx.lineTo(-2.25, 1.5);
+        ctx.closePath();
+        ctx.fillStyle = teammateLight;
+        ctx.fill();
+        ctx.restore();
+      }
+
       ctx.globalAlpha = 1;
     };
 
@@ -249,7 +373,7 @@ function MiniMap({
 
       <div className="minimap-map-area">
         <div
-          className={`minimap-player-drone minimap-drone-${player?.skin || "cyan"}`}
+          className={`minimap-player-drone minimap-drone-${resolveMiniMapSkin(player)}`}
           style={{
             left: `${playerX}%`,
             top: `${playerY}%`,

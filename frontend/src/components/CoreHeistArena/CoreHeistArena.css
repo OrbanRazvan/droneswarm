@@ -1,3027 +1,1058 @@
-/* ============================================================================
-   CORE HEIST — GameArena-powered HUD
-   Core Heist intentionally imports GameArena.css again for the trusted shared
-   mobile joystick, Attack/Shield buttons, minimap primitives and arena visuals.
-   This file loads after it and owns the Core Heist-specific responsive layout.
-============================================================================ */
+/* =========================================================
+   CORE HEIST ARENA (Capture the Flag)
+   Complet auto-continut, namespace .core-heist-*.
+   Zero duplicate. Toate clasele au o singura definitie de baza
+   + override-uri per breakpoint clare, fara !important competitiv.
+   =========================================================
 
-.core-heist-dom-arena,
+   LAYOUT TOP-LEVEL (desktop, > 760px wide non-touch):
+   ┌─────────────────────────────────────────────────────────┐
+   │ [HP/ENERGY]  [ORB/CORES]        [TEAM ─ TIMER]   [FPS] │
+   │                           [SCOREBOARD]                   │
+   │                         [OBJECTIVE / EVENT]              │
+   │                                           [LEADERBOARD]  │
+   └─────────────────────────────────────────────────────────┘
+   Bottom-right: minimap  |  Bottom-left: EXIT TO MENU
+
+   LAYOUT MOBILE PORTRAIT:
+   ┌─────────────────────────────────────────────────────────┐
+   │ [HP] [ORB]  [TEAM·TIMER]  [SCORE]           [LEADER]   │  ← row 1, compact
+   │                  [OBJECTIVE tiny]                        │  ← row 2
+   │                  ... game area ...                       │
+   │                               [MINIMAP]                  │  ← bottom-right
+   │ [JOYSTICK]                  [SHIELD][ATTACK]             │  ← controls
+   │ [EXIT]                                                   │
+   └─────────────────────────────────────────────────────────┘
+========================================================= */
+
+/* ─────────────── RESET / ROOT ─────────────── */
+.core-heist-dom-arena {
+  background: #06101d;
+  position: relative;
+  overflow: hidden;
+}
+
 .core-heist-dom-arena * {
   box-sizing: border-box;
 }
 
-.core-heist-dom-arena {
+/* ─────────────── FPS ─────────────── */
+.core-heist-fps {
   position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100dvh;
-  overflow: hidden;
-  isolation: isolate;
-  background: #06101d;
-  color: #eef7ff;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.core-heist-dom-arena .pixi-arena-layer {
-  position: fixed;
-  inset: 0;
-  z-index: 1;
-}
-
-.core-heist-dom-arena .pixi-arena-layer canvas {
-  display: block;
-  width: 100% !important;
-  height: 100% !important;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Shared HUD surface                                                         */
-/* -------------------------------------------------------------------------- */
-.core-heist-dom-arena .core-heist-status-panel,
-.core-heist-dom-arena .core-heist-economy-panel,
-.core-heist-dom-arena .core-heist-team-panel,
-.core-heist-dom-arena .core-heist-match-timer,
-.core-heist-dom-arena .core-heist-scoreboard,
-.core-heist-dom-arena .core-heist-objective-panel,
-.core-heist-dom-arena .core-heist-live-event,
-.core-heist-dom-arena .core-heist-leaderboard,
-.core-heist-dom-arena .core-heist-peace-countdown {
-  border: 1px solid rgba(115, 213, 255, 0.28);
-  background:
-    linear-gradient(145deg, rgba(12, 27, 48, 0.86), rgba(2, 10, 23, 0.92)),
-    rgba(2, 10, 23, 0.90);
-  box-shadow:
-    0 16px 38px rgba(0, 0, 0, 0.26),
-    inset 0 1px 0 rgba(255, 255, 255, 0.045);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
-
-/* -------------------------------------------------------------------------- */
-/* Left information rail                                                      */
-/* -------------------------------------------------------------------------- */
-.core-heist-dom-arena .core-heist-status-panel {
-  position: fixed;
-  z-index: 120;
-  top: max(20px, env(safe-area-inset-top));
-  left: max(20px, env(safe-area-inset-left));
-  width: 228px;
-  padding: 16px 17px 15px;
-  border-radius: 18px;
+  top: 10px;
+  right: 14px;
+  z-index: 90;
+  color: #67ffb1;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.4px;
+  text-shadow: 0 0 10px rgba(103, 255, 177, 0.5);
   pointer-events: none;
 }
+.core-heist-fps.is-low { color: #ff5b5b; }
 
-.core-heist-dom-arena .core-heist-status-panel > span,
-.core-heist-dom-arena .core-heist-energy-row > span {
-  display: block;
-  color: #9bc3d5;
-  font-size: 11px;
-  font-weight: 900;
-  letter-spacing: 1.25px;
-}
-
-.core-heist-dom-arena .core-heist-status-panel > strong,
-.core-heist-dom-arena .core-heist-energy-row > strong {
-  display: block;
-  margin-top: 4px;
-  color: #f8fdff;
-  font-size: 28px;
-  font-weight: 900;
-  line-height: 1;
-  letter-spacing: .2px;
-  font-variant-numeric: tabular-nums;
-  text-shadow: 0 0 16px rgba(0, 234, 255, 0.26);
-}
-
-.core-heist-dom-arena .core-heist-hp-bar,
-.core-heist-dom-arena .core-heist-energy-bar {
-  height: 8px;
-  margin-top: 11px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.45);
-}
-
-.core-heist-dom-arena .core-heist-hp-bar i,
-.core-heist-dom-arena .core-heist-energy-bar i {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-}
-
-.core-heist-dom-arena .core-heist-hp-bar i {
-  background: linear-gradient(90deg, #00cdec, #65fbb8);
-  box-shadow: 0 0 15px rgba(0, 234, 255, 0.78);
-}
-
-.core-heist-dom-arena .core-heist-energy-row {
-  margin-top: 15px;
-  padding-top: 14px;
-  border-top: 1px solid rgba(150, 219, 245, 0.13);
-}
-
-.core-heist-dom-arena .core-heist-energy-row > strong {
-  font-size: 24px;
-  text-shadow: 0 0 14px rgba(184, 255, 88, 0.22);
-}
-
-.core-heist-dom-arena .core-heist-energy-bar {
-  height: 7px;
-  margin-top: 9px;
-}
-
-.core-heist-dom-arena .core-heist-energy-bar i {
-  background: linear-gradient(90deg, #55efab, #e8f85d);
-  box-shadow: 0 0 14px rgba(146, 255, 120, 0.62);
-}
-
-.core-heist-dom-arena .core-heist-economy-panel {
+/* ─────────────── HP / ENERGY (top-left) ─────────────── */
+.core-heist-status-panel {
   position: fixed;
-  z-index: 119;
-  top: 244px;
-  left: max(20px, env(safe-area-inset-left));
-  width: 228px;
-  padding: 15px 17px 16px;
-  border-radius: 18px;
-  text-align: center;
+  top: 14px;
+  left: 14px;
+  z-index: 70;
+  width: 200px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(0, 234, 255, 0.3);
+  background: rgba(2, 8, 18, 0.86);
+  box-shadow: 0 0 20px rgba(0, 234, 255, 0.1);
+  backdrop-filter: blur(6px);
   pointer-events: none;
 }
-
-.core-heist-dom-arena .core-heist-economy-panel > span {
+.core-heist-status-panel > span,
+.core-heist-energy-row > span {
   display: block;
-  color: #9bc3d5;
-  font-size: 11px;
-  font-weight: 900;
-  letter-spacing: 1.3px;
-}
-
-.core-heist-dom-arena .core-heist-economy-panel > strong {
-  display: block;
-  margin-top: 4px;
-  color: #00eaff;
-  font-size: 31px;
-  font-weight: 950;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-  text-shadow: 0 0 16px rgba(0, 234, 255, 0.40);
-}
-
-.core-heist-dom-arena .core-heist-economy-panel > small {
-  display: block;
-  margin-top: 5px;
-  color: #c8dae6;
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-.core-heist-dom-arena .core-heist-active-cores {
-  display: grid;
-  gap: 7px;
-  margin-top: 13px;
-  padding-top: 12px;
-  border-top: 1px solid rgba(150, 219, 245, 0.13);
-}
-
-.core-heist-dom-arena .core-heist-active-cores b {
-  color: #9bc3d5;
+  color: rgba(180, 245, 255, 0.7);
   font-size: 10px;
-  font-weight: 950;
-  letter-spacing: 1.15px;
-}
-
-.core-heist-dom-arena .core-heist-active-cores em,
-.core-heist-dom-arena .core-heist-core-badge {
-  display: block;
-  padding: 7px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 999px;
-  color: #b7c9d7;
-  background: rgba(255, 255, 255, 0.045);
-  font-size: 10px;
-  font-style: normal;
-  font-weight: 900;
-  letter-spacing: .55px;
-}
-
-.core-heist-dom-arena .core-heist-core-badge-nano { color: #69efff; border-color: rgba(0, 234, 255, 0.34); }
-.core-heist-dom-arena .core-heist-core-badge-rotor { color: #ffd18b; border-color: rgba(255, 174, 61, 0.38); }
-.core-heist-dom-arena .core-heist-core-badge-piercing { color: #d7a5ff; border-color: rgba(180, 92, 255, 0.38); }
-.core-heist-dom-arena .core-heist-core-badge-overclock,
-.core-heist-dom-arena .core-heist-core-badge-berserk { color: #ffaaa4; border-color: rgba(255, 76, 76, 0.38); }
-.core-heist-dom-arena .core-heist-core-badge-vampire,
-.core-heist-dom-arena .core-heist-core-badge-swarm { color: #7effbd; border-color: rgba(36, 255, 157, 0.35); }
-
-/* -------------------------------------------------------------------------- */
-/* Center objective rail                                                      */
-/* -------------------------------------------------------------------------- */
-.core-heist-dom-arena .core-heist-team-panel {
-  position: fixed;
-  z-index: 130;
-  top: max(14px, env(safe-area-inset-top));
-  left: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 11px;
-  width: min(560px, calc(100vw - 590px));
-  min-width: 390px;
-  min-height: 40px;
-  padding: 9px 18px;
-  border-radius: 999px;
-  transform: translateX(-50%);
-  text-align: center;
-  pointer-events: none;
-}
-
-.core-heist-dom-arena .core-heist-team-panel strong {
-  color: #70d8ff;
-  font-size: 12px;
-  font-weight: 1000;
-  letter-spacing: 1.25px;
-  white-space: nowrap;
-}
-
-.core-heist-dom-arena .core-heist-team-panel span {
-  color: #c3d2dd;
-  font-size: 11px;
-  font-weight: 850;
-  letter-spacing: .72px;
-  white-space: nowrap;
-}
-
-.core-heist-dom-arena .core-heist-match-timer {
-  position: fixed;
-  z-index: 129;
-  top: 67px;
-  left: 50%;
-  min-width: 132px;
-  padding: 7px 14px 8px;
-  border-radius: 13px;
-  transform: translateX(-50%);
-  text-align: center;
-  pointer-events: none;
-}
-
-.core-heist-dom-arena .core-heist-match-timer span,
-.core-heist-dom-arena .core-heist-match-timer strong {
-  display: block;
-}
-
-.core-heist-dom-arena .core-heist-match-timer span {
-  color: #9bb1c0;
-  font-size: 9px;
-  font-weight: 950;
-  letter-spacing: 1.45px;
-}
-
-.core-heist-dom-arena .core-heist-match-timer strong {
-  margin-top: 3px;
-  color: #f3fbff;
-  font-size: 18px;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-
-.core-heist-dom-arena .core-heist-scoreboard {
-  position: fixed;
-  z-index: 128;
-  top: 116px;
-  left: 50%;
-  display: grid;
-  grid-template-columns: minmax(134px, 1fr) 156px minmax(134px, 1fr);
-  width: min(560px, calc(100vw - 590px));
-  min-width: 390px;
-  min-height: 76px;
-  overflow: hidden;
-  border-radius: 17px;
-  transform: translateX(-50%);
-  pointer-events: none;
-}
-
-.core-heist-dom-arena .core-heist-score-side {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  min-height: 76px;
-  padding: 0 13px;
-  color: #b7c8d4;
-  transition: opacity .18s ease;
-}
-
-.core-heist-dom-arena .core-heist-score-side span {
-  font-size: 11px;
-  font-weight: 1000;
-  letter-spacing: 1.25px;
-}
-
-.core-heist-dom-arena .core-heist-score-side strong {
-  color: inherit;
-  font-size: 36px;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-
-.core-heist-dom-arena .core-heist-score-side strong b { font: inherit; }
-.core-heist-dom-arena .core-heist-score-side strong small {
-  margin-left: 3px;
-  color: currentColor;
-  font-size: 14px;
-  font-weight: 900;
-  opacity: .65;
-}
-
-.core-heist-dom-arena .core-heist-score-side.cyan {
-  color: #71caff;
-  background: linear-gradient(90deg, rgba(32, 147, 255, 0.24), rgba(24, 110, 191, 0.08));
-  border-right: 1px solid rgba(115, 213, 255, 0.35);
-}
-
-.core-heist-dom-arena .core-heist-score-side.orange {
-  color: #ff7c83;
-  background: linear-gradient(270deg, rgba(255, 65, 79, 0.24), rgba(191, 38, 48, 0.08));
-  border-left: 1px solid rgba(255, 130, 138, 0.28);
-}
-
-.core-heist-dom-arena .core-heist-score-side.is-your-team {
-  box-shadow: inset 0 0 0 1px currentColor, inset 0 0 30px rgba(255, 255, 255, 0.045);
-}
-
-.core-heist-dom-arena .core-heist-score-middle {
-  display: grid;
-  align-content: center;
-  justify-items: center;
-  gap: 4px;
-  padding: 0 8px;
-  text-align: center;
-  background: rgba(3, 12, 26, 0.94);
-}
-
-.core-heist-dom-arena .core-heist-score-middle b {
-  color: #f5f9ff;
-  font-size: 12px;
-  font-weight: 1000;
-  letter-spacing: .85px;
-  line-height: 1.08;
-}
-
-.core-heist-dom-arena .core-heist-score-middle small {
-  color: #9eb1c0;
-  font-size: 9px;
   font-weight: 900;
   letter-spacing: 1px;
 }
-
-.core-heist-dom-arena .core-heist-objective-panel {
-  position: fixed;
-  z-index: 126;
-  top: 205px;
-  left: 50%;
-  width: min(500px, calc(100vw - 590px));
-  min-width: 360px;
-  padding: 10px 16px 11px;
-  border-radius: 14px;
-  transform: translateX(-50%);
-  text-align: center;
-  pointer-events: none;
-}
-
-.core-heist-dom-arena .core-heist-objective-panel b,
-.core-heist-dom-arena .core-heist-objective-panel span {
+.core-heist-status-panel > strong,
+.core-heist-energy-row > strong {
   display: block;
-}
-
-.core-heist-dom-arena .core-heist-objective-panel b {
-  color: #e9f6ff;
-  font-size: 12px;
-  font-weight: 1000;
-  letter-spacing: .86px;
-}
-
-.core-heist-dom-arena .core-heist-objective-panel span {
-  margin-top: 4px;
-  color: #b8cad8;
-  font-size: 11px;
-  line-height: 1.28;
-}
-
-.core-heist-dom-arena .core-heist-live-event {
-  position: fixed;
-  z-index: 140;
-  top: 273px;
-  left: 50%;
-  width: min(560px, calc(100vw - 580px));
-  min-width: 390px;
-  overflow: hidden;
-  padding: 12px 20px 13px;
-  border-radius: 16px;
-  transform: translateX(-50%);
-  text-align: center;
-  pointer-events: none;
-  animation: core-heist-event-in 220ms ease-out both;
-}
-
-.core-heist-dom-arena .core-heist-live-event::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 5px;
-  background: #00eaff;
-  box-shadow: 0 0 20px #00eaff;
-}
-
-.core-heist-dom-arena .core-heist-live-event.team-orange::before {
-  background: #ff4c59;
-  box-shadow: 0 0 20px #ff4c59;
-}
-
-.core-heist-dom-arena .core-heist-live-event.capture {
-  border-color: rgba(255, 214, 109, 0.66);
-  background: linear-gradient(135deg, rgba(49, 34, 5, 0.96), rgba(13, 17, 31, 0.95));
-  box-shadow: 0 0 36px rgba(255, 205, 87, 0.20), inset 0 1px 0 rgba(255, 235, 175, 0.08);
-}
-
-.core-heist-dom-arena .core-heist-live-event.capture::before {
-  background: #ffd447;
-  box-shadow: 0 0 20px #ffd447;
-}
-
-.core-heist-dom-arena .core-heist-live-event span,
-.core-heist-dom-arena .core-heist-live-event strong,
-.core-heist-dom-arena .core-heist-live-event small { display: block; }
-
-.core-heist-dom-arena .core-heist-live-event span {
-  margin-bottom: 3px;
-  color: #a7bdcf;
-  font-size: 10px;
-  font-weight: 1000;
-  letter-spacing: 1.55px;
-}
-
-.core-heist-dom-arena .core-heist-live-event strong {
-  color: #fff;
-  font-size: clamp(15px, 1.55vw, 21px);
-  font-weight: 1000;
-  letter-spacing: .38px;
-  line-height: 1.14;
-}
-
-.core-heist-dom-arena .core-heist-live-event small {
-  margin-top: 5px;
-  color: #cbdbe8;
-  font-size: 11px;
-  font-weight: 750;
-  letter-spacing: .25px;
-}
-
-@keyframes core-heist-event-in {
-  from { opacity: 0; transform: translate(-50%, -8px) scale(.97); }
-  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
-}
-
-/* -------------------------------------------------------------------------- */
-/* Right information rail                                                     */
-/* -------------------------------------------------------------------------- */
-.core-heist-dom-arena .core-heist-fps {
-  position: fixed;
-  z-index: 160;
-  top: max(16px, env(safe-area-inset-top));
-  right: max(22px, env(safe-area-inset-right));
-  color: #6fffb2;
-  font-size: 16px;
-  font-weight: 1000;
-  letter-spacing: 1px;
-  text-shadow: 0 0 12px rgba(82, 255, 163, 0.45);
-  pointer-events: none;
-}
-
-.core-heist-dom-arena .core-heist-fps.is-low {
-  color: #ffbd68;
-  text-shadow: 0 0 12px rgba(255, 158, 68, .4);
-}
-
-.core-heist-dom-arena .core-heist-leaderboard {
-  position: fixed;
-  z-index: 120;
-  top: 64px;
-  right: max(20px, env(safe-area-inset-right));
-  width: 254px;
-  padding: 15px 16px 14px;
-  border-radius: 18px;
-  pointer-events: none;
-}
-
-.core-heist-dom-arena .core-heist-leaderboard h3 {
-  margin: 0 0 11px;
-  color: #e7f3ff;
-  font-size: 16px;
-  font-weight: 1000;
-  letter-spacing: .45px;
-  text-align: center;
-}
-
-.core-heist-dom-arena .core-heist-leaderboard-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  margin: 6px 0;
-  color: #d8e8f3;
-  font-size: 13px;
-  line-height: 1.2;
-}
-
-.core-heist-dom-arena .core-heist-leaderboard-row span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.core-heist-dom-arena .core-heist-leaderboard-row strong {
-  color: #00eaff;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.core-heist-dom-arena .core-heist-leaderboard-row.is-me {
-  margin-inline: -7px;
-  padding: 4px 7px;
-  border-radius: 8px;
-  color: #7cfbb8;
-  background: rgba(100, 255, 184, 0.10);
-  font-weight: 950;
-}
-
-.core-heist-dom-arena .core-heist-leaderboard-row.is-dead { opacity: .44; }
-
-/* MiniMap keeps its own implementation, but Core Heist owns the placement. */
-.core-heist-dom-arena .minimap {
-  position: fixed !important;
-  z-index: 118 !important;
-  right: max(20px, env(safe-area-inset-right)) !important;
-  bottom: max(20px, env(safe-area-inset-bottom)) !important;
-  width: 238px !important;
-  height: 152px !important;
-  border: 1px solid rgba(91, 205, 245, .26) !important;
-  border-radius: 17px !important;
-  box-shadow: 0 16px 34px rgba(0, 0, 0, .34), 0 0 20px rgba(0, 234, 255, .08) !important;
-  overflow: hidden !important;
-  pointer-events: none !important;
-}
-
-.core-heist-dom-arena .minimap-title {
-  font-size: 11px !important;
-  letter-spacing: 1.4px !important;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Match state                                                                */
-/* -------------------------------------------------------------------------- */
-.core-heist-dom-arena .core-heist-matchmaking-screen,
-.core-heist-dom-arena .core-heist-redeploy-panel,
-.core-heist-dom-arena .core-heist-finished-screen {
-  position: fixed;
-  inset: 0;
-  z-index: 300;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-}
-
-.core-heist-dom-arena .core-heist-matchmaking-screen {
-  background: radial-gradient(circle at 50% 42%, rgba(0, 234, 255, .15), transparent 34%), rgba(1, 7, 16, .74);
-}
-
-.core-heist-dom-arena .core-heist-matchmaking-card,
-.core-heist-dom-arena .core-heist-redeploy-card {
-  width: min(420px, calc(100vw - 40px));
-  padding: 28px 26px;
-  border: 1px solid rgba(98, 224, 255, .48);
-  border-radius: 22px;
-  text-align: center;
-  background: linear-gradient(145deg, rgba(0, 234, 255, .13), rgba(3, 13, 29, .94) 56%), #020812;
-  box-shadow: 0 0 54px rgba(0, 234, 255, .19), inset 0 0 28px rgba(0, 234, 255, .045);
-}
-
-.core-heist-dom-arena .core-heist-loader {
-  width: 46px;
-  height: 46px;
-  margin: 0 auto;
-  border: 4px solid rgba(183, 244, 255, .16);
-  border-top-color: #5ceeff;
-  border-right-color: #ffbd62;
-  border-radius: 50%;
-  animation: core-heist-spin .85s linear infinite;
-}
-
-@keyframes core-heist-spin { to { transform: rotate(360deg); } }
-
-.core-heist-dom-arena .core-heist-matchmaking-card h1 {
-  margin: 15px 0 8px;
-  color: #ebfbff;
-  font-size: clamp(20px, 3vw, 29px);
-  letter-spacing: 1.45px;
-}
-
-.core-heist-dom-arena .core-heist-matchmaking-card strong {
-  display: block;
-  margin: 10px 0 12px;
-  color: #67efff;
-  font-size: clamp(36px, 7vw, 58px);
-  font-weight: 1000;
-  line-height: 1;
-}
-
-.core-heist-dom-arena .core-heist-matchmaking-card p {
-  margin: 0;
-  color: #bdcfdf;
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.core-heist-dom-arena .core-heist-peace-countdown {
-  position: fixed;
-  z-index: 200;
-  left: 50%;
-  bottom: max(32px, env(safe-area-inset-bottom));
-  width: min(368px, calc(100vw - 36px));
-  padding: 12px 16px;
-  border-radius: 15px;
-  transform: translateX(-50%);
-  text-align: center;
-  pointer-events: none;
-}
-
-.core-heist-dom-arena .core-heist-peace-countdown strong,
-.core-heist-dom-arena .core-heist-peace-countdown b,
-.core-heist-dom-arena .core-heist-peace-countdown span {
-  display: block;
-}
-
-.core-heist-dom-arena .core-heist-peace-countdown strong {
-  color: #7cefff;
-  font-size: 11px;
-  letter-spacing: 1.35px;
-}
-
-.core-heist-dom-arena .core-heist-peace-countdown b {
-  margin: 3px 0;
-  color: #fff;
-  font-size: 30px;
-  line-height: 1;
-}
-
-.core-heist-dom-arena .core-heist-peace-countdown span {
-  color: #bacbd8;
-  font-size: 10px;
-}
-
-.core-heist-dom-arena .core-heist-begin-flash {
-  position: fixed;
-  z-index: 210;
-  top: 50%;
-  left: 50%;
-  padding: 14px 22px;
-  border: 1px solid rgba(255, 213, 109, .65);
-  border-radius: 14px;
-  transform: translate(-50%, -50%);
-  color: #fff5ca;
-  background: rgba(43, 30, 4, .90);
-  box-shadow: 0 0 38px rgba(255, 206, 64, .28);
-  font-size: clamp(20px, 3vw, 34px);
-  font-weight: 1000;
-  letter-spacing: 2px;
-  pointer-events: none;
-}
-
-.core-heist-dom-arena .core-heist-redeploy-panel {
-  z-index: 310;
-  background: rgba(1, 7, 16, .36);
-  pointer-events: none;
-}
-
-.core-heist-dom-arena .core-heist-redeploy-card {
-  border-color: rgba(255, 112, 107, .48);
-  background: linear-gradient(145deg, rgba(255, 72, 72, .13), rgba(22, 5, 13, .94) 56%), #0d050c;
-  box-shadow: 0 0 42px rgba(255, 64, 64, .20);
-}
-
-.core-heist-dom-arena .core-heist-redeploy-card strong,
-.core-heist-dom-arena .core-heist-redeploy-card b,
-.core-heist-dom-arena .core-heist-redeploy-card span { display: block; }
-
-.core-heist-dom-arena .core-heist-redeploy-card strong {
-  color: #ff8b86;
-  font-size: 12px;
-  font-weight: 1000;
-  letter-spacing: 1.45px;
-}
-
-.core-heist-dom-arena .core-heist-redeploy-card b {
-  margin-top: 8px;
+  margin-top: 2px;
   color: #fff;
   font-size: 22px;
+  line-height: 1;
+}
+.core-heist-hp-bar,
+.core-heist-energy-bar {
+  height: 7px;
+  margin-top: 7px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.07);
+  overflow: hidden;
+}
+.core-heist-hp-bar i { display:block;height:100%;background:linear-gradient(90deg,#00eaff,#67ffb1);border-radius:inherit; }
+.core-heist-energy-bar i { display:block;height:100%;background:linear-gradient(90deg,#ffd166,#67ffb1);border-radius:inherit; }
+.core-heist-energy-row {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(0, 234, 255, 0.14);
 }
 
-.core-heist-dom-arena .core-heist-redeploy-card span {
-  margin-top: 8px;
-  color: #c4d1dc;
-  font-size: 12px;
-  line-height: 1.4;
+/* ─────────────── ORB COUNT / CORES (next to HP panel) ─────────────── */
+.core-heist-economy-panel {
+  position: fixed;
+  top: 14px;
+  left: 228px;
+  z-index: 70;
+  width: 180px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(0, 234, 255, 0.3);
+  background: rgba(2, 8, 18, 0.86);
+  box-shadow: 0 0 20px rgba(0, 234, 255, 0.1);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
 }
-
-.core-heist-dom-arena .core-heist-finished-screen {
-  z-index: 330;
-  align-content: center;
-  background: radial-gradient(circle at 50% 42%, rgba(0, 234, 255, .11), transparent 35%), rgba(0, 5, 12, .82);
-  text-align: center;
-}
-
-.core-heist-dom-arena .core-heist-finished-screen h1 {
-  margin: 0;
-  color: #fff;
-  font-size: clamp(32px, 6vw, 64px);
-  letter-spacing: 3px;
-  text-shadow: 0 0 24px rgba(0, 234, 255, .42);
-}
-
-.core-heist-dom-arena .core-heist-finished-screen p {
-  margin: 12px 0 0;
-  color: #c5d9e7;
-  font-size: 16px;
-}
-
-.core-heist-dom-arena .core-heist-finished-auto-exit { color: #6feeff !important; }
-
-.core-heist-dom-arena .core-heist-finished-screen button,
-.core-heist-dom-arena .core-heist-exit-btn {
-  border: 1px solid rgba(111, 226, 255, .5);
-  color: #eaffff;
-  background: rgba(4, 25, 42, .86);
-  font: inherit;
+.core-heist-economy-panel > span {
+  display: block;
+  color: rgba(180, 245, 255, 0.7);
+  font-size: 10px;
   font-weight: 900;
-  letter-spacing: .8px;
+  letter-spacing: 1px;
+}
+.core-heist-economy-panel > strong {
+  display: block;
+  margin-top: 2px;
+  color: #67ffb1;
+  font-size: 20px;
+  line-height: 1;
+}
+.core-heist-economy-panel > small {
+  display: block;
+  margin-top: 4px;
+  color: rgba(225,248,255,0.6);
+  font-size: 10px;
+  font-weight: 700;
+}
+.core-heist-active-cores {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(0, 234, 255, 0.14);
+}
+.core-heist-active-cores b {
+  display: block;
+  color: rgba(180, 245, 255, 0.7);
+  font-size: 9px;
+  letter-spacing: 1px;
+  margin-bottom: 4px;
+}
+.core-heist-active-cores em {
+  display: block;
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 800;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 999px;
+  padding: 4px 8px;
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: rgba(255,255,255,0.5);
+}
+.core-heist-core-badge-nano    { color: #00eaff !important; }
+.core-heist-core-badge-rotor   { color: #ffae3d !important; }
+.core-heist-core-badge-piercing{ color: #b45cff !important; }
+.core-heist-core-badge-overclock{ color: #ff4040 !important; }
+.core-heist-core-badge-berserk { color: #ff7a18 !important; }
+.core-heist-core-badge-shield-breaker{ color: #d946ef !important; }
+.core-heist-core-badge-swarm   { color: #00ffd5 !important; }
+.core-heist-core-badge-vampire { color: #00c46a !important; }
+.core-heist-core-badge-emp     { color: #faff00 !important; }
+.core-heist-core-badge-rapid   { color: #67ffb1 !important; }
+
+/* ─────────────── TEAM PANEL + MATCH TIMER (top-center, inline row) ─────────────── */
+.core-heist-team-panel {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 71;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 20px 9px;
+  border-radius: 12px;
+  border: 1px solid rgba(220, 237, 255, 0.38);
+  background: linear-gradient(135deg, rgba(0,234,255,0.09), rgba(255,159,28,0.07)), rgba(3,12,24,0.86);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.core-heist-team-panel strong {
+  color: #dcecff;
+  font-size: 12px;
+  letter-spacing: 1.2px;
+}
+.core-heist-team-panel span {
+  color: rgba(225,248,255,0.62);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+}
+
+/* Match timer inline inside team panel row — same fixed row */
+.core-heist-match-timer {
+  position: fixed;
+  top: 42px;
+  /* pushed right of center, so team panel (centered) doesn't overlap */
+  left: calc(50% + 230px);
+  z-index: 71;
+  min-width: 110px;
+  padding: 7px 14px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(220, 237, 255, 0.38);
+  background: rgba(2, 9, 20, 0.86);
+  text-align: center;
+  pointer-events: none;
+}
+.core-heist-match-timer span {
+  display: block;
+  color: #a9b8c8;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 1.2px;
+}
+.core-heist-match-timer strong {
+  display: block;
+  margin-top: 1px;
+  color: #dcecff;
+  font-size: 16px;
+  letter-spacing: 0.5px;
+}
+
+/* ─────────────── SCOREBOARD (second row, center) ─────────────── */
+.core-heist-scoreboard {
+  position: fixed;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 71;
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) 140px minmax(80px, 1fr);
+  align-items: center;
+  width: min(440px, calc(100vw - 28px));
+  min-height: 56px;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid rgba(220, 237, 255, 0.2);
+  background: rgba(2, 9, 20, 0.88);
+  box-shadow: 0 0 24px rgba(0,0,0,0.3);
+  pointer-events: none;
+}
+.core-heist-score-side {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 56px;
+  opacity: 0.72;
+}
+.core-heist-score-side span { font-size: 10px; font-weight: 1000; letter-spacing: 1px; }
+.core-heist-score-side strong {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  font-size: 24px;
+  line-height: 1;
+}
+.core-heist-score-side strong small { font-size: 11px; opacity: 0.55; font-weight: 700; }
+.core-heist-score-side.cyan   { color: #73c8ff; background: linear-gradient(90deg, rgba(52,145,255,0.2), transparent); }
+.core-heist-score-side.orange { color: #ff7777; background: linear-gradient(270deg, rgba(255,65,65,0.22), transparent); }
+.core-heist-score-side.is-your-team { opacity: 1; box-shadow: inset 0 0 0 1px currentColor; }
+.core-heist-score-middle { display: grid; justify-items: center; gap: 2px; text-align: center; color: #f5f7ff; }
+.core-heist-score-middle b  { font-size: 11px; letter-spacing: 0.8px; }
+.core-heist-score-middle small { color: #a7b6c5; font-size: 9px; font-weight: 800; }
+
+/* ─────────────── LIVE EVENT (third row, center — shown above objective when active) ─────────────── */
+.core-heist-live-event {
+  position: fixed;
+  top: 130px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 88;
+  min-width: 260px;
+  padding: 8px 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(220,237,255,0.38);
+  background: rgba(2, 9, 20, 0.92);
+  text-align: center;
+  pointer-events: none;
+}
+.core-heist-live-event span  { display:block; font-size:9px; font-weight:1000; letter-spacing:1.4px; color:rgba(225,248,255,0.62); }
+.core-heist-live-event strong{ display:block; margin-top:3px; font-size:15px; color:#fff; }
+.core-heist-live-event small { display:block; margin-top:2px; font-size:10px; color:rgba(225,248,255,0.62); }
+.core-heist-live-event.team-cyan   { border-color: rgba(115,200,255,0.6); }
+.core-heist-live-event.team-orange { border-color: rgba(255,119,119,0.6); }
+
+/* ─────────────── OBJECTIVE PANEL (right side on desktop) ─────────────── */
+.core-heist-objective-panel {
+  position: fixed;
+  top: 50%;
+  right: 18px;
+  transform: translateY(-50%);
+  z-index: 69;
+  width: min(260px, calc(100vw - 28px));
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(220, 237, 255, 0.3);
+  background: rgba(2, 9, 20, 0.82);
+  backdrop-filter: blur(6px);
+  text-align: left;
+  pointer-events: none;
+}
+.core-heist-objective-panel b    { display:block; color:#dcecff; font-size:12px; letter-spacing:0.7px; line-height: 1.4; }
+.core-heist-objective-panel span { display:block; margin-top:6px; color:#c1d0df; font-size:10px; line-height:1.5; }
+
+/* ─────────────── LEADERBOARD (top-right) ─────────────── */
+.core-heist-dom-arena .real-leaderboard { top: 14px; right: 68px; } /* 68px = FPS width clearance */
+.core-heist-dom-arena .real-leaderboard h3 { color: #dcecff; }
+.core-heist-dom-arena .real-leaderboard-row.is-me {
+  border-color: rgba(247,220,131,0.72);
+  background: rgba(247,220,131,0.11);
+}
+
+/* ─────────────── MINIMAP (bottom-right, desktop large) ─────────────── */
+
+/* ─────────────── EXIT BUTTON (bottom-left) ─────────────── */
+.core-heist-exit-btn {
+  position: fixed;
+  left: 14px;
+  bottom: 14px;
+  z-index: 90;
+  padding: 11px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 234, 255, 0.35);
+  background: rgba(2, 8, 18, 0.86);
+  color: #dffcff;
+  font-weight: 900;
   cursor: pointer;
 }
+.core-heist-exit-btn:hover { background: rgba(0, 234, 255, 0.12); }
 
-.core-heist-dom-arena .core-heist-finished-screen button {
-  margin-top: 22px;
-  padding: 11px 17px;
-  border-radius: 11px;
-}
-
-.core-heist-dom-arena .core-heist-exit-btn {
+/* ─────────────── PREPARE COUNTDOWN (bottom-center) ─────────────── */
+.core-heist-peace-countdown {
   position: fixed;
-  z-index: 155;
-  right: max(20px, env(safe-area-inset-right));
-  bottom: max(20px, env(safe-area-inset-bottom));
-  padding: 9px 12px;
-  border-radius: 10px;
-  font-size: 11px;
-  opacity: .72;
+  left: 50%;
+  bottom: 30px;
+  transform: translateX(-50%);
+  z-index: 75;
+  min-width: 240px;
+  padding: 13px 22px;
+  border-radius: 14px;
+  border: 1px solid rgba(220,237,255,0.4);
+  background: rgba(2, 9, 20, 0.9);
+  text-align: center;
+  pointer-events: none;
+}
+.core-heist-peace-countdown strong { display:block; color:#dcecff; font-size:11px; letter-spacing:1.2px; }
+.core-heist-peace-countdown b      { display:block; margin:4px 0; color:#ffd166; font-size:28px; line-height:1; }
+.core-heist-peace-countdown span   { display:block; color:rgba(225,248,255,0.62); font-size:10px; }
+
+/* ─────────────── BEGIN FLASH ─────────────── */
+.core-heist-begin-flash {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: grid;
+  place-items: center;
+  font-size: 42px;
+  font-weight: 1000;
+  letter-spacing: 4px;
+  color: #fff;
+  text-shadow: 0 0 30px rgba(0,234,255,0.8);
+  background: rgba(2,8,18,0.18);
+  pointer-events: none;
+  animation: chBeginFade 1.1s ease-out forwards;
+}
+@keyframes chBeginFade {
+  0%   { opacity:0; transform:scale(0.92); }
+  18%  { opacity:1; transform:scale(1); }
+  72%  { opacity:1; }
+  100% { opacity:0; }
 }
 
-.core-heist-dom-arena .core-heist-exit-btn:hover { opacity: 1; filter: brightness(1.18); }
-
-/* -------------------------------------------------------------------------- */
-/* Mobile controls — entirely local to Core Heist                              */
-/* -------------------------------------------------------------------------- */
-.core-heist-dom-arena .core-heist-mobile-controls { display: none; }
-
-/* -------------------------------------------------------------------------- */
-/* Laptop / compact desktop                                                    */
-/* -------------------------------------------------------------------------- */
-@media (max-width: 1260px) and (min-width: 721px) {
-  .core-heist-dom-arena .core-heist-status-panel,
-  .core-heist-dom-arena .core-heist-economy-panel { width: 194px; }
-
-  .core-heist-dom-arena .core-heist-scoreboard,
-  .core-heist-dom-arena .core-heist-team-panel { width: min(520px, calc(100vw - 510px)); }
-
-  .core-heist-dom-arena .core-heist-objective-panel,
-  .core-heist-dom-arena .core-heist-live-event { width: min(476px, calc(100vw - 500px)); }
-
-  .core-heist-dom-arena .core-heist-leaderboard { width: 220px; }
-  .core-heist-dom-arena .minimap { width: 206px !important; height: 132px !important; }
+/* ─────────────── MATCHMAKING SCREEN ─────────────── */
+.core-heist-matchmaking-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 6, 14, 0.92);
 }
-
-/* -------------------------------------------------------------------------- */
-/* Native phone portrait                                                       */
-/* -------------------------------------------------------------------------- */
-@media (max-width: 720px), (max-height: 760px) and (orientation: portrait) {
-  .core-heist-dom-arena {
-    min-height: 100dvh;
-    background: #06101d;
-  }
-
-  .core-heist-dom-arena .core-heist-fps {
-    top: max(8px, env(safe-area-inset-top));
-    right: max(9px, env(safe-area-inset-right));
-    font-size: 10px;
-    letter-spacing: .55px;
-  }
-
-  .core-heist-dom-arena .core-heist-team-panel { display: none; }
-
-  .core-heist-dom-arena .core-heist-scoreboard {
-    z-index: 140;
-    top: max(8px, env(safe-area-inset-top));
-    width: calc(100vw - 16px);
-    min-width: 0;
-    min-height: 54px;
-    grid-template-columns: minmax(90px, 1fr) 102px minmax(90px, 1fr);
-    border-radius: 14px;
-  }
-
-  .core-heist-dom-arena .core-heist-score-side {
-    min-height: 54px;
-    gap: 6px;
-    padding: 0 8px;
-  }
-
-  .core-heist-dom-arena .core-heist-score-side span { font-size: 8px; letter-spacing: .8px; }
-  .core-heist-dom-arena .core-heist-score-side strong { font-size: 26px; }
-  .core-heist-dom-arena .core-heist-score-side strong small { font-size: 11px; }
-  .core-heist-dom-arena .core-heist-score-middle b { font-size: 9px; letter-spacing: .5px; }
-  .core-heist-dom-arena .core-heist-score-middle small { font-size: 7px; letter-spacing: .7px; }
-
-  .core-heist-dom-arena .core-heist-match-timer {
-    z-index: 139;
-    top: max(70px, calc(env(safe-area-inset-top) + 62px));
-    min-width: 100px;
-    padding: 5px 10px 6px;
-    border-radius: 11px;
-  }
-
-  .core-heist-dom-arena .core-heist-match-timer span { font-size: 7px; letter-spacing: 1px; }
-  .core-heist-dom-arena .core-heist-match-timer strong { font-size: 14px; }
-
-  .core-heist-dom-arena .core-heist-status-panel,
-  .core-heist-dom-arena .core-heist-economy-panel {
-    top: max(114px, calc(env(safe-area-inset-top) + 106px));
-    width: calc((100vw - 30px) / 2);
-    min-width: 0;
-    min-height: 118px;
-    padding: 9px 10px;
-    border-radius: 13px;
-    box-shadow: 0 10px 24px rgba(0, 0, 0, .24), inset 0 1px 0 rgba(255,255,255,.035);
-    backdrop-filter: blur(8px);
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel {
-    left: max(10px, env(safe-area-inset-left));
-  }
-
-  .core-heist-dom-arena .core-heist-economy-panel {
-    left: auto;
-    right: max(10px, env(safe-area-inset-right));
-    text-align: center;
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel > span,
-  .core-heist-dom-arena .core-heist-energy-row > span,
-  .core-heist-dom-arena .core-heist-economy-panel > span {
-    font-size: 7px;
-    letter-spacing: .7px;
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel > strong,
-  .core-heist-dom-arena .core-heist-energy-row > strong { font-size: 16px; margin-top: 3px; }
-  .core-heist-dom-arena .core-heist-hp-bar,
-  .core-heist-dom-arena .core-heist-energy-bar { height: 5px; margin-top: 6px; }
-  .core-heist-dom-arena .core-heist-energy-row { margin-top: 8px; padding-top: 8px; }
-  .core-heist-dom-arena .core-heist-energy-row > strong { font-size: 14px; }
-
-  .core-heist-dom-arena .core-heist-economy-panel > strong { margin-top: 3px; font-size: 20px; }
-  .core-heist-dom-arena .core-heist-economy-panel > small { margin-top: 3px; font-size: 7px; line-height: 1.25; }
-  .core-heist-dom-arena .core-heist-active-cores { gap: 4px; margin-top: 7px; padding-top: 7px; }
-  .core-heist-dom-arena .core-heist-active-cores b { font-size: 7px; letter-spacing: .7px; }
-  .core-heist-dom-arena .core-heist-active-cores em,
-  .core-heist-dom-arena .core-heist-core-badge { padding: 4px 5px; font-size: 6.5px; letter-spacing: .2px; }
-
-  .core-heist-dom-arena .core-heist-objective-panel {
-    z-index: 130;
-    top: max(244px, calc(env(safe-area-inset-top) + 236px));
-    width: calc(100vw - 20px);
-    min-width: 0;
-    padding: 8px 11px 9px;
-    border-radius: 12px;
-  }
-
-  .core-heist-dom-arena .core-heist-objective-panel b { font-size: 9px; letter-spacing: .45px; }
-  .core-heist-dom-arena .core-heist-objective-panel span { margin-top: 3px; font-size: 8px; line-height: 1.2; }
-
-  .core-heist-dom-arena .core-heist-live-event {
-    z-index: 150;
-    top: max(300px, calc(env(safe-area-inset-top) + 292px));
-    width: calc(100vw - 24px);
-    min-width: 0;
-    padding: 9px 12px 10px;
-    border-radius: 13px;
-  }
-
-  .core-heist-dom-arena .core-heist-live-event::before { width: 4px; }
-  .core-heist-dom-arena .core-heist-live-event span { margin-bottom: 2px; font-size: 8px; letter-spacing: 1.1px; }
-  .core-heist-dom-arena .core-heist-live-event strong { font-size: 13px; letter-spacing: .2px; }
-  .core-heist-dom-arena .core-heist-live-event small { margin-top: 4px; font-size: 8px; line-height: 1.2; }
-
-  .core-heist-dom-arena .core-heist-leaderboard { display: none; }
-
-  .core-heist-dom-arena .minimap {
-    z-index: 135 !important;
-    right: max(12px, env(safe-area-inset-right)) !important;
-    bottom: max(100px, calc(env(safe-area-inset-bottom) + 88px)) !important;
-    width: 132px !important;
-    height: 94px !important;
-    border-radius: 12px !important;
-  }
-
-  .core-heist-dom-arena .minimap-title { top: 6px !important; left: 8px !important; font-size: 7px !important; letter-spacing: .8px !important; }
-
-  .core-heist-dom-arena .core-heist-peace-countdown {
-    z-index: 148;
-    bottom: max(154px, calc(env(safe-area-inset-bottom) + 142px));
-    width: min(290px, calc(100vw - 32px));
-    padding: 8px 11px;
-  }
-
-  .core-heist-dom-arena .core-heist-peace-countdown strong { font-size: 8px; }
-  .core-heist-dom-arena .core-heist-peace-countdown b { margin: 2px 0; font-size: 22px; }
-  .core-heist-dom-arena .core-heist-peace-countdown span { font-size: 7px; }
-
-  .core-heist-dom-arena .core-heist-begin-flash {
-    top: 55%;
-    padding: 10px 14px;
-    font-size: 20px;
-    letter-spacing: 1.3px;
-  }
-
-  .core-heist-dom-arena .core-heist-mobile-controls {
-    position: fixed;
-    inset: 0;
-    z-index: 190;
-    display: block;
-    pointer-events: none;
-  }
-
-  .core-heist-dom-arena .core-heist-mobile-joystick {
-    position: absolute;
-    left: max(18px, calc(env(safe-area-inset-left) + 10px));
-    bottom: max(20px, calc(env(safe-area-inset-bottom) + 12px));
-    width: 112px;
-    height: 112px;
-    border: 1px solid rgba(0, 234, 255, .36);
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(0, 234, 255, .15), transparent 58%), rgba(2, 15, 30, .45);
-    box-shadow: 0 0 22px rgba(0, 234, 255, .14), inset 0 0 22px rgba(0, 234, 255, .08);
-    pointer-events: auto;
-    touch-action: none;
-  }
-
-  .core-heist-dom-arena .core-heist-mobile-joystick-ring {
-    position: absolute;
-    inset: 12px;
-    border: 1px dashed rgba(170, 246, 255, .24);
-    border-radius: 50%;
-  }
-
-  .core-heist-dom-arena .core-heist-mobile-joystick-knob {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 46px;
-    height: 46px;
-    border-radius: 50%;
-    background: radial-gradient(circle at 35% 28%, #fff, #66f4ff 32%, #00aac4 70%, #073f51 100%);
-    box-shadow: 0 0 17px rgba(0, 234, 255, .82), inset 0 0 11px rgba(255,255,255,.42);
-  }
-
-  .core-heist-dom-arena .core-heist-mobile-buttons {
-    position: absolute;
-    right: max(16px, calc(env(safe-area-inset-right) + 10px));
-    bottom: max(26px, calc(env(safe-area-inset-bottom) + 16px));
-    display: grid;
-    gap: 12px;
-    pointer-events: none;
-  }
-
-  .core-heist-dom-arena .core-heist-mobile-action {
-    width: 74px;
-    height: 74px;
-    border: 1px solid rgba(255, 255, 255, .46);
-    border-radius: 50%;
-    color: #fff;
-    font-size: 9px;
-    font-weight: 1000;
-    letter-spacing: .4px;
-    text-shadow: 0 1px 4px rgba(0, 0, 0, .85);
-    pointer-events: auto;
-    touch-action: none;
-  }
-
-  .core-heist-dom-arena .core-heist-mobile-shield {
-    background: radial-gradient(circle at 35% 28%, rgba(255,255,255,.48), rgba(0, 234, 255, .62) 42%, rgba(0, 54, 73, .85) 100%);
-    box-shadow: 0 0 17px rgba(0, 234, 255, .40), inset 0 0 14px rgba(155, 249, 255, .18);
-  }
-
-  .core-heist-dom-arena .core-heist-mobile-attack {
-    background: radial-gradient(circle at 35% 28%, rgba(255,255,255,.43), rgba(255, 78, 78, .64) 42%, rgba(78, 5, 12, .88) 100%);
-    box-shadow: 0 0 17px rgba(255, 65, 65, .40), inset 0 0 14px rgba(255, 122, 122, .18);
-  }
-
-  .core-heist-dom-arena .core-heist-mobile-action.is-active { filter: brightness(1.25); transform: scale(.94); }
-  .core-heist-dom-arena .core-heist-mobile-action.is-locked { opacity: .42; filter: grayscale(.7); }
-
-  .core-heist-dom-arena .core-heist-exit-btn {
-    z-index: 200;
-    right: auto;
-    left: 50%;
-    bottom: max(14px, env(safe-area-inset-bottom));
-    padding: 7px 10px;
-    transform: translateX(-50%);
-    font-size: 8px;
-  }
-
-  .core-heist-dom-arena .core-heist-matchmaking-card,
-  .core-heist-dom-arena .core-heist-redeploy-card {
-    width: min(342px, calc(100vw - 32px));
-    padding: 23px 18px;
-  }
-
-  .core-heist-dom-arena .core-heist-matchmaking-card h1 { font-size: 20px; }
-  .core-heist-dom-arena .core-heist-matchmaking-card strong { font-size: 42px; }
-  .core-heist-dom-arena .core-heist-matchmaking-card p,
-  .core-heist-dom-arena .core-heist-redeploy-card span { font-size: 11px; }
+.core-heist-matchmaking-card {
+  width: min(420px, calc(100vw - 40px));
+  padding: 30px;
+  border-radius: 22px;
+  border: 1px solid rgba(0,234,255,0.38);
+  background: rgba(2,8,18,0.94);
+  box-shadow: 0 0 50px rgba(0,234,255,0.18);
+  text-align: center;
 }
-
-/* Very short portrait screens: preserve the world area by compacting panels. */
-@media (max-width: 420px) and (orientation: portrait), (max-height: 680px) and (orientation: portrait) {
-  .core-heist-dom-arena .core-heist-status-panel,
-  .core-heist-dom-arena .core-heist-economy-panel { top: max(106px, calc(env(safe-area-inset-top) + 98px)); min-height: 106px; }
-  .core-heist-dom-arena .core-heist-objective-panel { top: max(224px, calc(env(safe-area-inset-top) + 216px)); }
-  .core-heist-dom-arena .core-heist-live-event { top: max(275px, calc(env(safe-area-inset-top) + 267px)); }
-  .core-heist-dom-arena .core-heist-live-event small { display: none; }
-  .core-heist-dom-arena .minimap { width: 116px !important; height: 82px !important; bottom: max(94px, calc(env(safe-area-inset-bottom) + 82px)) !important; }
-  .core-heist-dom-arena .core-heist-mobile-joystick { width: 94px; height: 94px; }
-  .core-heist-dom-arena .core-heist-mobile-joystick-knob { width: 39px; height: 39px; }
-  .core-heist-dom-arena .core-heist-mobile-action { width: 64px; height: 64px; font-size: 8px; }
+.core-heist-loader {
+  width: 46px; height: 46px;
+  margin: 0 auto 18px;
+  border-radius: 50%;
+  border: 3px solid rgba(0,234,255,0.18);
+  border-top-color: #00eaff;
+  animation: chSpin 0.9s linear infinite;
 }
+@keyframes chSpin { to { transform: rotate(360deg); } }
+.core-heist-matchmaking-card h1     { margin:0 0 8px; color:#00eaff; font-size:22px; letter-spacing:1px; }
+.core-heist-matchmaking-card strong { display:block; color:#67ffb1; font-size:28px; margin-bottom:12px; }
+.core-heist-matchmaking-card p      { margin:0; color:rgba(225,248,255,0.7); font-size:13px; line-height:1.5; }
 
-/* ============================================================================
-   FINAL ADAPTIVE DESKTOP + MOBILE RE-FLOW
-   - Desktop wide: health and economy are one horizontal rail.
-   - Desktop medium: score and live flag alert share one horizontal objective row.
-   - Small desktop: leaderboard disappears before it can overlap the objective.
-   - Mobile keeps its dedicated compact layout below.
-============================================================================ */
-
-/* Keep all fixed layers predictable when the browser is resized. */
-.core-heist-dom-arena .core-heist-status-panel,
-.core-heist-dom-arena .core-heist-economy-panel,
-.core-heist-dom-arena .core-heist-team-panel,
-.core-heist-dom-arena .core-heist-match-timer,
-.core-heist-dom-arena .core-heist-scoreboard,
-.core-heist-dom-arena .core-heist-objective-panel,
-.core-heist-dom-arena .core-heist-live-event,
-.core-heist-dom-arena .core-heist-leaderboard,
-.core-heist-dom-arena .core-heist-fps,
-.core-heist-dom-arena .minimap {
-  transition:
-    width 180ms ease,
-    left 180ms ease,
-    right 180ms ease,
-    top 180ms ease,
-    bottom 180ms ease,
-    transform 180ms ease;
+/* ─────────────── REDEPLOY (death) PANEL ─────────────── */
+.core-heist-redeploy-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 75;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 8, 16, 0.32);
+  pointer-events: none;
 }
-
-/* -------------------------------------------------------------------------- */
-/* Large desktop — two left cards sit on one clean horizontal rail.           */
-/* -------------------------------------------------------------------------- */
-@media (min-width: 1500px) {
-  .core-heist-dom-arena .core-heist-status-panel {
-    top: max(20px, env(safe-area-inset-top));
-    left: max(20px, env(safe-area-inset-left));
-    width: 220px;
-    padding: 15px 16px;
-  }
-
-  .core-heist-dom-arena .core-heist-economy-panel {
-    top: max(20px, env(safe-area-inset-top));
-    left: max(252px, calc(env(safe-area-inset-left) + 232px));
-    width: 226px;
-    min-height: 0;
-    padding: 14px 16px 15px;
-  }
-
-  /* The objective row is deliberately shifted right of the two left cards. */
-  .core-heist-dom-arena .core-heist-scoreboard {
-    top: 116px;
-    left: max(calc(50% - 350px), 500px);
-    width: 350px;
-    min-width: 0;
-    grid-template-columns: minmax(92px, 1fr) 126px minmax(92px, 1fr);
-    transform: none;
-  }
-
-  .core-heist-dom-arena .core-heist-score-side {
-    min-height: 72px;
-    padding: 0 10px;
-    gap: 8px;
-  }
-
-  .core-heist-dom-arena .core-heist-score-side strong { font-size: 32px; }
-  .core-heist-dom-arena .core-heist-score-middle b { font-size: 10px; }
-  .core-heist-dom-arena .core-heist-score-middle small { font-size: 8px; }
-
-  .core-heist-dom-arena .core-heist-live-event {
-    top: 116px;
-    left: max(calc(50% + 10px), 860px);
-    width: min(360px, calc(100vw - max(calc(50% + 10px), 860px) - 300px));
-    min-width: 290px;
-    min-height: 72px;
-    padding: 10px 15px 11px;
-    transform: none;
-    text-align: left;
-  }
-
-  .core-heist-dom-arena .core-heist-live-event span { font-size: 8px; }
-  .core-heist-dom-arena .core-heist-live-event strong { font-size: 15px; }
-  .core-heist-dom-arena .core-heist-live-event small { font-size: 9px; }
-
-  .core-heist-dom-arena .core-heist-objective-panel {
-    top: 202px;
-    width: min(560px, calc(100vw - 670px));
-    min-width: 420px;
-  }
-
-  .core-heist-dom-arena .core-heist-leaderboard {
-    top: 64px;
-    right: max(20px, env(safe-area-inset-right));
-    width: 254px;
-  }
+.core-heist-redeploy-card {
+  min-width: min(300px, calc(100vw - 40px));
+  padding: 24px 26px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,126,120,0.52);
+  background: rgba(13,5,12,0.9);
+  box-shadow: 0 0 30px rgba(255,64,64,0.18);
+  text-align: center;
 }
+.core-heist-redeploy-card strong { display:block; color:#ff8580; font-size:13px; letter-spacing:1.4px; }
+.core-heist-redeploy-card b      { display:block; margin-top:7px; color:#fff; font-size:22px; }
+.core-heist-redeploy-card span   { display:block; margin-top:8px; color:#b9c8d7; font-size:12px; }
 
-/* -------------------------------------------------------------------------- */
-/* Normal desktop / laptop — score and alert share a row, stats dock below.  */
-/* -------------------------------------------------------------------------- */
-@media (min-width: 1210px) and (max-width: 1499px) {
-  .core-heist-dom-arena .core-heist-status-panel,
-  .core-heist-dom-arena .core-heist-economy-panel {
-    top: auto;
-    bottom: max(20px, env(safe-area-inset-bottom));
-    min-height: 0;
-    padding: 13px 14px;
-    border-radius: 16px;
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel {
-    left: max(18px, env(safe-area-inset-left));
-    width: 190px;
-  }
-
-  .core-heist-dom-arena .core-heist-economy-panel {
-    left: max(220px, calc(env(safe-area-inset-left) + 202px));
-    width: 198px;
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel > strong { font-size: 25px; }
-  .core-heist-dom-arena .core-heist-energy-row > strong { font-size: 21px; }
-  .core-heist-dom-arena .core-heist-economy-panel > strong { font-size: 27px; }
-
-  .core-heist-dom-arena .core-heist-scoreboard {
-    top: 116px;
-    left: calc(50% - 9px);
-    width: clamp(340px, 27vw, 382px);
-    min-width: 0;
-    grid-template-columns: minmax(92px, 1fr) 122px minmax(92px, 1fr);
-    transform: translateX(-100%);
-  }
-
-  .core-heist-dom-arena .core-heist-score-side {
-    min-height: 68px;
-    padding: 0 9px;
-    gap: 7px;
-  }
-
-  .core-heist-dom-arena .core-heist-score-side strong { font-size: 30px; }
-  .core-heist-dom-arena .core-heist-score-side span { font-size: 10px; }
-  .core-heist-dom-arena .core-heist-score-middle b { font-size: 10px; }
-  .core-heist-dom-arena .core-heist-score-middle small { font-size: 8px; }
-
-  .core-heist-dom-arena .core-heist-live-event {
-    top: 116px;
-    left: calc(50% + 9px);
-    width: clamp(285px, 24vw, 340px);
-    min-width: 0;
-    min-height: 68px;
-    padding: 9px 13px 10px;
-    transform: none;
-    text-align: left;
-  }
-
-  .core-heist-dom-arena .core-heist-live-event span { font-size: 8px; }
-  .core-heist-dom-arena .core-heist-live-event strong { font-size: 14px; }
-  .core-heist-dom-arena .core-heist-live-event small { margin-top: 4px; font-size: 9px; }
-
-  .core-heist-dom-arena .core-heist-objective-panel {
-    top: 197px;
-    width: min(510px, calc(100vw - 560px));
-    min-width: 390px;
-  }
-
-  .core-heist-dom-arena .core-heist-leaderboard {
-    top: 62px;
-    right: max(16px, env(safe-area-inset-right));
-    width: 220px;
-    padding: 12px 13px;
-  }
-
-  .core-heist-dom-arena .core-heist-leaderboard h3 { font-size: 14px; }
-  .core-heist-dom-arena .core-heist-leaderboard-row { margin: 5px 0; font-size: 11px; }
-  .core-heist-dom-arena .core-heist-leaderboard-row strong { font-size: 10px; }
-  .core-heist-dom-arena .minimap { width: 210px !important; height: 134px !important; }
+/* ─────────────── FINISHED SCREEN ─────────────── */
+.core-heist-finished-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+  background: rgba(2,6,14,0.92);
 }
-
-/* -------------------------------------------------------------------------- */
-/* Compact desktop — no overlap. The leaderboard yields first, never the HUD. */
-/* -------------------------------------------------------------------------- */
-@media (min-width: 721px) and (max-width: 1209px) {
-  .core-heist-dom-arena .core-heist-leaderboard { display: none; }
-
-  .core-heist-dom-arena .core-heist-team-panel {
-    top: max(12px, env(safe-area-inset-top));
-    width: min(510px, calc(100vw - 28px));
-    min-width: 0;
-    padding: 8px 14px;
-  }
-
-  .core-heist-dom-arena .core-heist-match-timer {
-    top: 61px;
-    min-width: 112px;
-    padding: 6px 11px 7px;
-  }
-
-  .core-heist-dom-arena .core-heist-scoreboard {
-    top: 108px;
-    width: min(500px, calc(100vw - 28px));
-    min-width: 0;
-    min-height: 66px;
-    grid-template-columns: minmax(110px, 1fr) 136px minmax(110px, 1fr);
-  }
-
-  .core-heist-dom-arena .core-heist-score-side { min-height: 66px; }
-  .core-heist-dom-arena .core-heist-score-side strong { font-size: 30px; }
-
-  .core-heist-dom-arena .core-heist-objective-panel {
-    top: 187px;
-    width: min(470px, calc(100vw - 36px));
-    min-width: 0;
-    padding: 8px 13px 9px;
-  }
-
-  .core-heist-dom-arena .core-heist-live-event {
-    top: clamp(244px, 37vh, 306px);
-    width: min(500px, calc(100vw - 40px));
-    min-width: 0;
-    padding: 10px 14px 11px;
-  }
-
-  /* Both gameplay cards become a compact horizontal bottom dock. */
-  .core-heist-dom-arena .core-heist-status-panel,
-  .core-heist-dom-arena .core-heist-economy-panel {
-    top: auto;
-    bottom: max(16px, env(safe-area-inset-bottom));
-    width: clamp(154px, 20vw, 190px);
-    min-height: 0;
-    padding: 11px 12px;
-    border-radius: 15px;
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel {
-    left: max(14px, env(safe-area-inset-left));
-  }
-
-  .core-heist-dom-arena .core-heist-economy-panel {
-    left: calc(max(14px, env(safe-area-inset-left)) + clamp(154px, 20vw, 190px) + 12px);
-    text-align: center;
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel > span,
-  .core-heist-dom-arena .core-heist-energy-row > span,
-  .core-heist-dom-arena .core-heist-economy-panel > span { font-size: 9px; }
-
-  .core-heist-dom-arena .core-heist-status-panel > strong { font-size: 22px; }
-  .core-heist-dom-arena .core-heist-energy-row > strong { font-size: 19px; }
-  .core-heist-dom-arena .core-heist-economy-panel > strong { font-size: 25px; }
-  .core-heist-dom-arena .core-heist-hp-bar,
-  .core-heist-dom-arena .core-heist-energy-bar { height: 6px; margin-top: 7px; }
-  .core-heist-dom-arena .core-heist-energy-row { margin-top: 10px; padding-top: 10px; }
-  .core-heist-dom-arena .core-heist-economy-panel > small { font-size: 9px; }
-  .core-heist-dom-arena .core-heist-active-cores { margin-top: 9px; padding-top: 9px; }
-  .core-heist-dom-arena .core-heist-active-cores b { font-size: 8px; }
-  .core-heist-dom-arena .core-heist-active-cores em { padding: 5px 6px; font-size: 7px; }
-
-  .core-heist-dom-arena .minimap {
-    right: max(14px, env(safe-area-inset-right)) !important;
-    bottom: max(16px, env(safe-area-inset-bottom)) !important;
-    width: 178px !important;
-    height: 114px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-fps {
-    top: 12px;
-    right: 14px;
-    font-size: 13px;
-  }
-}
-
-/* -------------------------------------------------------------------------- */
-/* Phone landscape — separate layout, never inherits the desktop rails.      */
-/* -------------------------------------------------------------------------- */
-@media (hover: none) and (pointer: coarse) and (orientation: landscape) and (max-height: 640px) {
-  .core-heist-dom-arena .core-heist-leaderboard,
-  .core-heist-dom-arena .core-heist-team-panel { display: none; }
-
-  .core-heist-dom-arena .core-heist-scoreboard {
-    z-index: 145;
-    top: max(7px, env(safe-area-inset-top));
-    left: 50%;
-    width: min(398px, calc(100vw - 282px));
-    min-width: 292px;
-    min-height: 44px;
-    grid-template-columns: minmax(78px, 1fr) 112px minmax(78px, 1fr);
-    transform: translateX(-50%);
-    border-radius: 11px;
-  }
-
-  .core-heist-dom-arena .core-heist-score-side { min-height: 44px; padding: 0 7px; gap: 5px; }
-  .core-heist-dom-arena .core-heist-score-side span { font-size: 7px; }
-  .core-heist-dom-arena .core-heist-score-side strong { font-size: 23px; }
-  .core-heist-dom-arena .core-heist-score-side strong small { font-size: 9px; }
-  .core-heist-dom-arena .core-heist-score-middle b { font-size: 8px; }
-  .core-heist-dom-arena .core-heist-score-middle small { font-size: 6px; }
-
-  .core-heist-dom-arena .core-heist-match-timer {
-    z-index: 144;
-    top: max(56px, calc(env(safe-area-inset-top) + 50px));
-    min-width: 82px;
-    padding: 4px 7px 5px;
-  }
-
-  .core-heist-dom-arena .core-heist-match-timer span { font-size: 6px; }
-  .core-heist-dom-arena .core-heist-match-timer strong { font-size: 12px; }
-
-  .core-heist-dom-arena .core-heist-objective-panel {
-    top: max(102px, calc(env(safe-area-inset-top) + 96px));
-    width: min(398px, calc(100vw - 282px));
-    min-width: 292px;
-    padding: 6px 9px 7px;
-  }
-
-  .core-heist-dom-arena .core-heist-objective-panel b { font-size: 8px; }
-  .core-heist-dom-arena .core-heist-objective-panel span { margin-top: 2px; font-size: 7px; }
-
-  .core-heist-dom-arena .core-heist-live-event {
-    top: max(150px, 38vh);
-    width: min(430px, calc(100vw - 286px));
-    min-width: 292px;
-    padding: 7px 10px 8px;
-  }
-
-  .core-heist-dom-arena .core-heist-live-event span { font-size: 6px; }
-  .core-heist-dom-arena .core-heist-live-event strong { font-size: 11px; }
-  .core-heist-dom-arena .core-heist-live-event small { margin-top: 3px; font-size: 7px; }
-
-  .core-heist-dom-arena .core-heist-status-panel,
-  .core-heist-dom-arena .core-heist-economy-panel {
-    top: max(8px, env(safe-area-inset-top));
-    bottom: auto;
-    width: 118px;
-    min-height: 0;
-    padding: 6px 7px;
-    border-radius: 9px;
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel { left: max(8px, env(safe-area-inset-left)); }
-  .core-heist-dom-arena .core-heist-economy-panel { left: max(134px, calc(env(safe-area-inset-left) + 126px)); }
-
-  .core-heist-dom-arena .core-heist-status-panel > span,
-  .core-heist-dom-arena .core-heist-energy-row > span,
-  .core-heist-dom-arena .core-heist-economy-panel > span { font-size: 6px; letter-spacing: .55px; }
-  .core-heist-dom-arena .core-heist-status-panel > strong { font-size: 13px; margin-top: 2px; }
-  .core-heist-dom-arena .core-heist-energy-row { margin-top: 6px; padding-top: 6px; }
-  .core-heist-dom-arena .core-heist-energy-row > strong { font-size: 12px; margin-top: 2px; }
-  .core-heist-dom-arena .core-heist-hp-bar,
-  .core-heist-dom-arena .core-heist-energy-bar { height: 4px; margin-top: 4px; }
-  .core-heist-dom-arena .core-heist-economy-panel > strong { margin-top: 2px; font-size: 16px; }
-  .core-heist-dom-arena .core-heist-economy-panel > small { margin-top: 2px; font-size: 6px; }
-  .core-heist-dom-arena .core-heist-active-cores { margin-top: 5px; padding-top: 5px; gap: 3px; }
-  .core-heist-dom-arena .core-heist-active-cores b { font-size: 6px; }
-  .core-heist-dom-arena .core-heist-active-cores em { padding: 3px 4px; font-size: 5.5px; }
-
-  .core-heist-dom-arena .minimap {
-    right: max(9px, env(safe-area-inset-right)) !important;
-    bottom: max(88px, calc(env(safe-area-inset-bottom) + 78px)) !important;
-    width: 122px !important;
-    height: 78px !important;
-    border-radius: 10px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-mobile-controls { display: block; }
-  .core-heist-dom-arena .core-heist-mobile-joystick { width: 82px; height: 82px; left: 16px; bottom: 13px; }
-  .core-heist-dom-arena .core-heist-mobile-joystick-knob { width: 34px; height: 34px; }
-  .core-heist-dom-arena .core-heist-mobile-buttons { right: 14px; bottom: 14px; gap: 8px; }
-  .core-heist-dom-arena .core-heist-mobile-action { width: 56px; height: 56px; font-size: 7px; }
-  .core-heist-dom-arena .core-heist-exit-btn { left: 50%; right: auto; bottom: 8px; transform: translateX(-50%); padding: 5px 8px; font-size: 7px; }
-  .core-heist-dom-arena .core-heist-fps { top: 6px; right: 8px; font-size: 9px; }
-}
-
-/* Extra-small landscape: score uses the full top row, stats move below it. */
-@media (hover: none) and (pointer: coarse) and (orientation: landscape) and (max-height: 640px) and (max-width: 800px) {
-  .core-heist-dom-arena .core-heist-scoreboard {
-    width: calc(100vw - 16px);
-    min-width: 0;
-  }
-
-  .core-heist-dom-arena .core-heist-match-timer { top: 56px; }
-  .core-heist-dom-arena .core-heist-objective-panel { top: 98px; width: calc(100vw - 16px); min-width: 0; }
-  .core-heist-dom-arena .core-heist-live-event { top: max(142px, 40vh); width: calc(100vw - 18px); min-width: 0; }
-
-  .core-heist-dom-arena .core-heist-status-panel,
-  .core-heist-dom-arena .core-heist-economy-panel {
-    top: auto;
-    bottom: max(10px, env(safe-area-inset-bottom));
-    width: 116px;
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel { left: 10px; }
-  .core-heist-dom-arena .core-heist-economy-panel { left: 134px; }
-}
-
-
-/* Landscape controls are defined here too, so tablets/phones wider than 720px
-   never fall back to the desktop CSS. */
-@media (hover: none) and (pointer: coarse) and (orientation: landscape) and (max-height: 640px) {
-  .core-heist-dom-arena .core-heist-mobile-controls {
-    position: fixed;
-    inset: 0;
-    z-index: 190;
-    display: block;
-    pointer-events: none;
-  }
-
-  .core-heist-dom-arena .core-heist-mobile-joystick {
-    position: absolute;
-    border: 1px solid rgba(0, 234, 255, .36);
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(0, 234, 255, .15), transparent 58%), rgba(2, 15, 30, .45);
-    box-shadow: 0 0 18px rgba(0, 234, 255, .14), inset 0 0 18px rgba(0, 234, 255, .08);
-    pointer-events: auto;
-    touch-action: none;
-  }
-
-  .core-heist-dom-arena .core-heist-mobile-joystick-ring {
-    position: absolute;
-    inset: 10px;
-    border: 1px dashed rgba(170, 246, 255, .24);
-    border-radius: 50%;
-  }
-
-  .core-heist-dom-arena .core-heist-mobile-joystick-knob {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    border-radius: 50%;
-    background: radial-gradient(circle at 35% 28%, #fff, #66f4ff 32%, #00aac4 70%, #073f51 100%);
-    box-shadow: 0 0 14px rgba(0, 234, 255, .78), inset 0 0 9px rgba(255,255,255,.42);
-  }
-
-  .core-heist-dom-arena .core-heist-mobile-buttons {
-    position: absolute;
-    display: grid;
-    pointer-events: none;
-  }
-
-  .core-heist-dom-arena .core-heist-mobile-action {
-    border: 1px solid rgba(255, 255, 255, .46);
-    border-radius: 50%;
-    color: #fff;
-    font-weight: 1000;
-    letter-spacing: .35px;
-    text-shadow: 0 1px 4px rgba(0, 0, 0, .85);
-    pointer-events: auto;
-    touch-action: none;
-  }
-
-  .core-heist-dom-arena .core-heist-mobile-shield {
-    background: radial-gradient(circle at 35% 28%, rgba(255,255,255,.48), rgba(0, 234, 255, .62) 42%, rgba(0, 54, 73, .85) 100%);
-    box-shadow: 0 0 14px rgba(0, 234, 255, .38), inset 0 0 11px rgba(155, 249, 255, .18);
-  }
-
-  .core-heist-dom-arena .core-heist-mobile-attack {
-    background: radial-gradient(circle at 35% 28%, rgba(255,255,255,.43), rgba(255, 78, 78, .64) 42%, rgba(78, 5, 12, .88) 100%);
-    box-shadow: 0 0 14px rgba(255, 65, 65, .38), inset 0 0 11px rgba(255, 122, 122, .18);
-  }
-}
-
-
-/* ============================================================================
-   CORE HEIST — FINAL CONTROL-SAFE LANDSCAPE + WIDE DESKTOP OBJECTIVE LANE
-   Keeps the objective out of the center only where there is actual horizontal
-   room. On compact screens it stays central instead of colliding with the
-   score or leaderboard.
-============================================================================ */
-
-/* Wide desktop: the persistent mission card moves into the free lane between
-   the central scoreboard and the leaderboard. This opens the playfield below
-   the score without sacrificing readability. */
-@media (min-width: 1760px) and (hover: hover) and (pointer: fine) {
-  .core-heist-dom-arena .core-heist-objective-panel {
-    top: max(186px, calc(env(safe-area-inset-top) + 174px));
-    left: auto;
-    right: max(300px, calc(env(safe-area-inset-right) + 280px));
-    width: clamp(300px, 18vw, 350px);
-    min-width: 0;
-    padding: 11px 14px 12px;
-    transform: none;
-    text-align: left;
-  }
-
-  .core-heist-dom-arena .core-heist-objective-panel b {
-    font-size: 10px;
-    letter-spacing: .72px;
-  }
-
-  .core-heist-dom-arena .core-heist-objective-panel span {
-    font-size: 9px;
-    line-height: 1.3;
-  }
-}
-
-/* --------------------------------------------------------------------------
-   Phone landscape. The top row is exclusively score + timer + prepare phase;
-   HP/orbs live directly below it, while movement and combat controls stay on
-   the lower corners. This is deliberately separate from desktop/tablet rules.
--------------------------------------------------------------------------- */
-@media (hover: none) and (pointer: coarse) and (orientation: landscape) and (max-height: 640px) {
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-mobile-controls {
-    position: fixed;
-    inset: 0;
-    z-index: 260;
-    display: block;
-    pointer-events: none;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-mobile-joystick {
-    position: absolute;
-    left: max(14px, calc(env(safe-area-inset-left) + 8px));
-    bottom: max(12px, calc(env(safe-area-inset-bottom) + 8px));
-    width: clamp(76px, 15vw, 98px);
-    height: clamp(76px, 15vw, 98px);
-    border: 1px solid rgba(0, 234, 255, .48);
-    border-radius: 50%;
-    background:
-      radial-gradient(circle at 50% 50%, rgba(0, 234, 255, .18), transparent 58%),
-      rgba(2, 15, 30, .68);
-    box-shadow: 0 0 20px rgba(0, 234, 255, .20), inset 0 0 20px rgba(0, 234, 255, .10);
-    pointer-events: auto;
-    touch-action: none;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-mobile-joystick-ring {
-    position: absolute;
-    inset: 10px;
-    border: 1px dashed rgba(170, 246, 255, .28);
-    border-radius: 50%;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-mobile-joystick-knob {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 42%;
-    height: 42%;
-    border-radius: 50%;
-    background: radial-gradient(circle at 35% 28%, #fff, #66f4ff 32%, #00aac4 70%, #073f51 100%);
-    box-shadow: 0 0 16px rgba(0, 234, 255, .88), inset 0 0 10px rgba(255,255,255,.42);
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-mobile-buttons {
-    position: absolute;
-    right: max(12px, calc(env(safe-area-inset-right) + 8px));
-    bottom: max(12px, calc(env(safe-area-inset-bottom) + 8px));
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 9px;
-    pointer-events: none;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-mobile-action {
-    width: clamp(52px, 10.5vw, 68px);
-    height: clamp(52px, 10.5vw, 68px);
-    border: 1px solid rgba(255, 255, 255, .52);
-    border-radius: 50%;
-    color: #fff;
-    font-size: clamp(7px, 1.4vw, 9px);
-    font-weight: 1000;
-    letter-spacing: .35px;
-    text-shadow: 0 1px 4px rgba(0, 0, 0, .88);
-    pointer-events: auto;
-    touch-action: none;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-mobile-shield {
-    background: radial-gradient(circle at 35% 28%, rgba(255,255,255,.52), rgba(0, 234, 255, .66) 42%, rgba(0, 54, 73, .88) 100%);
-    box-shadow: 0 0 15px rgba(0, 234, 255, .42), inset 0 0 12px rgba(155, 249, 255, .20);
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-mobile-attack {
-    background: radial-gradient(circle at 35% 28%, rgba(255,255,255,.48), rgba(255, 78, 78, .68) 42%, rgba(78, 5, 12, .9) 100%);
-    box-shadow: 0 0 15px rgba(255, 65, 65, .44), inset 0 0 12px rgba(255, 122, 122, .20);
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-mobile-action.is-active {
-    filter: brightness(1.27);
-    transform: scale(.95);
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-status-panel,
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-economy-panel {
-    top: max(56px, calc(env(safe-area-inset-top) + 50px));
-    bottom: auto;
-    width: 94px;
-    min-height: 0;
-    padding: 5px 6px;
-    border-radius: 9px;
-    text-align: center;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-status-panel {
-    left: max(8px, env(safe-area-inset-left));
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-economy-panel {
-    left: max(108px, calc(env(safe-area-inset-left) + 100px));
-    right: auto;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-status-panel > span,
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-energy-row > span,
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-economy-panel > span {
-    font-size: 5.8px;
-    line-height: 1;
-    letter-spacing: .52px;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-status-panel > strong {
-    margin-top: 2px;
-    font-size: 13px;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-energy-row {
-    margin-top: 5px;
-    padding-top: 5px;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-energy-row > strong {
-    margin-top: 2px;
-    font-size: 12px;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-hp-bar,
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-energy-bar {
-    height: 4px;
-    margin-top: 4px;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-economy-panel > strong {
-    margin-top: 2px;
-    font-size: 16px;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-economy-panel > small {
-    margin-top: 2px;
-    font-size: 5.8px;
-    line-height: 1.1;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-active-cores {
-    gap: 2px;
-    margin-top: 4px;
-    padding-top: 4px;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-active-cores b {
-    font-size: 5.5px;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-active-cores em {
-    padding: 2px 3px;
-    font-size: 5px;
-  }
-
-  /* Prepare phase gets its own top-right lane: it never touches the Orb card. */
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-peace-countdown {
-    top: max(55px, calc(env(safe-area-inset-top) + 49px));
-    right: max(8px, env(safe-area-inset-right));
-    bottom: auto;
-    left: auto;
-    width: min(188px, calc(100vw - 278px));
-    min-width: 142px;
-    padding: 6px 8px 7px;
-    border-radius: 10px;
-    transform: none;
-    z-index: 248;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-peace-countdown strong {
-    font-size: 6.5px;
-    letter-spacing: .9px;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-peace-countdown b {
-    margin: 1px 0;
-    font-size: 21px;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-peace-countdown span {
-    font-size: 5.7px;
-    line-height: 1.1;
-  }
-
-  /* During prepare the countdown already carries the only relevant objective.
-     Hiding the duplicate mission card leaves the center clear and prevents
-     overlap on short landscape phones. */
-  .core-heist-dom-arena.is-mobile-landscape.is-battle-prepare .core-heist-objective-panel {
-    display: none;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-objective-panel {
-    top: max(112px, calc(env(safe-area-inset-top) + 104px));
-    left: 50%;
-    width: min(240px, calc(100vw - 224px));
-    min-width: 0;
-    padding: 5px 8px 6px;
-    transform: translateX(-50%);
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-objective-panel b {
-    font-size: 7px;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-objective-panel span {
-    margin-top: 2px;
-    font-size: 6px;
-    line-height: 1.12;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-live-event {
-    top: max(112px, 42vh);
-    width: min(310px, calc(100vw - 134px));
-    min-width: 0;
-    padding: 7px 9px 8px;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-live-event span { font-size: 6px; }
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-live-event strong { font-size: 10px; }
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-live-event small { margin-top: 3px; font-size: 6px; }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-match-timer {
-    top: max(55px, calc(env(safe-area-inset-top) + 49px));
-    min-width: 74px;
-    padding: 4px 6px 5px;
-    z-index: 247;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-match-timer span { font-size: 5.8px; }
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-match-timer strong { font-size: 11px; }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-exit-btn {
-    z-index: 270;
-    left: 50%;
-    right: auto;
-    bottom: max(200px, env(safe-area-inset-bottom));
-    padding: 5px 8px;
-    transform: translateX(-50%);
-    font-size: 6.5px;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .minimap {
-    right: max(10px, env(safe-area-inset-right)) !important;
-    bottom: max(88px, calc(env(safe-area-inset-bottom) + 78px)) !important;
-    width: 112px !important;
-    height: 70px !important;
-    border-radius: 9px !important;
-  }
-}
-
-/* Very short landscape screens need guaranteed control room, not an unreadable
-   stack of secondary UI. The score, timer and prepare phase remain available. */
-@media (hover: none) and (pointer: coarse) and (orientation: landscape) and (max-height: 240px) {
-  .core-heist-dom-arena.is-mobile-landscape .minimap {
-    display: none !important;
-  }
-
-  .core-heist-dom-arena.is-mobile-landscape .core-heist-live-event {
-    top: 108px;
-    width: min(238px, calc(100vw - 222px));
-  }
-}
-
-
-/* ========================================================================== */
-/* GAME ARENA RESTORE LAYER — MUST STAY LAST                                  */
-/* ========================================================================== */
-/* GameArena.css contains a late global rule that hides .minimap in other
-   modes. Core Heist explicitly re-enables it here, with a stronger scoped
-   selector. The map is visible on desktop and mobile, but it never occupies
-   the button/joystick lanes. */
-.core-heist-dom-arena.game-arena .core-heist-minimap-frame,
-.core-heist-dom-arena.game-arena .core-heist-minimap-frame .minimap,
-.core-heist-dom-arena.game-arena .core-heist-minimap-frame .minimap-canvas,
-.core-heist-dom-arena.game-arena .core-heist-minimap-frame .minimap-title,
-.core-heist-dom-arena.game-arena .core-heist-minimap-frame .minimap-map-area,
-.core-heist-dom-arena.game-arena .core-heist-minimap-frame .minimap-player-drone,
-.core-heist-dom-arena.game-arena .core-heist-minimap-frame .mini-drone-arm {
-  visibility: visible !important;
-  opacity: 1 !important;
-  pointer-events: none !important;
-}
-
-.core-heist-dom-arena.game-arena .core-heist-minimap-frame,
-.core-heist-dom-arena.game-arena .core-heist-minimap-frame .minimap {
-  display: block !important;
-}
-
-.core-heist-dom-arena.game-arena .core-heist-minimap-frame .minimap-canvas,
-.core-heist-dom-arena.game-arena .core-heist-minimap-frame .minimap-title,
-.core-heist-dom-arena.game-arena .core-heist-minimap-frame .minimap-map-area,
-.core-heist-dom-arena.game-arena .core-heist-minimap-frame .minimap-player-drone,
-.core-heist-dom-arena.game-arena .core-heist-minimap-frame .mini-drone-arm {
-  display: block !important;
-}
-
-/* Desktop: the map returns to the lower-right corner. It is intentionally
-   below the leaderboard and away from the central CTF score/status stack. */
-.core-heist-dom-arena.game-arena:not(.is-mobile) .core-heist-minimap-frame .minimap {
-  position: fixed !important;
-  right: 22px !important;
-  bottom: 20px !important;
-  width: clamp(226px, 18vw, 296px) !important;
-  height: clamp(154px, 14vw, 202px) !important;
-  z-index: 156 !important;
-  overflow: hidden !important;
-  border-radius: 15px !important;
-  border: 1px solid rgba(0, 234, 255, .36) !important;
-  background: rgba(2, 10, 22, .88) !important;
-  box-shadow: 0 14px 34px rgba(0, 0, 0, .34), 0 0 18px rgba(0, 234, 255, .12) !important;
-}
-
-/* GameArena CSS owns the tested generic class names below. Core Heist adds
-   only reliable sizing/positioning, so the joystick, attack and shield return
-   exactly as in the other arenas without affecting desktop. */
-.core-heist-dom-arena.game-arena .mobile-controls.core-heist-mobile-controls {
+.core-heist-finished-screen h1      { margin:0; color:#00eaff; font-size:32px; letter-spacing:1.4px; text-shadow:0 0 22px rgba(0,234,255,0.5); }
+.core-heist-finished-screen p       { margin:4px 0 0; color:rgba(225,248,255,0.78); font-size:14px; }
+.core-heist-finished-auto-exit      { color:rgba(180,245,255,0.6) !important; font-size:12px !important; }
+.core-heist-finished-screen button  { margin-top:22px; padding:12px 22px; border-radius:12px; border:1px solid rgba(0,234,255,0.45); background:rgba(0,234,255,0.12); color:#dffcff; font-weight:900; cursor:pointer; }
+
+/* ==========================================================
+   MOBILE CONTROLS
+   Complet auto-contenute. Joystick mare jos-stanga, butoane
+   mari jos-dreapta, minimap deasupra butoanelor, exit jos-stanga.
+   ========================================================== */
+.core-heist-mobile-controls {
   display: none;
 }
 
-@media (hover: none) and (pointer: coarse), (max-width: 900px) {
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-controls.core-heist-mobile-controls {
-    position: fixed !important;
-    inset: 0 !important;
-    z-index: 360 !important;
-    display: block !important;
-    pointer-events: none !important;
-    transform: none !important;
+/* ─────────────── PORTRAIT ─────────────── */
+.core-heist-dom-arena.is-mobile-portrait .core-heist-mobile-controls {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 85;
+  pointer-events: none;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* JOYSTICK — portret, mare, jos-stanga */
+.core-heist-dom-arena.is-mobile-portrait .core-heist-mobile-joystick {
+  position: fixed;
+  left: max(24px, calc(env(safe-area-inset-left) + 20px));
+  bottom: max(90px, calc(env(safe-area-inset-bottom) + 82px));
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.core-heist-dom-arena.is-mobile-portrait .core-heist-mobile-joystick-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(0, 234, 255, 0.48);
+  background:
+    radial-gradient(circle at 50% 50%,
+      rgba(0, 234, 255, 0.18),
+      rgba(2, 8, 18, 0.42) 52%,
+      rgba(2, 8, 18, 0.72) 100%);
+  box-shadow:
+    0 0 38px rgba(0, 234, 255, 0.24),
+    inset 0 0 36px rgba(0, 234, 255, 0.12);
+  backdrop-filter: blur(6px);
+}
+
+.core-heist-dom-arena.is-mobile-portrait .core-heist-mobile-joystick-ring::before,
+.core-heist-dom-arena.is-mobile-portrait .core-heist-mobile-joystick-ring::after {
+  content: "";
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 68%; height: 1px;
+  transform: translate(-50%, -50%);
+  background: linear-gradient(90deg, transparent, rgba(185, 255, 255, 0.3), transparent);
+}
+.core-heist-dom-arena.is-mobile-portrait .core-heist-mobile-joystick-ring::after {
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
+.core-heist-dom-arena.is-mobile-portrait .core-heist-mobile-joystick-knob {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 24%, rgba(255,255,255,0.98), transparent 18%),
+    radial-gradient(circle, rgba(0,234,255,0.98), rgba(0,126,154,0.9));
+  border: 1.5px solid rgba(215, 255, 255, 0.88);
+  box-shadow:
+    0 0 28px rgba(0, 234, 255, 0.7),
+    inset 0 0 24px rgba(255, 255, 255, 0.18);
+  will-change: transform;
+}
+
+.core-heist-dom-arena.is-mobile-portrait .core-heist-mobile-joystick.is-active .core-heist-mobile-joystick-ring {
+  border-color: rgba(103, 255, 177, 0.68);
+  box-shadow:
+    0 0 44px rgba(103, 255, 177, 0.3),
+    inset 0 0 38px rgba(103, 255, 177, 0.14);
+}
+
+/* BUTOANE SHIELD + ATTACK — portret, jos-dreapta, ridicate mai sus */
+.core-heist-dom-arena.is-mobile-portrait .core-heist-mobile-buttons {
+  position: fixed;
+  right: max(20px, calc(env(safe-area-inset-right) + 16px));
+  bottom: max(310px, calc(env(safe-area-inset-bottom) + 304px));
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.core-heist-mobile-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2px solid rgba(115, 246, 255, 0.6);
+  background:
+    radial-gradient(circle at 34% 24%, rgba(255,255,255,0.22), transparent 18%),
+    radial-gradient(circle at 50% 55%, rgba(0,234,255,0.18), rgba(2,8,18,0.88) 62%, rgba(0,0,0,0.92) 100%);
+  color: #ecffff;
+  font-weight: 1000;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  text-shadow: 0 0 8px rgba(255,255,255,0.5), 0 0 14px rgba(0,234,255,0.6);
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.06),
+    0 0 22px rgba(0,234,255,0.24),
+    inset 0 0 18px rgba(255,255,255,0.08);
+  pointer-events: auto;
+  touch-action: none;
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+}
+
+.core-heist-dom-arena.is-mobile-portrait .core-heist-mobile-shield {
+  width: 120px;
+  height: 120px;
+  font-size: 14px;
+  border-color: rgba(103, 255, 177, 0.58);
+}
+
+.core-heist-dom-arena.is-mobile-portrait .core-heist-mobile-attack {
+  width: 160px;
+  height: 160px;
+  font-size: 19px;
+}
+
+.core-heist-mobile-action.is-active {
+  transform: scale(0.93);
+  border-color: rgba(255, 255, 255, 0.9);
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.16),
+    0 0 32px rgba(103,255,177,0.36),
+    inset 0 0 22px rgba(255,255,255,0.14);
+}
+.core-heist-mobile-action.is-locked { opacity: 0.42; filter: grayscale(0.4); }
+
+/* MINIMAP mobil — jos-dreapta, sub butoane */
+.core-heist-dom-arena.is-mobile-portrait .core-heist-minimap-frame {
+  right: max(14px, env(safe-area-inset-right));
+  bottom: max(90px, calc(env(safe-area-inset-bottom) + 82px));
+  width: 210px;
+  height: 136px;
+  background: transparent;
+}
+
+/* EXIT — jos-stanga, sub joystick */
+.core-heist-dom-arena.is-mobile-portrait .core-heist-exit-btn {
+  left: max(8px, env(safe-area-inset-left));
+  bottom: max(10px, env(safe-area-inset-bottom));
+  padding: 8px 13px;
+  font-size: 11px;
+  border-radius: 10px;
+}
+
+/* ─────────────── MOBILE PORTRAIT HUD — compact pe latimea ecranului ─────────────── */
+/*
+  Rând 1 (sus): [HP mic] [ORB mic] [TEAM·SCORE] [LEADERBOARD]
+  Rând 2: [OBJECTIVE mic, centrat]
+  Rând 3: joc liber
+*/
+.core-heist-dom-arena.is-mobile-portrait .core-heist-status-panel {
+  top: max(6px, env(safe-area-inset-top));
+  left: max(6px, env(safe-area-inset-left));
+  width: 116px;
+  padding: 7px 9px;
+  border-radius: 10px;
+}
+.core-heist-dom-arena.is-mobile-portrait .core-heist-status-panel > span,
+.core-heist-dom-arena.is-mobile-portrait .core-heist-energy-row > span {
+  font-size: 7px;
+  letter-spacing: 0.5px;
+}
+.core-heist-dom-arena.is-mobile-portrait .core-heist-status-panel > strong {
+  font-size: 13px;
+  margin-top: 1px;
+}
+.core-heist-dom-arena.is-mobile-portrait .core-heist-energy-row > strong {
+  font-size: 12px;
+  margin-top: 1px;
+}
+.core-heist-dom-arena.is-mobile-portrait .core-heist-hp-bar,
+.core-heist-dom-arena.is-mobile-portrait .core-heist-energy-bar {
+  height: 4px;
+  margin-top: 4px;
+}
+.core-heist-dom-arena.is-mobile-portrait .core-heist-energy-row {
+  margin-top: 6px;
+  padding-top: 5px;
+}
+
+.core-heist-dom-arena.is-mobile-portrait .core-heist-economy-panel {
+  top: max(6px, env(safe-area-inset-top));
+  left: max(130px, calc(env(safe-area-inset-left) + 126px));
+  width: 100px;
+  padding: 7px 9px;
+  border-radius: 10px;
+}
+.core-heist-dom-arena.is-mobile-portrait .core-heist-economy-panel > span  { font-size: 7px; }
+.core-heist-dom-arena.is-mobile-portrait .core-heist-economy-panel > strong { font-size: 13px; margin-top: 1px; }
+.core-heist-dom-arena.is-mobile-portrait .core-heist-economy-panel > small  { font-size: 7px; }
+.core-heist-dom-arena.is-mobile-portrait .core-heist-active-cores            { margin-top: 5px; padding-top: 5px; }
+.core-heist-dom-arena.is-mobile-portrait .core-heist-active-cores b          { font-size: 6.5px; }
+.core-heist-dom-arena.is-mobile-portrait .core-heist-active-cores em         { font-size: 7px; padding: 3px 6px; }
+
+/* TEAM panel + TIMER — rândul 1, în centru, compact orizontal */
+.core-heist-dom-arena.is-mobile-portrait .core-heist-team-panel {
+  top: max(6px, env(safe-area-inset-top));
+  padding: 4px 10px 5px;
+  border-radius: 9px;
+  gap: 8px;
+}
+.core-heist-dom-arena.is-mobile-portrait .core-heist-team-panel strong { font-size: 9px; }
+.core-heist-dom-arena.is-mobile-portrait .core-heist-team-panel span   { font-size: 6px; }
+
+/* Match timer — rândul 1, dreapta team-panel, nu mai e `left: calc(50%+230px)` pe mobil */
+.core-heist-dom-arena.is-mobile-portrait .core-heist-match-timer {
+  top: 36px;
+  left: auto;
+  right: max(6px, env(safe-area-inset-right));
+  min-width: 70px;
+  padding: 4px 9px 5px;
+  border-radius: 9px;
+}
+.core-heist-dom-arena.is-mobile-portrait .core-heist-match-timer span   { font-size: 6.5px; }
+.core-heist-dom-arena.is-mobile-portrait .core-heist-match-timer strong  { font-size: 11px; }
+
+/* Leaderboard portret — sus dreapta, compact */
+.core-heist-dom-arena.is-mobile-portrait .real-leaderboard {
+  top: max(50px, calc(env(safe-area-inset-top) + 44px));
+  right: max(6px, env(safe-area-inset-right));
+  width: 90px;
+}
+
+/* SCOREBOARD — rândul 2, centrat, compact */
+.core-heist-dom-arena.is-mobile-portrait .core-heist-scoreboard {
+  top: max(50px, calc(env(safe-area-inset-top) + 44px));
+  width: min(230px, calc(100vw - 110px)); /* las loc pentru leaderboard dreapta */
+  min-height: 38px;
+  grid-template-columns: 1fr 78px 1fr;
+  border-radius: 10px;
+}
+.core-heist-dom-arena.is-mobile-portrait .core-heist-score-side         { min-height: 38px; gap: 4px; }
+.core-heist-dom-arena.is-mobile-portrait .core-heist-score-side span    { font-size: 7px; }
+.core-heist-dom-arena.is-mobile-portrait .core-heist-score-side strong  { font-size: 15px; }
+.core-heist-dom-arena.is-mobile-portrait .core-heist-score-middle b     { font-size: 7.5px; }
+.core-heist-dom-arena.is-mobile-portrait .core-heist-score-middle small { font-size: 6.5px; }
+
+/* OBJECTIVE + LIVE EVENT — rândul 3, centrat, mic */
+.core-heist-dom-arena.is-mobile-portrait .core-heist-objective-panel,
+.core-heist-dom-arena.is-mobile-portrait .core-heist-live-event {
+  top: max(96px, calc(env(safe-area-inset-top) + 90px));
+  right: auto;
+  bottom: auto;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(240px, calc(100vw - 20px));
+  padding: 5px 10px;
+  border-radius: 8px;
+  text-align: center;
+}
+.core-heist-dom-arena.is-mobile-portrait .core-heist-objective-panel b,
+.core-heist-dom-arena.is-mobile-portrait .core-heist-live-event strong { font-size: 8.5px; }
+.core-heist-dom-arena.is-mobile-portrait .core-heist-objective-panel span,
+.core-heist-dom-arena.is-mobile-portrait .core-heist-live-event small  { font-size: 7.5px; }
+
+/* PEACE COUNTDOWN mobil — deasupra joystickului pe latimea ecranului */
+.core-heist-dom-arena.is-mobile-portrait .core-heist-peace-countdown {
+  bottom: max(20px, calc(env(safe-area-inset-bottom) + 50px));
+  min-width: 180px;
+  padding: 9px 16px;
+}
+.core-heist-dom-arena.is-mobile-portrait .core-heist-peace-countdown strong { font-size: 9px; }
+.core-heist-dom-arena.is-mobile-portrait .core-heist-peace-countdown b      { font-size: 22px; }
+.core-heist-dom-arena.is-mobile-portrait .core-heist-peace-countdown span   { font-size: 8.5px; }
+
+/* Ecrane mici (≤ 390px latime) */
+@media (max-width: 390px) {
+  .core-heist-dom-arena.is-mobile-portrait .core-heist-mobile-joystick { width: 220px; height: 220px; }
+  .core-heist-dom-arena.is-mobile-portrait .core-heist-mobile-joystick-knob { width: 82px; height: 82px; }
+  .core-heist-dom-arena.is-mobile-portrait .core-heist-mobile-attack  { width: 126px; height: 126px; font-size: 15px; }
+  .core-heist-dom-arena.is-mobile-portrait .core-heist-mobile-shield  { width: 92px; height: 92px; font-size: 11px; }
+  .core-heist-dom-arena.is-mobile-portrait .core-heist-minimap-frame  { width: 170px; height: 110px; }
+}
+
+/* ─────────────── LANDSCAPE ─────────────── */
+.core-heist-dom-arena.is-mobile-landscape .core-heist-mobile-controls {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 85;
+  pointer-events: none;
+  touch-action: none;
+}
+
+.core-heist-dom-arena.is-mobile-landscape .core-heist-mobile-joystick {
+  position: fixed;
+  left: max(12px, env(safe-area-inset-left));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  width: 130px;
+  height: 130px;
+  pointer-events: auto;
+  touch-action: none;
+  border-radius: 50%;
+}
+.core-heist-dom-arena.is-mobile-landscape .core-heist-mobile-joystick-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid rgba(0,234,255,0.44);
+  background: radial-gradient(circle at 50% 50%, rgba(0,234,255,0.14), rgba(2,8,18,0.38) 56%, rgba(2,8,18,0.7));
+  box-shadow: 0 0 26px rgba(0,234,255,0.2), inset 0 0 24px rgba(0,234,255,0.1);
+}
+.core-heist-dom-arena.is-mobile-landscape .core-heist-mobile-joystick-knob {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 24%, rgba(255,255,255,0.98), transparent 18%), radial-gradient(circle, rgba(0,234,255,0.98), rgba(0,126,154,0.9));
+  border: 1px solid rgba(215,255,255,0.88);
+  box-shadow: 0 0 20px rgba(0,234,255,0.65), inset 0 0 18px rgba(255,255,255,0.16);
+  will-change: transform;
+}
+.core-heist-dom-arena.is-mobile-landscape .core-heist-mobile-buttons {
+  position: fixed;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: auto;
+  touch-action: none;
+}
+.core-heist-dom-arena.is-mobile-landscape .core-heist-mobile-shield { width: 68px; height: 68px; font-size: 10px; }
+.core-heist-dom-arena.is-mobile-landscape .core-heist-mobile-attack { width: 90px; height: 90px; font-size: 12px; }
+
+.core-heist-dom-arena.is-mobile-landscape .core-heist-minimap-frame {
+  right: max(10px, env(safe-area-inset-right));
+  bottom: 110px;
+  width: 152px;
+  height: 96px;
+}
+
+/* HUD landscape compact */
+.core-heist-dom-arena.is-mobile-landscape .core-heist-status-panel     { top: 6px; left: 6px; width: 124px; padding: 6px 8px; }
+.core-heist-dom-arena.is-mobile-landscape .core-heist-status-panel > strong { font-size: 13px; }
+.core-heist-dom-arena.is-mobile-landscape .core-heist-energy-row > strong   { font-size: 12px; }
+.core-heist-dom-arena.is-mobile-landscape .core-heist-economy-panel    { top: 6px; left: 138px; width: 106px; padding: 6px 8px; }
+.core-heist-dom-arena.is-mobile-landscape .core-heist-economy-panel > strong { font-size: 13px; }
+.core-heist-dom-arena.is-mobile-landscape .core-heist-team-panel       { top: 6px; padding: 3px 10px 4px; gap: 6px; }
+.core-heist-dom-arena.is-mobile-landscape .core-heist-team-panel strong { font-size: 8.5px; }
+.core-heist-dom-arena.is-mobile-landscape .core-heist-team-panel span   { font-size: 5.5px; }
+.core-heist-dom-arena.is-mobile-landscape .core-heist-match-timer       { top: 36px; left: auto; right: max(8px, env(safe-area-inset-right)); min-width: 64px; padding: 3px 8px 4px; }
+.core-heist-dom-arena.is-mobile-landscape .core-heist-match-timer strong { font-size: 10px; }
+.core-heist-dom-arena.is-mobile-landscape .core-heist-scoreboard        { top: 38px; width: min(230px, calc(100vw - 20px)); min-height: 34px; grid-template-columns: 1fr 72px 1fr; }
+.core-heist-dom-arena.is-mobile-landscape .core-heist-score-side        { min-height: 34px; gap: 3px; }
+.core-heist-dom-arena.is-mobile-landscape .core-heist-score-side strong { font-size: 13px; }
+.core-heist-dom-arena.is-mobile-landscape .core-heist-objective-panel,
+.core-heist-dom-arena.is-mobile-landscape .core-heist-live-event        { top: 78px; width: min(220px, calc(100vw - 20px)); padding: 4px 9px; }
+.core-heist-dom-arena.is-mobile-landscape .real-leaderboard             { top: 6px; right: 84px; width: 100px; }
+.core-heist-dom-arena.is-mobile-landscape .core-heist-exit-btn          { left: 8px; bottom: 8px; padding: 6px 10px; font-size: 10px; }
+.core-heist-dom-arena.is-mobile-landscape .core-heist-peace-countdown   { bottom: 108px; min-width: 160px; padding: 8px 14px; }
+
+/* ─────────────── DESKTOP / TABLET RESPONSIVE CASCADE ─────────────── */
+
+/* ≥ 1100px: layout complet, timer langa team panel, obiectivul dreapta */
+@media (min-width: 1100px) {
+  .core-heist-match-timer {
+    left: auto;
+    right: 18px;
+    top: 42px;
+    transform: none;
+  }
+  .core-heist-team-panel {
+    /* centrat cu transform deja */
+  }
+  .core-heist-dom-arena .real-leaderboard {
+    top: 14px;
+    right: 160px; /* timer width + gap */
+  }
+  .core-heist-objective-panel {
+    /* right: 18px, vertically centered — din stilul de baza */
+    width: 240px;
+  }
+  /* Minimap nu se suprapune cu objective (objective e vertical-centered,
+     minimap e bottom-right — nu se ciocnesc */
+}
+
+/* 760px–1099px: fereastra medie, timer trecut sub team panel */
+@media (min-width: 760px) and (max-width: 1099px) {
+  .core-heist-team-panel {
+    top: 14px;
+    width: min(340px, calc(100vw - 240px));
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    padding: 6px 14px;
+  }
+  .core-heist-team-panel strong { font-size: 11px; }
+  .core-heist-team-panel span   { font-size: 9px; }
+
+  .core-heist-match-timer {
+    top: 42px;
+    left: auto;
+    right: 18px;
+    transform: none;
+    min-width: 100px;
+    padding: 6px 12px 7px;
+  }
+  .core-heist-match-timer strong { font-size: 15px; }
+
+  .core-heist-scoreboard {
+    top: 60px;
+    width: min(380px, calc(100vw - 28px));
   }
 
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-joystick.core-heist-mobile-joystick {
-    position: fixed !important;
-    left: max(16px, calc(env(safe-area-inset-left) + 12px)) !important;
-    bottom: calc(max(18px, env(safe-area-inset-bottom)) + clamp(44px, 8vw, 62px)) !important;
-    width: clamp(88px, 20vw, 128px) !important;
-    height: clamp(88px, 20vw, 128px) !important;
-    display: block !important;
-    z-index: 361 !important;
-    pointer-events: auto !important;
-    touch-action: none !important;
-    border-radius: 50% !important;
-    border: 1px solid rgba(0, 234, 255, .52) !important;
-    background:
-      radial-gradient(circle at 50% 50%, rgba(0, 234, 255, .18), transparent 56%),
-      rgba(2, 14, 28, .72) !important;
-    box-shadow: 0 0 22px rgba(0, 234, 255, .25), inset 0 0 22px rgba(0, 234, 255, .11) !important;
+  .core-heist-live-event {
+    top: 124px;
   }
 
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-joystick-ring.core-heist-mobile-joystick-ring {
-    position: absolute !important;
-    inset: 12% !important;
-    display: block !important;
-    border: 1px dashed rgba(178, 247, 255, .28) !important;
-    border-radius: 50% !important;
+  /* Obiectivul: dreapta, dar mai sus ca sa nu se suprapuna cu minimap */
+  .core-heist-objective-panel {
+    top: auto;
+    bottom: 170px;
+    right: 10px;
+    transform: none;
+    width: min(220px, calc(100vw - 28px));
+    padding: 11px 14px;
   }
 
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-joystick-knob.core-heist-mobile-joystick-knob {
-    position: absolute !important;
-    left: 50% !important;
-    top: 50% !important;
-    width: 43% !important;
-    height: 43% !important;
-    display: block !important;
-    margin: 0 !important;
-    border-radius: 50% !important;
-    background: radial-gradient(circle at 34% 27%, #ffffff, #72f8ff 30%, #00b9d1 66%, #063e50 100%) !important;
-    box-shadow: 0 0 16px rgba(0, 234, 255, .92), inset 0 0 10px rgba(255,255,255,.42) !important;
+  /* Economy panel sub HP panel la latime mica */
+  .core-heist-economy-panel {
+    top: 14px;
+    left: 214px;
+    width: 170px;
   }
 
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-action-row.core-heist-mobile-buttons {
-    position: fixed !important;
-    right: max(16px, calc(env(safe-area-inset-right) + 12px)) !important;
-    bottom: calc(max(18px, env(safe-area-inset-bottom)) + clamp(164px, 28vw, 214px)) !important;
-    width: auto !important;
-    height: auto !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: flex-end !important;
-    gap: 12px !important;
-    z-index: 362 !important;
-    pointer-events: none !important;
-    transform: none !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-action-btn.core-heist-mobile-action {
-    width: clamp(56px, 13vw, 76px) !important;
-    height: clamp(56px, 13vw, 76px) !important;
-    display: grid !important;
-    place-items: center !important;
-    padding: 0 !important;
-    border-radius: 50% !important;
-    pointer-events: auto !important;
-    touch-action: none !important;
-    color: #fff !important;
-    font-size: clamp(7px, 1.75vw, 10px) !important;
-    font-weight: 950 !important;
-    letter-spacing: .5px !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-shield-btn.core-heist-mobile-shield {
-    border-color: rgba(0, 234, 255, .8) !important;
-    background: radial-gradient(circle at 35% 26%, rgba(255,255,255,.62), rgba(0, 234, 255, .68) 42%, rgba(0, 48, 69, .94) 100%) !important;
-    box-shadow: 0 0 18px rgba(0, 234, 255, .5), inset 0 0 13px rgba(175, 250, 255, .18) !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-attack-btn.core-heist-mobile-attack {
-    border-color: rgba(255, 105, 105, .82) !important;
-    background: radial-gradient(circle at 35% 26%, rgba(255,255,255,.60), rgba(255, 76, 76, .72) 42%, rgba(76, 4, 11, .94) 100%) !important;
-    box-shadow: 0 0 18px rgba(255, 64, 64, .50), inset 0 0 13px rgba(255, 158, 158, .16) !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-action-btn.core-heist-mobile-action.is-active {
-    transform: scale(.94) !important;
-    filter: brightness(1.26) !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-action-btn.core-heist-mobile-action.is-locked {
-    opacity: .46 !important;
-    filter: grayscale(.22) !important;
-  }
-
-  /* Mobile world map: above the action buttons but underneath their hit layer.
-     Unlike GameArena's default rule it stays visible in Core Heist. */
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-minimap-frame,
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-minimap-frame .minimap,
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-minimap-frame .minimap-canvas,
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-minimap-frame .minimap-title,
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-minimap-frame .minimap-map-area,
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-minimap-frame .minimap-player-drone,
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-minimap-frame .mini-drone-arm {
-    display: block !important;
-    visibility: visible !important;
-    opacity: 1 !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-minimap-frame .minimap {
-    position: fixed !important;
-    right: max(13px, calc(env(safe-area-inset-right) + 10px)) !important;
-    bottom: calc(max(18px, env(safe-area-inset-bottom)) + clamp(66px, 12vw, 84px)) !important;
-    width: clamp(134px, 29vw, 186px) !important;
-    height: clamp(92px, 19vw, 124px) !important;
-    z-index: 330 !important;
-    overflow: hidden !important;
-    border-radius: 12px !important;
-    border: 1px solid rgba(0, 234, 255, .34) !important;
-    background: rgba(2, 10, 22, .86) !important;
-    box-shadow: 0 10px 24px rgba(0,0,0,.30), 0 0 14px rgba(0,234,255,.11) !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-minimap-frame .minimap-title {
-    top: 6px !important;
-    left: 8px !important;
-    font-size: 7px !important;
-    letter-spacing: 1px !important;
-  }
-
-  /* Portrait phones: keep action buttons above the world map and lift the
-     joystick so nothing collides with the bottom HUD strip. */
-  .core-heist-dom-arena.game-arena.is-mobile:not(.is-mobile-landscape) .mobile-joystick.core-heist-mobile-joystick {
-    bottom: calc(max(18px, env(safe-area-inset-bottom)) + clamp(52px, 10vw, 76px)) !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile:not(.is-mobile-landscape) .mobile-action-row.core-heist-mobile-buttons {
-    bottom: calc(max(18px, env(safe-area-inset-bottom)) + clamp(176px, 30vw, 228px)) !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile:not(.is-mobile-landscape) .core-heist-minimap-frame .minimap {
-    bottom: calc(max(18px, env(safe-area-inset-bottom)) + clamp(78px, 14vw, 96px)) !important;
-    width: clamp(138px, 30vw, 190px) !important;
-    height: clamp(96px, 20vw, 128px) !important;
+  .core-heist-dom-arena .real-leaderboard {
+    top: 62px;
+    right: 18px;
+    width: 148px;
   }
 }
 
-@media (hover: none) and (pointer: coarse) and (orientation: landscape) and (max-height: 380px) {
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-joystick.core-heist-mobile-joystick {
-    width: 76px !important;
-    height: 76px !important;
-    left: max(10px, calc(env(safe-area-inset-left) + 8px)) !important;
-    bottom: calc(max(10px, env(safe-area-inset-bottom)) + 38px) !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-action-row.core-heist-mobile-buttons {
-    right: max(10px, calc(env(safe-area-inset-right) + 8px)) !important;
-    bottom: 144px !important;
-    gap: 8px !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-action-btn.core-heist-mobile-action {
-    width: 52px !important;
-    height: 52px !important;
-    font-size: 7px !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-minimap-frame .minimap {
-    right: max(10px, calc(env(safe-area-inset-right) + 8px)) !important;
-    bottom: 68px !important;
-    width: 118px !important;
-    height: 78px !important;
-  }
-}
-
-/* A narrower desktop keeps the map readable without ever colliding with the
-   leaderboard, while the Core Heist central objective rail remains untouched. */
-@media (min-width: 901px) and (max-width: 1360px) {
-  .core-heist-dom-arena.game-arena:not(.is-mobile) .core-heist-minimap-frame .minimap {
-    right: 14px !important;
-    bottom: 14px !important;
-    width: 210px !important;
-    height: 142px !important;
-  }
-}
-
-
-/* ============================================================================
-   CORE HEIST — FINAL DESKTOP MISSION RAIL (NO LEADERBOARD)
-   The leaderboard is removed from JSX. On usable desktop widths, the objective
-   card moves into the freed right-hand rail, leaving the center clear for the
-   score and live flag alerts. Tablet/mobile keep their existing centered rules.
-============================================================================ */
-@media (min-width: 1180px) and (hover: hover) and (pointer: fine) {
-  .core-heist-dom-arena .core-heist-objective-panel {
-    position: fixed !important;
-    top: max(86px, calc(env(safe-area-inset-top) + 76px)) !important;
-    left: auto !important;
-    right: max(22px, env(safe-area-inset-right)) !important;
-    bottom: auto !important;
-    width: clamp(270px, 17vw, 320px) !important;
-    min-width: 0 !important;
-    max-width: calc(100vw - 44px) !important;
-    min-height: 0 !important;
-    padding: 14px 16px !important;
-    transform: none !important;
-    border-color: rgba(109, 207, 255, 0.38) !important;
-    border-left: 3px solid rgba(0, 234, 255, 0.82) !important;
-    border-radius: 16px !important;
-    text-align: left !important;
-    z-index: 126 !important;
-  }
-
-  .core-heist-dom-arena .core-heist-objective-panel b {
-    font-size: 11px !important;
-    line-height: 1.2 !important;
-    letter-spacing: .9px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-objective-panel span {
-    margin-top: 5px !important;
-    font-size: 10px !important;
-    line-height: 1.35 !important;
-  }
-}
-
-/* Compact desktops have insufficient right-side breathing room beside the
-   central score. Keep the objective centered there instead of forcing overlap. */
-@media (min-width: 901px) and (max-width: 1179px) and (hover: hover) and (pointer: fine) {
-  .core-heist-dom-arena .core-heist-objective-panel {
-    left: 50% !important;
-    right: auto !important;
-    transform: translateX(-50%) !important;
-    text-align: center !important;
-  }
-}
-
-/* ============================================================================
-   CORE HEIST — FINAL CENTERED SCORE + COMPACT DESKTOP PREPARE PHASE
-   Kept last on purpose: previous responsive sections use several overlapping
-   breakpoints. This final rail gives desktop one predictable center axis.
-============================================================================ */
-
-/* The CTF score always owns the visual center on a real desktop. It must not
-   inherit the old split-layout offsets from wide-screen variants. */
-@media (hover: hover) and (pointer: fine) and (min-width: 721px) {
-  .core-heist-dom-arena .core-heist-scoreboard {
-    left: 50% !important;
-    right: auto !important;
-    transform: translateX(-50%) !important;
-    transform-origin: center top !important;
-  }
-}
-
-/* Wide desktops: keep the score centered under the match clock, while the
-   mission objective remains in its dedicated right rail. */
-@media (hover: hover) and (pointer: fine) and (min-width: 1180px) {
-  .core-heist-dom-arena .core-heist-match-timer {
-    top: max(88px, calc(env(safe-area-inset-top) + 78px)) !important;
-    left: 50% !important;
-    right: auto !important;
-    transform: translateX(-50%) !important;
-  }
-
-  .core-heist-dom-arena .core-heist-scoreboard {
-    top: max(150px, calc(env(safe-area-inset-top) + 140px)) !important;
-    width: clamp(392px, 30vw, 472px) !important;
-    min-width: 0 !important;
-    grid-template-columns: minmax(108px, 1fr) 132px minmax(108px, 1fr) !important;
-  }
-
-  .core-heist-dom-arena .core-heist-score-side {
-    min-height: 74px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-score-side strong {
-    font-size: 32px !important;
-  }
-}
-
-/* Laptop / narrow desktop: score stays exactly centered. PREPARE PHASE moves
-   into a lower, centered lane so it never covers the score, Orb Count or timer. */
-@media (hover: hover) and (pointer: fine) and (min-width: 721px) and (max-width: 1179px) {
-  .core-heist-dom-arena .core-heist-match-timer {
-    top: max(72px, calc(env(safe-area-inset-top) + 62px)) !important;
-    left: 50% !important;
-    right: auto !important;
-    transform: translateX(-50%) !important;
-  }
-
-  .core-heist-dom-arena .core-heist-scoreboard {
-    top: max(128px, calc(env(safe-area-inset-top) + 118px)) !important;
-    width: min(500px, calc(100vw - 32px)) !important;
-    min-height: 66px !important;
-    grid-template-columns: minmax(106px, 1fr) 134px minmax(106px, 1fr) !important;
-  }
-
-  .core-heist-dom-arena .core-heist-peace-countdown {
-    position: fixed !important;
-    top: auto !important;
-    left: 50% !important;
-    right: auto !important;
-    bottom: max(112px, calc(env(safe-area-inset-bottom) + 92px)) !important;
-    width: clamp(282px, 40vw, 370px) !important;
-    min-width: 0 !important;
-    padding: 11px 16px 12px !important;
-    transform: translateX(-50%) !important;
-    text-align: center !important;
-    z-index: 246 !important;
-  }
-}
-
-/* On unusually short desktop windows, leave room for the lower world controls
-   and MiniMap: the prepare panel rises a little, but remains below the HUD. */
-@media (hover: hover) and (pointer: fine) and (min-width: 721px) and (max-width: 1179px) and (max-height: 720px) {
-  .core-heist-dom-arena .core-heist-peace-countdown {
-    bottom: max(78px, calc(env(safe-area-inset-bottom) + 62px)) !important;
-    width: clamp(260px, 38vw, 340px) !important;
-    padding: 8px 12px 9px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-peace-countdown strong { font-size: 9px !important; }
-  .core-heist-dom-arena .core-heist-peace-countdown b { margin: 2px 0 !important; font-size: 24px !important; }
-  .core-heist-dom-arena .core-heist-peace-countdown span { font-size: 8px !important; }
-}
-
-/* The score must remain centered even in a tall, narrow desktop browser window.
-   This prevents the old tablet rule from pinning BLUE/RED near the left edge. */
-@media (hover: hover) and (pointer: fine) and (max-width: 900px) and (min-width: 721px) {
-  .core-heist-dom-arena .core-heist-scoreboard {
-    left: 50% !important;
-    right: auto !important;
-    width: min(480px, calc(100vw - 24px)) !important;
-    transform: translateX(-50%) !important;
-  }
-}
-
-/* ============================================================================
-   CORE HEIST — FINAL COMPACT HUD SCALE
-   Kept at the absolute end so it wins over every older responsive block.
-   Goal: same hierarchy, substantially less screen coverage.
-============================================================================ */
-
-/* -------------------------------------------------------------------------- */
-/* Desktop: compact cards + compact center rail.                              */
-/* -------------------------------------------------------------------------- */
-@media (hover: hover) and (pointer: fine) and (min-width: 1180px) {
-  .core-heist-dom-arena .core-heist-status-panel {
-    top: max(14px, env(safe-area-inset-top)) !important;
-    left: max(16px, env(safe-area-inset-left)) !important;
-    width: 214px !important;
-    min-height: 0 !important;
-    padding: 12px 14px !important;
-    border-radius: 15px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-economy-panel {
-    top: max(14px, env(safe-area-inset-top)) !important;
-    left: max(242px, calc(env(safe-area-inset-left) + 226px)) !important;
-    width: 206px !important;
-    min-height: 0 !important;
-    padding: 12px 14px !important;
-    border-radius: 15px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel > span,
-  .core-heist-dom-arena .core-heist-economy-panel > span {
-    font-size: 10px !important;
-    letter-spacing: 1.05px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel > strong {
-    margin-top: 3px !important;
-    font-size: 29px !important;
-    line-height: 1 !important;
-  }
-
-  .core-heist-dom-arena .core-heist-economy-panel > strong {
-    margin-top: 3px !important;
-    font-size: 28px !important;
-    line-height: 1 !important;
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel .energy-row {
-    margin-top: 11px !important;
-    padding-top: 11px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel .energy-row span {
-    font-size: 10px !important;
-    letter-spacing: 1.05px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel .energy-row strong {
-    font-size: 25px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel .hp-bar,
-  .core-heist-dom-arena .core-heist-status-panel .energy-bar {
-    height: 7px !important;
-    margin-top: 7px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-economy-panel > small {
-    margin-top: 3px !important;
-    font-size: 9px !important;
-    line-height: 1.22 !important;
-  }
-
-  .core-heist-dom-arena .core-heist-economy-panel .active-cores-panel {
-    margin-top: 10px !important;
-    padding-top: 9px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-economy-panel .active-cores-panel b,
-  .core-heist-dom-arena .core-heist-economy-panel .active-cores-panel em {
-    font-size: 10px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-team-panel {
-    top: max(8px, env(safe-area-inset-top)) !important;
-    width: min(500px, calc(100vw - 520px)) !important;
-    min-height: 28px !important;
-    padding: 6px 13px !important;
-    gap: 8px !important;
-    border-radius: 999px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-team-panel strong {
-    font-size: 10px !important;
-    letter-spacing: 1.05px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-team-panel span {
-    font-size: 10px !important;
-    letter-spacing: 0.75px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-match-timer {
-    top: max(68px, calc(env(safe-area-inset-top) + 58px)) !important;
-    min-width: 122px !important;
-    padding: 6px 12px 7px !important;
-    border-radius: 12px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-match-timer span {
-    font-size: 9px !important;
-    letter-spacing: 1.1px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-match-timer strong {
-    margin-top: 1px !important;
-    font-size: 18px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-scoreboard {
-    top: max(122px, calc(env(safe-area-inset-top) + 112px)) !important;
-    width: clamp(348px, 26vw, 414px) !important;
-    min-height: 60px !important;
-    grid-template-columns: minmax(88px, 1fr) 116px minmax(88px, 1fr) !important;
-    border-radius: 15px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-score-side {
-    min-height: 60px !important;
-    gap: 7px !important;
-    padding: 0 9px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-score-side span {
-    font-size: 10px !important;
-    letter-spacing: 1px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-score-side strong {
-    min-width: 48px !important;
-    font-size: 28px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-score-side strong small {
-    font-size: 12px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-score-middle {
-    gap: 2px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-score-middle b {
-    font-size: 10px !important;
-    letter-spacing: 0.7px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-score-middle small {
-    font-size: 8px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-objective-panel {
-    top: max(70px, calc(env(safe-area-inset-top) + 60px)) !important;
-    right: max(16px, env(safe-area-inset-right)) !important;
-    width: clamp(230px, 15vw, 274px) !important;
-    padding: 10px 12px !important;
-    border-left-width: 2px !important;
-    border-radius: 14px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-objective-panel b {
-    font-size: 10px !important;
-    letter-spacing: .72px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-objective-panel span {
-    margin-top: 4px !important;
-    font-size: 9px !important;
-    line-height: 1.28 !important;
-  }
-
-  .core-heist-dom-arena .core-heist-live-event {
-    top: max(202px, calc(env(safe-area-inset-top) + 192px)) !important;
-    width: clamp(300px, 25vw, 380px) !important;
-    padding: 10px 13px 11px !important;
-    border-radius: 14px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-live-event span {
-    margin-bottom: 3px !important;
-    font-size: 8px !important;
-    letter-spacing: 1.25px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-live-event strong {
-    font-size: 15px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-live-event small {
-    margin-top: 4px !important;
-    font-size: 9px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-peace-countdown {
-    width: clamp(246px, 20vw, 304px) !important;
-    padding: 8px 12px 9px !important;
-    border-radius: 14px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-peace-countdown strong {
-    font-size: 9px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-peace-countdown b {
-    margin: 2px 0 !important;
-    font-size: 25px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-peace-countdown span {
-    font-size: 8px !important;
-  }
-
-  .core-heist-dom-arena.game-arena:not(.is-mobile) .core-heist-minimap-frame .minimap {
-    right: 16px !important;
-    bottom: 16px !important;
-    width: 196px !important;
-    height: 130px !important;
-    border-radius: 14px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-fps {
-    top: 10px !important;
-    right: 16px !important;
-    font-size: 14px !important;
-  }
-}
-
-/* -------------------------------------------------------------------------- */
-/* Laptop / resized desktop: compact enough that no HUD rail crowds the map.  */
-/* -------------------------------------------------------------------------- */
-@media (hover: hover) and (pointer: fine) and (min-width: 721px) and (max-width: 1179px) {
-  .core-heist-dom-arena .core-heist-status-panel,
-  .core-heist-dom-arena .core-heist-economy-panel {
-    top: max(12px, env(safe-area-inset-top)) !important;
-    width: 184px !important;
-    min-height: 0 !important;
-    padding: 10px 12px !important;
-    border-radius: 13px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel {
-    left: max(12px, env(safe-area-inset-left)) !important;
-  }
-
-  .core-heist-dom-arena .core-heist-economy-panel {
-    left: max(208px, calc(env(safe-area-inset-left) + 196px)) !important;
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel > span,
-  .core-heist-dom-arena .core-heist-economy-panel > span,
-  .core-heist-dom-arena .core-heist-status-panel .energy-row span {
-    font-size: 8px !important;
-    letter-spacing: .85px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-status-panel > strong { font-size: 24px !important; }
-  .core-heist-dom-arena .core-heist-status-panel .energy-row strong { font-size: 21px !important; }
-  .core-heist-dom-arena .core-heist-economy-panel > strong { font-size: 24px !important; }
-  .core-heist-dom-arena .core-heist-economy-panel > small { font-size: 8px !important; }
-  .core-heist-dom-arena .core-heist-status-panel .energy-row { margin-top: 8px !important; padding-top: 8px !important; }
-  .core-heist-dom-arena .core-heist-status-panel .hp-bar,
-  .core-heist-dom-arena .core-heist-status-panel .energy-bar { height: 6px !important; margin-top: 5px !important; }
-
-  .core-heist-dom-arena .core-heist-team-panel {
-    top: 7px !important;
-    width: min(410px, calc(100vw - 430px)) !important;
-    min-height: 26px !important;
-    padding: 5px 10px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-team-panel strong,
-  .core-heist-dom-arena .core-heist-team-panel span { font-size: 9px !important; }
-
-  .core-heist-dom-arena .core-heist-match-timer {
-    top: 58px !important;
-    min-width: 104px !important;
-    padding: 5px 10px 6px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-match-timer span { font-size: 8px !important; }
-  .core-heist-dom-arena .core-heist-match-timer strong { font-size: 16px !important; }
-
-  .core-heist-dom-arena .core-heist-scoreboard {
-    top: 104px !important;
-    width: min(390px, calc(100vw - 26px)) !important;
-    min-height: 56px !important;
-    grid-template-columns: minmax(82px, 1fr) 110px minmax(82px, 1fr) !important;
-    border-radius: 14px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-score-side { min-height: 56px !important; }
-  .core-heist-dom-arena .core-heist-score-side span { font-size: 9px !important; }
-  .core-heist-dom-arena .core-heist-score-side strong { font-size: 25px !important; min-width: 44px !important; }
-  .core-heist-dom-arena .core-heist-score-side strong small { font-size: 11px !important; }
-  .core-heist-dom-arena .core-heist-score-middle b { font-size: 9px !important; }
-  .core-heist-dom-arena .core-heist-score-middle small { font-size: 7px !important; }
-
-  .core-heist-dom-arena .core-heist-objective-panel {
-    top: 176px !important;
-    width: min(342px, calc(100vw - 32px)) !important;
-    padding: 8px 11px !important;
-    border-radius: 12px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-objective-panel b { font-size: 9px !important; }
-  .core-heist-dom-arena .core-heist-objective-panel span { margin-top: 3px !important; font-size: 8px !important; }
-
-  .core-heist-dom-arena .core-heist-live-event {
-    top: 224px !important;
-    width: min(360px, calc(100vw - 32px)) !important;
-    padding: 8px 11px 9px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-live-event span { font-size: 7px !important; }
-  .core-heist-dom-arena .core-heist-live-event strong { font-size: 13px !important; }
-  .core-heist-dom-arena .core-heist-live-event small { font-size: 8px !important; }
-
-  .core-heist-dom-arena .core-heist-peace-countdown {
-    bottom: max(74px, calc(env(safe-area-inset-bottom) + 58px)) !important;
-    width: clamp(232px, 34vw, 288px) !important;
-    padding: 7px 10px 8px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-peace-countdown strong { font-size: 8px !important; }
-  .core-heist-dom-arena .core-heist-peace-countdown b { font-size: 22px !important; }
-  .core-heist-dom-arena .core-heist-peace-countdown span { font-size: 7px !important; }
-
-  .core-heist-dom-arena.game-arena:not(.is-mobile) .core-heist-minimap-frame .minimap {
-    right: 12px !important;
-    bottom: 12px !important;
-    width: 166px !important;
-    height: 110px !important;
-  }
-
-  .core-heist-dom-arena .core-heist-fps { top: 8px !important; right: 12px !important; font-size: 12px !important; }
-}
-
-/* -------------------------------------------------------------------------- */
-/* Phones / tablets: keep controls untouched, only shrink informational HUD.  */
-/* -------------------------------------------------------------------------- */
-@media (hover: none) and (pointer: coarse) {
-  .core-heist-dom-arena .core-heist-scoreboard {
-    transform-origin: center top !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-status-panel,
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-economy-panel {
-    padding: 7px 8px !important;
-    border-radius: 10px !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-scoreboard {
-    min-height: 44px !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-score-side {
-    min-height: 44px !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-score-side strong {
-    font-size: 20px !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-score-middle b {
-    font-size: 8px !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-score-middle small {
-    font-size: 6px !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-match-timer {
-    padding: 4px 8px 5px !important;
-    min-width: 92px !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-match-timer strong {
-    font-size: 14px !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-objective-panel {
-    padding: 6px 9px !important;
-    border-radius: 10px !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-objective-panel b {
-    font-size: 8px !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-objective-panel span {
-    font-size: 7px !important;
-  }
-}
-
-/* ============================================================================
-   CORE HEIST — FINAL MOBILE CONTROL LIFT
-   Keep touch controls safely above the browser/system gesture area and prevent
-   any overlap with the world map. This block is intentionally last so it wins
-   over the GameArena-compatible mobile rules above.
-============================================================================ */
-@media (hover: none) and (pointer: coarse) {
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-joystick.core-heist-mobile-joystick {
-    bottom: max(132px, calc(env(safe-area-inset-bottom) + 118px)) !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-action-row.core-heist-mobile-buttons {
-    bottom: max(136px, calc(env(safe-area-inset-bottom) + 122px)) !important;
-  }
-
-  /* The map stays above the raised action buttons instead of sitting behind
-     Shield / Attack on narrow phones. */
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-minimap-frame .minimap {
-    bottom: max(244px, calc(env(safe-area-inset-bottom) + 230px)) !important;
-  }
-
-  /* Exit remains below the control row, centered and reachable. */
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-exit-btn {
-    bottom: max(20px, calc(env(safe-area-inset-bottom) + 12px)) !important;
-  }
-}
-
-/* Landscape phones have less vertical room, but controls still stay well clear
-   of the browser gesture strip and of the minimap. */
-@media (hover: none) and (pointer: coarse) and (orientation: landscape) {
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-joystick.core-heist-mobile-joystick {
-    bottom: max(84px, calc(env(safe-area-inset-bottom) + 72px)) !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-action-row.core-heist-mobile-buttons {
-    bottom: max(88px, calc(env(safe-area-inset-bottom) + 76px)) !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-minimap-frame .minimap {
-    bottom: max(176px, calc(env(safe-area-inset-bottom) + 162px)) !important;
-  }
-}
-
-/* Very short landscape screens: keep the controls elevated but compact. */
-@media (hover: none) and (pointer: coarse) and (orientation: landscape) and (max-height: 430px) {
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-joystick.core-heist-mobile-joystick {
-    bottom: max(72px, calc(env(safe-area-inset-bottom) + 60px)) !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-action-row.core-heist-mobile-buttons {
-    bottom: max(74px, calc(env(safe-area-inset-bottom) + 62px)) !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-minimap-frame .minimap {
-    bottom: max(150px, calc(env(safe-area-inset-bottom) + 138px)) !important;
-  }
-}
-
-/* ============================================================================
-   CORE HEIST — FINAL PORTRAIT MOBILE CONTROL SPACING
-   The map owns the absolute bottom-right corner. Shield/Attack sit above it
-   with a deliberate empty gap, while the joystick is lifted into its own left
-   lane so it cannot collide with the bottom HUD, exit button or minimap.
-============================================================================ */
-@media (orientation: portrait) and (max-width: 900px) {
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-minimap-frame .minimap {
-    right: max(10px, calc(env(safe-area-inset-right) + 8px)) !important;
-    bottom: max(10px, calc(env(safe-area-inset-bottom) + 8px)) !important;
-    width: clamp(150px, 34vw, 202px) !important;
-    height: clamp(106px, 24vw, 140px) !important;
-    z-index: 330 !important;
-  }
-
-  /* Action buttons remain horizontally aligned, completely ABOVE the map.
-     Their bottom value is map height + a real 22px breathing gap. */
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-action-row.core-heist-mobile-buttons {
-    right: max(12px, calc(env(safe-area-inset-right) + 10px)) !important;
-    bottom: calc(max(10px, env(safe-area-inset-bottom)) + clamp(106px, 24vw, 140px) + 22px) !important;
-    gap: clamp(14px, 3vw, 20px) !important;
-    z-index: 362 !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-action-btn.core-heist-mobile-action {
-    width: clamp(58px, 13.5vw, 78px) !important;
-    height: clamp(58px, 13.5vw, 78px) !important;
-  }
-
-  /* Raised substantially above the bottom UI. This is intentionally independent
-     of minimap height, so the joystick never falls back into the same lane. */
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-joystick.core-heist-mobile-joystick {
-    left: max(16px, calc(env(safe-area-inset-left) + 12px)) !important;
-    bottom: calc(max(12px, env(safe-area-inset-bottom)) + clamp(236px, 34vh, 318px)) !important;
-    z-index: 361 !important;
-  }
-}
-
-/* Short portrait phones still retain a clear separation; only the joystick
-   lift is trimmed slightly so it remains fully inside the playable viewport. */
-@media (orientation: portrait) and (max-width: 420px) and (max-height: 780px) {
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-joystick.core-heist-mobile-joystick {
-    bottom: calc(max(12px, env(safe-area-inset-bottom)) + 206px) !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-minimap-frame .minimap {
-    width: 142px !important;
-    height: 100px !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-action-row.core-heist-mobile-buttons {
-    bottom: calc(max(10px, env(safe-area-inset-bottom)) + 122px) !important;
-  }
-}
-
-/* ============================================================================
-   CORE HEIST — FINAL MOBILE CONTROL GEOMETRY
-   This is intentionally the LAST rule block. Previous versions moved the map
-   upward on short landscape phones; this fixes the requested layout exactly:
-   - World map anchored at the physical bottom-right and larger.
-   - Shield + Attack stay ABOVE the map with a visible gap.
-   - Joystick moves high into the left play lane, clear of lower HUD cards.
-============================================================================ */
-@media (hover: none) and (pointer: coarse) and (orientation: landscape) {
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-minimap-frame .minimap {
-    right: max(10px, calc(env(safe-area-inset-right) + 8px)) !important;
-    bottom: max(8px, env(safe-area-inset-bottom)) !important;
-    width: clamp(126px, 34vw, 176px) !important;
-    height: clamp(84px, 22vw, 116px) !important;
-    z-index: 330 !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-action-row.core-heist-mobile-buttons {
-    right: max(12px, calc(env(safe-area-inset-right) + 10px)) !important;
-    bottom: calc(max(8px, env(safe-area-inset-bottom)) + clamp(84px, 22vw, 116px) + 18px) !important;
-    display: flex !important;
-    flex-direction: row !important;
-    align-items: center !important;
-    gap: 14px !important;
-    z-index: 362 !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-action-btn.core-heist-mobile-action {
-    width: clamp(50px, 13vw, 68px) !important;
-    height: clamp(50px, 13vw, 68px) !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-joystick.core-heist-mobile-joystick {
-    left: max(12px, calc(env(safe-area-inset-left) + 9px)) !important;
-    bottom: max(92px, calc(env(safe-area-inset-bottom) + 82px)) !important;
-    z-index: 361 !important;
-  }
-}
-
-/* Exact profile for the short landscape viewport in the screenshot. */
-@media (hover: none) and (pointer: coarse) and (orientation: landscape) and (max-height: 430px) {
-  .core-heist-dom-arena.game-arena.is-mobile .core-heist-minimap-frame .minimap {
-    right: max(8px, calc(env(safe-area-inset-right) + 6px)) !important;
-    bottom: max(7px, env(safe-area-inset-bottom)) !important;
-    width: 128px !important;
-    height: 86px !important;
-    border-radius: 10px !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-action-row.core-heist-mobile-buttons {
-    right: max(10px, calc(env(safe-area-inset-right) + 8px)) !important;
-    bottom: calc(max(7px, env(safe-area-inset-bottom)) + 104px) !important;
-    gap: 13px !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-action-btn.core-heist-mobile-action {
-    width: 50px !important;
-    height: 50px !important;
-    font-size: 7px !important;
-  }
-
-  .core-heist-dom-arena.game-arena.is-mobile .mobile-joystick.core-heist-mobile-joystick {
-    width: 78px !important;
-    height: 78px !important;
-    left: max(10px, calc(env(safe-area-inset-left) + 8px)) !important;
-    bottom: max(94px, calc(env(safe-area-inset-bottom) + 86px)) !important;
+/* < 760px non-touch (browser redimensionat pe desktop) */
+@media (max-width: 759px) and (pointer: fine) {
+  .core-heist-status-panel {
+    top: 6px;
+    left: 6px;
+    width: 140px;
+    padding: 8px 10px;
+    border-radius: 10px;
+  }
+  .core-heist-status-panel > strong { font-size: 16px; }
+  .core-heist-energy-row > strong   { font-size: 14px; }
+
+  .core-heist-economy-panel {
+    top: 6px;
+    left: 154px;
+    width: 130px;
+    padding: 8px 10px;
+    border-radius: 10px;
+  }
+  .core-heist-economy-panel > strong { font-size: 16px; }
+
+  .core-heist-team-panel {
+    top: 6px;
+    padding: 4px 10px 5px;
+    gap: 5px;
+  }
+  .core-heist-team-panel strong { font-size: 9px; }
+  .core-heist-team-panel span   { font-size: 7px; }
+
+  .core-heist-match-timer {
+    top: 36px;
+    left: auto;
+    right: 6px;
+    transform: none;
+    min-width: 80px;
+    padding: 4px 9px 5px;
+    border-radius: 9px;
+  }
+  .core-heist-match-timer strong { font-size: 12px; }
+
+  .core-heist-scoreboard {
+    top: 48px;
+    width: min(280px, calc(100vw - 14px));
+    min-height: 40px;
+    grid-template-columns: 1fr 90px 1fr;
+    border-radius: 10px;
+  }
+  .core-heist-score-side        { min-height: 40px; gap: 4px; }
+  .core-heist-score-side span   { font-size: 8px; }
+  .core-heist-score-side strong { font-size: 17px; }
+  .core-heist-score-middle b    { font-size: 8px; }
+  .core-heist-score-middle small{ font-size: 7px; }
+
+  .core-heist-live-event {
+    top: 96px;
+    min-width: 200px;
+    padding: 6px 12px;
+  }
+  .core-heist-live-event strong { font-size: 12px; }
+
+  .core-heist-objective-panel {
+    top: auto;
+    right: 6px;
+    bottom: 120px;
+    transform: none;
+    width: min(180px, calc(100vw - 12px));
+    padding: 9px 12px;
+    border-radius: 10px;
+  }
+  .core-heist-objective-panel b    { font-size: 10px; }
+  .core-heist-objective-panel span { font-size: 9px; }
+
+  .core-heist-dom-arena .real-leaderboard {
+    top: 50px;
+    right: 6px;
+    width: 110px;
+    font-size: 10px;
+  }
+
+  .core-heist-minimap-frame {
+    right: 6px;
+    bottom: 6px;
+    width: 220px;
+    height: 144px;
+  }
+
+  .core-heist-fps {
+    top: 6px;
+    right: 6px;
+    font-size: 11px;
   }
 }
 
 
-
-/* ============================================================================
-   CORE HEIST V3 — SINGLE SOURCE OF TRUTH FOR MOBILE CONTROLS
-   This section MUST remain the final CSS section in this file.
-
-   It intentionally uses the extra .core-heist-mobile-layout-v3 class from
-   CoreHeistArena.jsx. It therefore wins over both GameArena.css and every old
-   Core Heist responsive block above.
-
-   MANUAL CONTROLS:
-   - To raise joystick more: increase --heist-joystick-bottom.
-   - To make map bigger: increase --heist-map-width / --heist-map-height.
-   - To increase clear space above map: increase --heist-map-to-buttons-gap.
-============================================================================ */
-.core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile {
-  --heist-mobile-safe-bottom: max(8px, env(safe-area-inset-bottom));
-  --heist-map-to-buttons-gap: 80px;
+/* ─────────────── ROLE REVEAL — cinematic, pointer-transparent ─────────────── */
+.core-heist-dom-arena .core-heist-role-reveal {
+  --role-accent: #46eaff;
+  --role-soft: rgba(70, 234, 255, 0.28);
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  z-index: 460;
+  width: min(570px, calc(100vw - 42px));
+  transform: translate(-50%, -50%);
+  padding: 26px 34px 23px;
+  overflow: hidden;
+  border: 1px solid var(--role-soft);
+  border-radius: 26px;
+  background:
+    radial-gradient(circle at 50% 0%, var(--role-soft), transparent 56%),
+    linear-gradient(145deg, rgba(7, 18, 37, 0.97), rgba(2, 8, 20, 0.95));
+  box-shadow: 0 22px 80px rgba(0,0,0,0.48), 0 0 38px var(--role-soft);
+  text-align: center;
+  pointer-events: none;
+  animation: core-heist-role-reveal-in .34s cubic-bezier(.2,.9,.2,1) both;
 }
-
-/* -------------------------------------------------------------------------- */
-/* Portrait phone / portrait tablet.                                          */
-/* Map is physically at the bottom-right. Buttons are above it. Joystick is   */
-/* deliberately much higher in its own left lane.                             */
-/* -------------------------------------------------------------------------- */
-@media (hover: none) and (pointer: coarse) and (orientation: portrait) {
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile {
-    --heist-map-width: clamp(164px, 42vw, 224px);
-    --heist-map-height: clamp(116px, 29vw, 154px);
-    --heist-joystick-bottom: clamp(230px, 35vh, 200px);
-  }
-
-  /* GameArena hides the map in mobile-landscape. Core Heist explicitly keeps
-     every map layer alive and visible in this mode. */
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .core-heist-minimap-frame,
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .core-heist-minimap-frame .minimap,
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .core-heist-minimap-frame .minimap-title,
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .core-heist-minimap-frame .minimap-map-area,
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .core-heist-minimap-frame .minimap-player-drone,
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .core-heist-minimap-frame .mini-drone-arm {
-    display: block !important;
-    visibility: visible !important;
-    opacity: 1 !important;
-  }
-
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .core-heist-minimap-frame .minimap {
-    position: fixed !important;
-    right: max(10px, calc(env(safe-area-inset-right) + 8px)) !important;
-    bottom: var(--heist-mobile-safe-bottom) !important;
-    left: auto !important;
-    top: auto !important;
-    width: var(--heist-map-width) !important;
-    height: var(--heist-map-height) !important;
-    z-index: 420 !important;
-    overflow: hidden !important;
-    border-radius: 14px !important;
-    border: 1px solid rgba(0, 234, 255, 0.46) !important;
-    background: rgba(2, 11, 24, 0.92) !important;
-    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42), 0 0 18px rgba(0, 234, 255, 0.16) !important;
-  }
-
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .core-heist-minimap-frame .minimap-title {
-    top: 8px !important;
-    left: 10px !important;
-    font-size: 8px !important;
-    letter-spacing: 1.1px !important;
-  }
-
-  /* Shield + Attack share one row, completely above the map, with a real gap. */
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .mobile-action-row.core-heist-mobile-buttons {
-    position: fixed !important;
-    right: max(12px, calc(env(safe-area-inset-right) + 10px)) !important;
-    bottom: calc(
-      var(--heist-mobile-safe-bottom) +
-      var(--heist-map-height) +
-      var(--heist-map-to-buttons-gap)
-    ) !important;
-    left: auto !important;
-    top: auto !important;
-    width: auto !important;
-    display: flex !important;
-    flex-direction: row !important;
-    align-items: center !important;
-    justify-content: flex-end !important;
-    gap: 16px !important;
-    z-index: 440 !important;
-    pointer-events: none !important;
-    transform: none !important;
-  }
-
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .mobile-action-btn.core-heist-mobile-action {
-    width: clamp(60px, 15vw, 82px) !important;
-    height: clamp(60px, 15vw, 82px) !important;
-    display: grid !important;
-    place-items: center !important;
-    padding: 0 !important;
-    font-size: clamp(7px, 1.9vw, 10px) !important;
-    z-index: 441 !important;
-  }
-
-  /* Deliberately independent from the map: this is the manual vertical lift. */
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .mobile-joystick.core-heist-mobile-joystick {
-    position: fixed !important;
-    left: max(14px, calc(env(safe-area-inset-left) + 10px)) !important;
-    right: auto !important;
-    bottom: var(--heist-joystick-bottom) !important;
-    top: auto !important;
-    width: clamp(92px, 23vw, 132px) !important;
-    height: clamp(92px, 23vw, 132px) !important;
-    z-index: 440 !important;
-  }
-
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .core-heist-exit-btn {
-    bottom: max(2630px, calc(env(safe-area-inset-bottom) + 6px)) !important;
-    z-index: 450 !important;
-  }
+.core-heist-dom-arena .core-heist-role-reveal::before,
+.core-heist-dom-arena .core-heist-role-reveal::after {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 19px;
+  pointer-events: none;
 }
-
-/* -------------------------------------------------------------------------- */
-/* Landscape phone / landscape tablet. The same order is preserved, but the   */
-/* values are shorter so the controls fit the lower available height.         */
-/* -------------------------------------------------------------------------- */
-@media (hover: none) and (pointer: coarse) and (orientation: landscape) {
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile {
-    --heist-map-width: clamp(146px, 27vw, 194px);
-    --heist-map-height: clamp(96px, 18vw, 126px);
-    --heist-joystick-bottom: clamp(132px, 33vh, 188px);
-    --heist-map-to-buttons-gap: 22px;
-  }
-
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .core-heist-minimap-frame,
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .core-heist-minimap-frame .minimap,
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .core-heist-minimap-frame .minimap-title,
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .core-heist-minimap-frame .minimap-map-area,
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .core-heist-minimap-frame .minimap-player-drone,
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .core-heist-minimap-frame .mini-drone-arm {
-    display: block !important;
-    visibility: visible !important;
-    opacity: 1 !important;
-  }
-
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .core-heist-minimap-frame .minimap {
-    position: fixed !important;
-    right: max(9px, calc(env(safe-area-inset-right) + 7px)) !important;
-    bottom: var(--heist-mobile-safe-bottom) !important;
-    left: auto !important;
-    top: auto !important;
-    width: var(--heist-map-width) !important;
-    height: var(--heist-map-height) !important;
-    z-index: 420 !important;
-    display: block !important;
-    visibility: visible !important;
-    opacity: 1 !important;
-    overflow: hidden !important;
-    border-radius: 12px !important;
-  }
-
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .mobile-action-row.core-heist-mobile-buttons {
-    position: fixed !important;
-    right: max(11px, calc(env(safe-area-inset-right) + 9px)) !important;
-    bottom: calc(
-      var(--heist-mobile-safe-bottom) +
-      var(--heist-map-height) +
-      var(--heist-map-to-buttons-gap)
-    ) !important;
-    left: auto !important;
-    top: auto !important;
-    display: flex !important;
-    flex-direction: row !important;
-    align-items: center !important;
-    gap: 13px !important;
-    z-index: 440 !important;
-    transform: none !important;
-  }
-
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .mobile-action-btn.core-heist-mobile-action {
-    width: clamp(52px, 10vw, 68px) !important;
-    height: clamp(52px, 10vw, 68px) !important;
-    font-size: clamp(7px, 1.25vw, 9px) !important;
-  }
-
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile .mobile-joystick.core-heist-mobile-joystick {
-    position: fixed !important;
-    left: max(12px, calc(env(safe-area-inset-left) + 9px)) !important;
-    right: auto !important;
-    bottom: var(--heist-joystick-bottom) !important;
-    top: auto !important;
-    width: clamp(78px, 15vw, 102px) !important;
-    height: clamp(78px, 15vw, 102px) !important;
-    z-index: 440 !important;
-  }
+.core-heist-dom-arena .core-heist-role-reveal::after {
+  inset: auto -20% -70% -20%;
+  height: 180px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, var(--role-soft), transparent 66%);
+  border: 0;
 }
-
-/* The shortest landscape devices keep the same hierarchy, only reduce sizes. */
-@media (hover: none) and (pointer: coarse) and (orientation: landscape) and (max-height: 430px) {
-  .core-heist-dom-arena.core-heist-mobile-layout-v3.game-arena.is-mobile {
-    --heist-map-width: 150px;
-    --heist-map-height: 98px;
-    --heist-joystick-bottom: 126px;
-    --heist-map-to-buttons-gap: 20px;
-  }
+.core-heist-dom-arena .core-heist-role-reveal.accent-defender { --role-accent: #70d8ff; --role-soft: rgba(82, 196, 255, 0.32); }
+.core-heist-dom-arena .core-heist-role-reveal.accent-tank { --role-accent: #ffbc72; --role-soft: rgba(255, 151, 72, 0.31); }
+.core-heist-dom-arena .core-heist-role-reveal > * { position: relative; z-index: 1; }
+.core-heist-dom-arena .core-heist-role-reveal span { display:block; color:rgba(235,249,255,.74); font-size:11px; font-weight:900; letter-spacing:2.8px; }
+.core-heist-dom-arena .core-heist-role-reveal strong { display:block; margin-top:9px; color:#fff; font-size:clamp(17px,2.2vw,26px); font-weight:900; letter-spacing:1.65px; }
+.core-heist-dom-arena .core-heist-role-reveal b { display:block; margin-top:8px; color:var(--role-accent); font-size:clamp(36px,4vw,58px); line-height:.98; font-weight:1000; letter-spacing:2px; text-shadow:0 0 22px var(--role-soft); }
+.core-heist-dom-arena .core-heist-role-reveal small { display:block; max-width:460px; margin:11px auto 0; color:rgba(232,246,255,.88); font-size:13px; line-height:1.45; }
+.core-heist-dom-arena .core-heist-role-reveal em { display:inline-grid; place-items:center; width:34px; height:34px; margin-top:14px; border:1px solid var(--role-soft); border-radius:50%; color:#fff; font-size:15px; font-style:normal; font-weight:900; background:rgba(255,255,255,.04); }
+.core-heist-dom-arena .core-heist-role-reveal-sigil { display:flex; justify-content:center; align-items:center; gap:9px; height:46px; margin:0 auto 4px; }
+.core-heist-dom-arena .core-heist-role-reveal-sigil i { display:block; width:14px; height:14px; border:2px solid var(--role-accent); border-radius:50%; box-shadow:0 0 12px var(--role-soft); animation:core-heist-role-sigil 1.05s ease-in-out infinite; }
+.core-heist-dom-arena .core-heist-role-reveal-sigil i:nth-child(2) { transform:translateY(-9px); animation-delay:.14s; }
+.core-heist-dom-arena .core-heist-role-reveal-sigil i:nth-child(3) { animation-delay:.28s; }
+@keyframes core-heist-role-reveal-in { from { opacity:0; transform:translate(-50%, calc(-50% + 20px)) scale(.94); } to { opacity:1; transform:translate(-50%,-50%) scale(1); } }
+@keyframes core-heist-role-sigil { 50% { transform:translateY(-4px) scale(1.18); opacity:.62; } }
+@media (hover:none) and (pointer:coarse) {
+  .core-heist-dom-arena .core-heist-role-reveal { width:calc(100vw - 28px); padding:19px 17px 17px; border-radius:20px; }
+  .core-heist-dom-arena .core-heist-role-reveal span { font-size:9px; letter-spacing:2px; }
+  .core-heist-dom-arena .core-heist-role-reveal strong { font-size:15px; }
+  .core-heist-dom-arena .core-heist-role-reveal b { font-size:31px; }
+  .core-heist-dom-arena .core-heist-role-reveal small { font-size:11px; }
 }

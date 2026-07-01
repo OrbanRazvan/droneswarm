@@ -75,6 +75,8 @@ const PROJECTILE_HIT_VISUAL_RADIUS = 118;
 const LOCAL_PROJECTILE_SPEED = 4.4;
 const FIRE_COOLDOWN = 3000;
 const BATTLE_PREPARE_DURATION = 20000; // 20-second economy phase before combat.
+const CORE_HEIST_ROLE_REVEAL_DURATION = 5000;
+const CORE_HEIST_OPENING_LOCK_DURATION = BATTLE_PREPARE_DURATION + CORE_HEIST_ROLE_REVEAL_DURATION;
 const ORB_STABLE_TTL = 2400;
 const MINIMAP_STABLE_TTL = 8000;
 
@@ -155,6 +157,12 @@ const DRONE_SKIN_THEMES = {
   "bronze-steel": ["#b87333", "#d1d5db", "#2b1605", "#fff7ed", "rgba(184, 115, 51, 0.72)"],
   "electric-indigo": ["#4f46e5", "#93c5fd", "#0b102f", "#eef2ff", "rgba(79, 70, 229, 0.82)"],
   "dark-emerald": ["#047857", "#34d399", "#001f16", "#d1fae5", "rgba(4, 120, 87, 0.82)"],
+  "heist-attacker-cyan": ["#00eaff", "#7cf8ff", "#002f44", "#ffffff", "rgba(0, 234, 255, 0.8)"],
+  "heist-defender-cyan": ["#38bdf8", "#d9f6ff", "#07273d", "#ffffff", "rgba(56, 189, 248, 0.82)"],
+  "heist-tank-cyan": ["#0ea5e9", "#8bd9ff", "#082032", "#ffffff", "rgba(14, 165, 233, 0.82)"],
+  "heist-attacker-orange": ["#ff6b4a", "#ffd0c2", "#3a0d00", "#fff7f2", "rgba(255, 107, 74, 0.82)"],
+  "heist-defender-orange": ["#ff4d5f", "#ffc3ca", "#35030f", "#fff5f6", "rgba(255, 77, 95, 0.82)"],
+  "heist-tank-orange": ["#ff8c42", "#ffd6a8", "#3a1800", "#fff7ed", "rgba(255, 140, 66, 0.82)"],
 };
 
 function normalizeSkin(skin) {
@@ -171,6 +179,27 @@ function getSelectedSkin(user) {
 function getDisplayName(user) {
   return user?.username || user?.firstName || user?.email?.split("@")?.[0] || "Player";
 }
+
+const CORE_HEIST_ROLE_META = {
+  attacker: {
+    label: "ATTACKER",
+    title: "ASSAULT DRONE",
+    accent: "attacker",
+    short: "Break lanes, pressure carriers and steal the enemy flag.",
+  },
+  defender: {
+    label: "DEFENDER",
+    title: "SHIELD DEFENDER",
+    accent: "defender",
+    short: "Guardian Matrix: protect the base and regenerate near your own flag.",
+  },
+  tank: {
+    label: "TANK",
+    title: "SIEGE TANK",
+    accent: "tank",
+    short: "Heavy frontline chassis with 150 HP and an integrated cannon.",
+  },
+};
 
 // Guest-ul nu are GameUser/Player în PostgreSQL. Această cheie anonimă este
 // însă stabilă pe durata browserului și leagă recordul lui de Top 10 global.
@@ -694,8 +723,13 @@ function projectileHitsAnyTarget(projectile, targets = []) {
   return false;
 }
 
+function canCoreHeistTankFireWithoutEscort(unit) {
+  return String(unit?.heistRole || "").trim().toLowerCase() === "tank";
+}
+
 function createLocalProjectile(unit, mouseWorldX, mouseWorldY, now, fallbackSkin = "cyan") {
-  if (!unit || unit.alive === false || (unit.drones || 0) <= 0) return null;
+  const hasEscortDrone = Number(unit?.drones || 0) > 0;
+  if (!unit || unit.alive === false || (!hasEscortDrone && !canCoreHeistTankFireWithoutEscort(unit))) return null;
 
   const angle = Math.atan2(mouseWorldY - unit.y, mouseWorldX - unit.x);
   const speed = getLocalProjectileSpeed(unit);
@@ -1223,7 +1257,7 @@ function getBattlePrepareRemainingMs(data = {}) {
 
   const matchStartedAt = Number(data.matchStartedAt);
   if (Number.isFinite(matchStartedAt) && matchStartedAt > 0) {
-    return Math.max(0, BATTLE_PREPARE_DURATION - (Date.now() - matchStartedAt));
+    return Math.max(0, CORE_HEIST_OPENING_LOCK_DURATION - (Date.now() - matchStartedAt));
   }
 
   return 0;
@@ -1231,6 +1265,23 @@ function getBattlePrepareRemainingMs(data = {}) {
 
 function isBattlePrepareLocked(data = {}) {
   return getBattlePrepareRemainingMs(data) > 0;
+}
+
+function getCoreHeistRoleRevealRemainingMs(data = {}) {
+  const explicitRemaining = Number(data?.heistRoleRevealRemainingMs);
+  if (Number.isFinite(explicitRemaining) && explicitRemaining > 0) return explicitRemaining;
+
+  const revealUntil = Number(data?.heistRoleRevealUntil);
+  return Number.isFinite(revealUntil) && revealUntil > 0
+    ? Math.max(0, revealUntil - Date.now())
+    : 0;
+}
+
+function isCoreHeistRoleRevealLocked(data = {}) {
+  return (
+    String(data?.mode || "") === "core-heist" &&
+    getCoreHeistRoleRevealRemainingMs(data) > 0
+  );
 }
 
 function getBattleBeginFlashActive(data = {}) {
@@ -2205,13 +2256,13 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
             ? Number(state.battleBeginFlashUntil)
             : localBattlePrepareUntilRef.current + 1800;
         } else if (state.matchStartedAt) {
-          const localPrepareUntil = Number(state.matchStartedAt) + BATTLE_PREPARE_DURATION;
+          const localPrepareUntil = Number(state.matchStartedAt) + CORE_HEIST_OPENING_LOCK_DURATION;
           if (localPrepareUntil > nowWall) {
             localBattlePrepareUntilRef.current = Math.max(localBattlePrepareUntilRef.current || 0, localPrepareUntil);
             localBattleBeginFlashUntilRef.current = Math.max(localBattleBeginFlashUntilRef.current || 0, localPrepareUntil + 1800);
           }
         } else if (lastArenaStatusRef.current !== "playing" && !localBattlePrepareUntilRef.current) {
-          localBattlePrepareUntilRef.current = nowWall + BATTLE_PREPARE_DURATION;
+          localBattlePrepareUntilRef.current = nowWall + CORE_HEIST_OPENING_LOCK_DURATION;
           localBattleBeginFlashUntilRef.current = localBattlePrepareUntilRef.current + 1800;
         }
       } else if (state?.status === "waiting" || state?.status === "countdown") {
@@ -3099,22 +3150,26 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const mouse = mouseRef.current;
       const mouseWorldX = you ? you.x + (mouse.x - window.innerWidth / 2) : 0;
       const mouseWorldY = you ? you.y + (mouse.y - window.innerHeight / 2) : 0;
-      const mobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
+      const rawMobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
       const battleLocked = isBattlePrepareLocked(worldRef.current);
+      const roleRevealLocked = isCoreHeistRoleRevealLocked(worldRef.current);
+      const mobileMove = roleRevealLocked
+        ? { x: 0, y: 0, active: false }
+        : rawMobileMove;
 
       const input = {
         seq: inputSeqRef.current + 1,
         dt: Math.min(50, Math.max(1, elapsed)),
         clientSentAt: now,
-        w: Boolean(keysRef.current.w || keysRef.current.arrowup || (mobileMove.active && mobileMove.y < -0.22)),
-        a: Boolean(keysRef.current.a || keysRef.current.arrowleft || (mobileMove.active && mobileMove.x < -0.22)),
-        s: Boolean(keysRef.current.s || keysRef.current.arrowdown || (mobileMove.active && mobileMove.y > 0.22)),
-        d: Boolean(keysRef.current.d || keysRef.current.arrowright || (mobileMove.active && mobileMove.x > 0.22)),
+        w: !roleRevealLocked && Boolean(keysRef.current.w || keysRef.current.arrowup || (mobileMove.active && mobileMove.y < -0.22)),
+        a: !roleRevealLocked && Boolean(keysRef.current.a || keysRef.current.arrowleft || (mobileMove.active && mobileMove.x < -0.22)),
+        s: !roleRevealLocked && Boolean(keysRef.current.s || keysRef.current.arrowdown || (mobileMove.active && mobileMove.y > 0.22)),
+        d: !roleRevealLocked && Boolean(keysRef.current.d || keysRef.current.arrowright || (mobileMove.active && mobileMove.x > 0.22)),
         moveX: mobileMove.active ? mobileMove.x : 0,
         moveY: mobileMove.active ? mobileMove.y : 0,
         mobileMove: Boolean(mobileMove.active),
-        attacking: !battleLocked && Boolean(keysRef.current.mouseDown),
-        shield: !battleLocked && Boolean(keysRef.current.rightMouseDown),
+        attacking: !battleLocked && !roleRevealLocked && Boolean(keysRef.current.mouseDown),
+        shield: !battleLocked && !roleRevealLocked && Boolean(keysRef.current.rightMouseDown),
         mouseX: mouseWorldX,
         mouseY: mouseWorldY,
       };
@@ -3376,17 +3431,21 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       if (data.you) {
         const current = predictedYouRef.current || { ...data.you };
-        const mobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
+        const rawMobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
+        const roleRevealLocked = isCoreHeistRoleRevealLocked(data);
+        const mobileMove = roleRevealLocked
+          ? { x: 0, y: 0, active: false }
+          : rawMobileMove;
         const input = {
-          w: Boolean(keysRef.current.w || keysRef.current.arrowup || (mobileMove.active && mobileMove.y < -0.22)),
-          a: Boolean(keysRef.current.a || keysRef.current.arrowleft || (mobileMove.active && mobileMove.x < -0.22)),
-          s: Boolean(keysRef.current.s || keysRef.current.arrowdown || (mobileMove.active && mobileMove.y > 0.22)),
-          d: Boolean(keysRef.current.d || keysRef.current.arrowright || (mobileMove.active && mobileMove.x > 0.22)),
+          w: !roleRevealLocked && Boolean(keysRef.current.w || keysRef.current.arrowup || (mobileMove.active && mobileMove.y < -0.22)),
+          a: !roleRevealLocked && Boolean(keysRef.current.a || keysRef.current.arrowleft || (mobileMove.active && mobileMove.x < -0.22)),
+          s: !roleRevealLocked && Boolean(keysRef.current.s || keysRef.current.arrowdown || (mobileMove.active && mobileMove.y > 0.22)),
+          d: !roleRevealLocked && Boolean(keysRef.current.d || keysRef.current.arrowright || (mobileMove.active && mobileMove.x > 0.22)),
           moveX: mobileMove.active ? mobileMove.x : 0,
           moveY: mobileMove.active ? mobileMove.y : 0,
           mobileMove: Boolean(mobileMove.active),
-          attacking: !isBattlePrepareLocked(worldRef.current) && Boolean(keysRef.current.mouseDown),
-          shield: !isBattlePrepareLocked(worldRef.current) && Boolean(keysRef.current.rightMouseDown),
+          attacking: !roleRevealLocked && !isBattlePrepareLocked(worldRef.current) && Boolean(keysRef.current.mouseDown),
+          shield: !roleRevealLocked && !isBattlePrepareLocked(worldRef.current) && Boolean(keysRef.current.rightMouseDown),
           mouseX: current.x + (mouseRef.current.x - window.innerWidth / 2),
           mouseY: current.y + (mouseRef.current.y - window.innerHeight / 2),
         };
@@ -3419,7 +3478,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           !isBattlePrepareLocked(data) &&
           wantsToAttack &&
           predicted?.alive !== false &&
-          (predicted?.drones || 0) > 0 &&
+          (Number(predicted?.drones || 0) > 0 || canCoreHeistTankFireWithoutEscort(predicted)) &&
           now - lastLocalProjectileAtRef.current >= localCooldown
         ) {
           const mouseWorldX = predicted.x + (mouseRef.current.x - window.innerWidth / 2);
@@ -3609,11 +3668,13 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const liveCameraY = liveCameraSubject ? viewport.height / 2 - liveCameraSubject.y * liveCameraScale : 0;
 
       const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 980, liveCameraScale);
+      // Core Heist has a denser server economy. These are render caps only:
+      // the server remains authoritative for every orb and energy cell.
       const renderLimits = mobilePerformanceRef.current
-        ? { detailed: 6, total: 60, orbs: 42, energy: 14, cores: 4, projectiles: 5, simpleProjectiles: 30 }
+        ? { detailed: 6, total: 60, orbs: 56, energy: 20, cores: 4, projectiles: 5, simpleProjectiles: 30 }
         : constrainedDesktopRef.current
-          ? { detailed: 7, total: 60, orbs: 72, energy: 26, cores: 6, projectiles: 10, simpleProjectiles: 34 }
-          : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
+          ? { detailed: 7, total: 60, orbs: 96, energy: 34, cores: 6, projectiles: 10, simpleProjectiles: 34 }
+          : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 220, energy: 78, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
       // Map insertion order is not distance order. On a good desktop we keep
       // the existing per-frame sort. On a weak desktop, only the *membership*
@@ -4151,10 +4212,10 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y * cameraScale : 0;
   const bounds = getViewportBounds(cameraX, cameraY, viewport, 720, cameraScale);
   const reactiveRenderLimits = isMobileControls
-    ? { detailed: 6, total: 50, orbs: 48, energy: 16, cores: 4, projectiles: 5, simpleProjectiles: 26 }
+    ? { detailed: 6, total: 50, orbs: 64, energy: 22, cores: 4, projectiles: 5, simpleProjectiles: 26 }
     : constrainedDesktopRef.current
-      ? { detailed: 10, total: 60, orbs: 96, energy: 34, cores: 7, projectiles: 14, simpleProjectiles: 42 }
-      : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 140, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
+      ? { detailed: 10, total: 60, orbs: 124, energy: 44, cores: 7, projectiles: 14, simpleProjectiles: 42 }
+      : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 220, energy: 78, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
   const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), reactiveRenderLimits.orbs);
   const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), reactiveRenderLimits.energy);
@@ -4286,7 +4347,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const until = Date.now() + 1600;
       localBattleBeginFlashUntilRef.current = until;
       setBattleBeginFlashUntil(until);
-    }, Math.max(60, Math.min(BATTLE_PREPARE_DURATION + 250, battlePrepareRemainingMs + 40)));
+    }, Math.max(60, Math.min(CORE_HEIST_OPENING_LOCK_DURATION + 250, battlePrepareRemainingMs + 40)));
 
     return () => {
       if (battleBeginTimerRef.current) {
@@ -4401,6 +4462,31 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const respawnSeconds = Math.max(0, Math.ceil(respawnRemainingMs / 1000));
   const heistDeaths = Math.max(0, Number(hudYou?.heistDeaths || renderData.you?.heistDeaths || 0));
   const heistPermanentElimination = Boolean(hudYou?.heistPermanentElimination || renderData.you?.heistPermanentElimination);
+  const heistRole = String(hudYou?.heistRole || renderData.you?.heistRole || "attacker");
+  const heistRoleMeta = CORE_HEIST_ROLE_META[heistRole] || CORE_HEIST_ROLE_META.attacker;
+  const heistRoleRevealUntil = Math.max(
+    Number(hudData?.heistRoleRevealUntil || 0),
+    Number(renderData?.heistRoleRevealUntil || 0),
+  );
+  const heistRoleRevealRemainingMs = Math.max(
+    0,
+    Number(hudData?.heistRoleRevealRemainingMs || 0),
+    Number(renderData?.heistRoleRevealRemainingMs || 0),
+    heistRoleRevealUntil > 0 ? heistRoleRevealUntil - Date.now() : 0,
+  );
+  const showHeistRoleReveal =
+    status === "playing" &&
+    !isFinished &&
+    !isMatchmaking &&
+    heistRoleRevealRemainingMs > 0 &&
+    Boolean(hudYou?.id || renderData?.you?.id);
+  const heistRoleRevealSeconds = Math.max(0, Math.ceil(heistRoleRevealRemainingMs / 1000));
+  const [, setRoleRevealPaint] = useState(0);
+  useEffect(() => {
+    if (!showHeistRoleReveal) return undefined;
+    const timer = window.setInterval(() => setRoleRevealPaint((value) => value + 1), 80);
+    return () => window.clearInterval(timer);
+  }, [showHeistRoleReveal]);
 
   // Bazele sunt repere permanente pe mini-map. `isOwnBase` decide culoarea:
   // baza ta este albastra, iar baza echipei adverse este rosie.
@@ -4428,17 +4514,21 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       });
   }, [heist?.bases, heistTeam]);
 
-  const heistMiniMapCores = heistFlags
-    .filter((flag) => ["home", "dropped", "carried"].includes(String(flag?.status || "")))
-    .map((flag) => ({
-      id: `ctf-${flag.id || flag.team}`,
-      x: Number(flag.x || 0),
-      y: Number(flag.y || 0),
-      type: String(flag?.team || "cyan") === "orange" ? "berserk" : "nano",
-    }));
+  const heistMiniMapFlags = useMemo(() => {
+    return heistFlags
+      .filter((flag) => flag && ["home", "dropped", "carried"].includes(String(flag?.status || "")))
+      .map((flag) => ({
+        id: `heist-flag-${String(flag.id || flag.team)}`,
+        team: String(flag?.team || "cyan"),
+        x: Number(flag?.x || 0),
+        y: Number(flag?.y || 0),
+        status: String(flag?.status || "home"),
+        isOwnFlag: String(flag?.team || "cyan") === heistTeam,
+      }));
+  }, [heistFlags, heistTeam]);
 
   return (
-    <div className={`game-arena core-heist-dom-arena core-heist-mobile-layout-v3 ${isMobileControls ? `is-mobile is-mobile-device ${viewport.width > viewport.height ? "is-mobile-landscape" : "is-mobile-portrait"}` : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""} ${isBattlePrepare ? "is-battle-prepare" : ""}`}>
+    <div className={`game-arena core-heist-dom-arena ${isMobileControls ? `is-mobile is-mobile-device ${viewport.width > viewport.height ? "is-mobile-landscape" : "is-mobile-portrait"}` : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""} ${isBattlePrepare ? "is-battle-prepare" : ""}`}>
       {isMatchmaking && !connectionError && (
         <div className="core-heist-matchmaking-screen">
           <div className="core-heist-matchmaking-card">
@@ -4544,7 +4634,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       </div>
 
       <div className="core-heist-team-panel">
-        <strong>{teamLabel} TEAM</strong>
+        <strong>{teamLabel} TEAM · {heistRoleMeta.label}</strong>
         <span>{playersAlive} DRONES ONLINE · {Math.max(0, 2 - heistDeaths)} LIVES LEFT · MAX {maxPlayers}</span>
       </div>
 
@@ -4591,41 +4681,38 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         </div>
       )}
 
-      <div className="core-heist-objective-panel">
-        <b>
-          {carriedFlag
-            ? `YOU CARRY THE ${String(carriedFlag.team) === "orange" ? "RED" : "BLUE"} FLAG`
-            : enemyFlag?.status === "carried"
-              ? `${enemyTeamLabel} FLAG CARRIER MARKED`
-              : ownFlag?.status === "carried"
-                ? `YOUR ${teamLabel} FLAG WAS STOLEN`
-                : ownFlag?.status === "dropped"
-                  ? `RETURN YOUR ${teamLabel} FLAG`
-                  : `STEAL THE ${enemyTeamLabel} FLAG`}
-        </b>
-        <span>
-          {carriedFlag
-            ? `Take it inside the ${teamLabel} base perimeter to score.`
-            : "Farm orbs for escort drones. Combat unlocks after the 20-second prepare phase."}
-        </span>
-      </div>
-
       {cameraSubject && (
-        <div className="mobile-minimap-frame core-heist-minimap-frame" aria-label="World map">
+        <div className="core-heist-minimap-frame" aria-label="World map">
           <MiniMap
             player={cameraSubject}
             worldWidth={worldWidth}
             worldHeight={worldHeight}
             orbs={renderData.minimapOrbs || []}
-            cores={[...(renderData.minimapCores || renderData.cores || []), ...heistMiniMapCores]}
+            cores={renderData.minimapCores || renderData.cores || []}
             safeZoneRadius={null}
             players={renderData.players || []}
             bases={heistMiniMapBases}
+            flags={heistMiniMapFlags}
           />
         </div>
       )}
 
-      {isBattlePrepare && (
+      {showHeistRoleReveal && (
+        <div
+          className={`core-heist-role-reveal accent-${heistRoleMeta.accent}`}
+          role="status"
+          aria-live="assertive"
+        >
+          <div className="core-heist-role-reveal-sigil" aria-hidden="true"><i /><i /><i /></div>
+          <span>TACTICAL ROLE ASSIGNED</span>
+          <strong>{heistRoleMeta.title}</strong>
+          <b>{heistRoleMeta.label}</b>
+          <small>{heistRoleMeta.short}</small>
+          <em>{heistRoleRevealSeconds}s</em>
+        </div>
+      )}
+
+      {isBattlePrepare && !showHeistRoleReveal && (
         <div className="core-heist-peace-countdown">
           <strong>PREPARE PHASE</strong>
           <b>{battlePrepareSeconds}s</b>
@@ -4664,28 +4751,28 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       )}
 
       {isMobileControls && !isDead && !isMatchmaking && (
-      <div className="mobile-controls core-heist-mobile-controls" aria-label="Mobile PvP controls">
+      <div className="core-heist-mobile-controls" aria-label="Mobile PvP controls">
         <div
-          className={`mobile-joystick core-heist-mobile-joystick ${mobileJoystick.active ? "is-active" : ""}`}
+          className={`core-heist-mobile-joystick ${mobileJoystick.active ? "is-active" : ""}`}
           onPointerDown={onJoystickPointerDown}
           onPointerMove={onJoystickPointerMove}
           onPointerUp={stopJoystick}
           onPointerCancel={stopJoystick}
         >
-          <div className="mobile-joystick-ring core-heist-mobile-joystick-ring" />
+          <div className="core-heist-mobile-joystick-ring" />
           <div
             ref={joystickKnobRef}
-            className="mobile-joystick-knob core-heist-mobile-joystick-knob"
+            className="core-heist-mobile-joystick-knob"
             style={{
               transform: `translate(calc(-50% + ${mobileJoystick.knobX}px), calc(-50% + ${mobileJoystick.knobY}px))`,
             }}
           />
         </div>
 
-        <div className="mobile-action-row core-heist-mobile-buttons">
+        <div className="core-heist-mobile-buttons">
           <button
             type="button"
-            className={`mobile-action-btn mobile-shield-btn core-heist-mobile-action core-heist-mobile-shield ${mobileShieldActive ? "is-active" : ""} ${isBattlePrepare ? "is-locked" : ""}`}
+            className={`core-heist-mobile-action core-heist-mobile-shield ${mobileShieldActive ? "is-active" : ""} ${isBattlePrepare ? "is-locked" : ""}`}
             onPointerDown={onShieldPointerDown}
             onPointerUp={stopMobileShield}
             onPointerCancel={stopMobileShield}
@@ -4695,7 +4782,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
           <button
             type="button"
-            className={`mobile-action-btn mobile-attack-btn core-heist-mobile-action core-heist-mobile-attack ${mobileAttackActive ? "is-active" : ""} ${isBattlePrepare ? "is-locked" : ""}`}
+            className={`core-heist-mobile-action core-heist-mobile-attack ${mobileAttackActive ? "is-active" : ""} ${isBattlePrepare ? "is-locked" : ""}`}
             onPointerDown={onAttackPointerDown}
             onPointerMove={onAttackPointerMove}
             onPointerUp={stopMobileAttack}
