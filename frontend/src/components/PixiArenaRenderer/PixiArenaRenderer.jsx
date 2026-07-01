@@ -801,6 +801,83 @@ function getCoreHeistTeamMarker(unit) {
   return null;
 }
 
+function getCoreHeistRoleLabel(unit) {
+  const role = String(unit?.heistRole || "").trim().toLowerCase();
+  if (role === "tank") return "TANK";
+  if (role === "defender") return "DEFENDER";
+  if (role === "attacker") return "ATTACKER";
+
+  const skin = String(unit?.skin || "").trim().toLowerCase();
+  if (skin.includes("heist-tank-")) return "TANK";
+  if (skin.includes("heist-defender-")) return "DEFENDER";
+  if (skin.includes("heist-attacker-")) return "ATTACKER";
+  return "";
+}
+
+function createTacticalRoleOverlay(compact = false) {
+  const root = new PIXI.Container();
+  root.eventMode = "none";
+  root.visible = false;
+
+  const textStyle = new PIXI.TextStyle({
+    fontFamily: "Arial, Helvetica, sans-serif",
+    fontSize: compact ? 9 : 12,
+    fontWeight: "800",
+    letterSpacing: compact ? 0.45 : 0.65,
+    fill: 0xffffff,
+    stroke: { color: 0x020912, width: compact ? 2.4 : 3.2, join: "round" },
+  });
+  const roleText = new PIXI.Text({ text: "", style: textStyle });
+  roleText.anchor.set(0.5, 0.5);
+  roleText.eventMode = "none";
+
+  const labelWidth = compact ? 66 : 86;
+  const labelHeight = compact ? 13 : 16;
+  const labelBack = new PIXI.Graphics();
+  labelBack.roundRect(-labelWidth / 2, -labelHeight / 2, labelWidth, labelHeight, labelHeight / 2)
+    .fill({ color: 0x020a12, alpha: 0.92 });
+  labelBack.eventMode = "none";
+
+  const hpWidth = compact ? 34 : 46;
+  const hpY = labelHeight / 2 + (compact ? 3 : 4);
+  const hpBack = new PIXI.Graphics();
+  hpBack.roundRect(-hpWidth / 2 - 1.5, hpY - 1.5, hpWidth + 3, compact ? 6 : 7, compact ? 3 : 3.5)
+    .fill({ color: 0x020811, alpha: 0.96 });
+  hpBack.eventMode = "none";
+
+  const hpFill = new PIXI.Graphics();
+  hpFill.position.set(-hpWidth / 2, hpY);
+  hpFill.roundRect(0, 0, hpWidth, compact ? 3 : 4, compact ? 1.5 : 2)
+    .fill({ color: 0x62ff9c, alpha: 0.98 });
+  hpFill.eventMode = "none";
+
+  root.addChild(labelBack, roleText, hpBack, hpFill);
+  return { root, roleText, hpFill, label: "", team: null };
+}
+
+function updateTacticalRoleOverlay(overlay, unit, teamMarker) {
+  if (!overlay) return;
+  const roleLabel = getCoreHeistRoleLabel(unit);
+  const visible = Boolean(teamMarker && roleLabel);
+  overlay.root.visible = visible;
+  if (!visible) return;
+
+  if (overlay.label !== roleLabel) {
+    overlay.label = roleLabel;
+    overlay.roleText.text = roleLabel;
+  }
+
+  if (overlay.team !== teamMarker) {
+    overlay.team = teamMarker;
+    overlay.roleText.style.fill = teamMarker === "orange" ? 0xffd3da : 0xd8f7ff;
+  }
+
+  const maxHp = Math.max(1, Number(unit?.maxHp || 100));
+  const hpRatio = clamp(Number(unit?.hp || 0) / maxHp, 0, 1);
+  overlay.hpFill.scale.x = Math.max(0.015, hpRatio);
+  overlay.hpFill.alpha = unit?.alive === false ? 0.35 : 0.98;
+}
+
 function createDroneContext(colors, variant = null) {
   if (variant === "attacker") return createHeistAttackerContext(colors);
   if (variant === "defender") return createHeistDefenderContext(colors);
@@ -1471,6 +1548,10 @@ function createUnitVisual(resources) {
   teamBeacon.visible = false;
   root.addChild(teamBeacon);
 
+  const tacticalRoleOverlay = createTacticalRoleOverlay(false);
+  tacticalRoleOverlay.root.position.set(0, -184);
+  root.addChild(tacticalRoleOverlay.root);
+
   return {
     root,
     aura,
@@ -1489,6 +1570,7 @@ function createUnitVisual(resources) {
     orbit,
     minis,
     teamBeacon,
+    tacticalRoleOverlay,
     team: null,
     skin: "cyan",
     rotorLayout: MAIN_ROTOR_POINTS.map(([x, y]) => [x, y]),
@@ -1542,6 +1624,10 @@ function createSimpleVisual(resources) {
   teamBeacon.visible = false;
   root.addChild(teamBeacon);
 
+  const tacticalRoleOverlay = createTacticalRoleOverlay(true);
+  tacticalRoleOverlay.root.position.set(0, -104);
+  root.addChild(tacticalRoleOverlay.root);
+
   const rotors = [
     [-23, -18],
     [23, -18],
@@ -1564,6 +1650,7 @@ function createSimpleVisual(resources) {
     minis,
     rotors,
     teamBeacon,
+    tacticalRoleOverlay,
     team: null,
     skin: "",
     facing: 0,
@@ -1958,6 +2045,7 @@ function updateUnitVisual(visual, unit, resources, now, isPlayer, compact = fals
     visual.teamBeacon.scale.set(teamPulse);
     visual.teamBeacon.alpha = 0.92 + Math.sin(now * 0.011 + visual.hoverSeed) * 0.08;
   }
+  updateTacticalRoleOverlay(visual.tacticalRoleOverlay, unit, teamMarker);
 
   const deltaSeconds = clamp((now - (visual.lastFrameAt || now)) / 1000, 1 / 240, 0.05);
   visual.lastFrameAt = now;
@@ -2241,6 +2329,7 @@ function updateSimpleVisual(visual, unit, resources, now, animateDecor = true) {
     visual.teamBeacon.scale.set(teamPulse);
     visual.teamBeacon.alpha = 0.84 + Math.sin(now * 0.01 + visual.hoverSeed) * 0.08;
   }
+  updateTacticalRoleOverlay(visual.tacticalRoleOverlay, unit, teamMarker);
 
   const deltaSeconds = clamp((now - (visual.lastFrameAt || now)) / 1000, 1 / 240, 0.05);
   visual.lastFrameAt = now;

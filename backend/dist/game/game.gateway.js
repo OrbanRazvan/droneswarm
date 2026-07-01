@@ -91,19 +91,19 @@ const CORE_HEIST_BASE_CAPTURE_RADIUS = 520;
 const CORE_HEIST_FLAG_RETURN_MS = 12000;
 const CORE_HEIST_CARRIER_SPEED_MULTIPLIER = 0.80;
 const CORE_HEIST_BOT_TARGET_TOTAL = CORE_HEIST_ROOM_MAX_PLAYERS;
-const CORE_HEIST_BASE_X_OFFSET = 2200;
+const CORE_HEIST_BASE_X_OFFSET = 4700;
 const CORE_HEIST_BASE_Y_OFFSET = 0;
 const CORE_HEIST_BASE_RADIUS = 520;
 const CORE_HEIST_BASE_PERIMETER_RADIUS = 860;
 const CORE_HEIST_MAX_DEATHS = 2;
-const CORE_HEIST_OPENING_ORBS_PER_BASE = 100;
-const CORE_HEIST_MIDFIELD_ORB_COUNT = 400;
-const CORE_HEIST_OPENING_ENERGY_PER_BASE = 35;
-const CORE_HEIST_MIDFIELD_ENERGY_COUNT = 180;
-const CORE_HEIST_BASE_CLOSE_ORBS_PER_BASE = 46;
-const CORE_HEIST_BASE_CLOSE_ENERGY_PER_BASE = 20;
-const CORE_HEIST_ORB_TARGET = 960;
-const CORE_HEIST_ENERGY_TARGET = 360;
+const CORE_HEIST_OPENING_ORBS_PER_BASE = 32;
+const CORE_HEIST_MIDFIELD_ORB_COUNT = 320;
+const CORE_HEIST_OPENING_ENERGY_PER_BASE = 12;
+const CORE_HEIST_MIDFIELD_ENERGY_COUNT = 70;
+const CORE_HEIST_BASE_CLOSE_ORBS_PER_BASE = 14;
+const CORE_HEIST_BASE_CLOSE_ENERGY_PER_BASE = 6;
+const CORE_HEIST_ORB_TARGET = 440;
+const CORE_HEIST_ENERGY_TARGET = 110;
 const CORE_HEIST_ORB_COLLECT_DISTANCE = 235;
 const CORE_HEIST_ENERGY_COLLECT_DISTANCE = 210;
 const CORE_HEIST_BOT_HOME_THREAT_RADIUS = 2700;
@@ -119,13 +119,16 @@ const CORE_HEIST_BOT_DEFENDER_PATROL_ARRIVAL_RADIUS = 155;
 const CORE_HEIST_EVENT_LOG_LIMIT = 12;
 const CORE_HEIST_EVENT_TTL_MS = 6500;
 const CORE_HEIST_STATE_INTERVAL_MS = 140;
-const CORE_HEIST_BOT_REPLAN_MIN_MS = 360;
-const CORE_HEIST_BOT_REPLAN_MAX_MS = 480;
-const CORE_HEIST_BOT_RESOURCE_LOCK_MS = 4500;
-const CORE_HEIST_BOT_STEER_BLEND = 0.105;
-const CORE_HEIST_BOT_EMERGENCY_STEER_BLEND = 0.24;
+const CORE_HEIST_BOT_REPLAN_MIN_MS = 440;
+const CORE_HEIST_BOT_REPLAN_MAX_MS = 620;
+const CORE_HEIST_BOT_RESOURCE_LOCK_MS = 5200;
+const CORE_HEIST_BOT_STEER_BLEND = 0.088;
+const CORE_HEIST_BOT_EMERGENCY_STEER_BLEND = 0.20;
 const CORE_HEIST_BOT_ARRIVAL_RADIUS = 112;
-const CORE_HEIST_TANK_HP = 150;
+const CORE_HEIST_TANK_HP = 200;
+const CORE_HEIST_PROJECTILE_DAMAGE = 10;
+const CORE_HEIST_ATTACKER_MOVE_SPEED_BONUS = 2;
+const CORE_HEIST_DEFENDER_MAX_INTERCEPT_RATIO = 0.48;
 const CORE_HEIST_DEFENDER_HP_REGEN_PER_SECOND = 9;
 const CORE_HEIST_DEFENDER_ENERGY_REGEN_PER_SECOND = 16;
 const CORE_HEIST_DEFENDER_GUARD_RADIUS_BONUS = 160;
@@ -247,6 +250,9 @@ const BODY_COLLISION_STRONG_PUSH = 12;
 const BODY_COLLISION_PUSH_DECAY = 0.95;
 const BODY_COLLISION_PUSH_MIN = 0.04;
 const BODY_COLLISION_SEPARATION = 18;
+const CORE_HEIST_ATTACKER_MOVE_SPEED_MULTIPLIER = (PLAYER_SPEED * NORMAL_BASE_MOVE_SPEED_MULTIPLIER + CORE_HEIST_ATTACKER_MOVE_SPEED_BONUS) /
+    (PLAYER_SPEED * NORMAL_BASE_MOVE_SPEED_MULTIPLIER);
+const CORE_HEIST_TEAMMATE_SOLID_DISTANCE = PLAYER_RADIUS * 1.88;
 const CORE_TYPES = [
     "nano",
     "rotor",
@@ -2745,7 +2751,9 @@ let GameGateway = class GameGateway {
         const normalizedRole = this.normalizeCoreHeistRole(role);
         player.heistRole = normalizedRole;
         player.skin = this.getCoreHeistRoleSkin(String(player?.team || "cyan"), normalizedRole);
-        player.moveSpeedMultiplier = 1;
+        player.moveSpeedMultiplier = normalizedRole === "attacker"
+            ? CORE_HEIST_ATTACKER_MOVE_SPEED_MULTIPLIER
+            : 1;
         const nextMaxHp = normalizedRole === "tank" ? CORE_HEIST_TANK_HP : START_HP;
         player.maxHp = nextMaxHp;
         player.hp = nextMaxHp;
@@ -2832,6 +2840,19 @@ let GameGateway = class GameGateway {
                 y: this.clamp(Number(base?.y || WORLD_HEIGHT * 0.5) + Math.sin(angle) * radius, margin, WORLD_HEIGHT - margin),
             };
         };
+        const distributedWorldPoint = (index, total, margin) => {
+            const safeTotal = Math.max(1, Math.floor(total || 1));
+            const columns = Math.max(1, Math.ceil(Math.sqrt(safeTotal * (WORLD_WIDTH / WORLD_HEIGHT))));
+            const rows = Math.max(1, Math.ceil(safeTotal / columns));
+            const column = index % columns;
+            const row = Math.floor(index / columns);
+            const cellWidth = Math.max(1, (WORLD_WIDTH - margin * 2) / columns);
+            const cellHeight = Math.max(1, (WORLD_HEIGHT - margin * 2) / rows);
+            return {
+                x: this.clamp(margin + (column + 0.16 + Math.random() * 0.68) * cellWidth, margin, WORLD_WIDTH - margin),
+                y: this.clamp(margin + (row + 0.16 + Math.random() * 0.68) * cellHeight, margin, WORLD_HEIGHT - margin),
+            };
+        };
         for (const base of bases) {
             for (let index = 0; index < CORE_HEIST_OPENING_ORBS_PER_BASE; index += 1) {
                 const point = randomBasePoint(base, 240, 2100, 220);
@@ -2871,7 +2892,7 @@ let GameGateway = class GameGateway {
             }
         }
         for (let index = 0; index < CORE_HEIST_MIDFIELD_ORB_COUNT; index += 1) {
-            const point = this.randomSafePoint(Math.max(WORLD_WIDTH, WORLD_HEIGHT), 220);
+            const point = distributedWorldPoint(index, CORE_HEIST_MIDFIELD_ORB_COUNT, 260);
             seededOrbs.push({
                 id: crypto.randomUUID(),
                 x: point.x,
@@ -2880,7 +2901,7 @@ let GameGateway = class GameGateway {
             });
         }
         for (let index = 0; index < CORE_HEIST_MIDFIELD_ENERGY_COUNT; index += 1) {
-            const point = this.randomSafePoint(Math.max(WORLD_WIDTH, WORLD_HEIGHT), 240);
+            const point = distributedWorldPoint(index, CORE_HEIST_MIDFIELD_ENERGY_COUNT, 310);
             seededEnergy.push({
                 id: crypto.randomUUID(),
                 x: point.x,
@@ -2909,27 +2930,27 @@ let GameGateway = class GameGateway {
         for (const player of alive) {
             const nearbyOrbs = room.orbs.filter((orb) => this.isNear(player, orb, 2100)).length;
             const nearbyEnergy = room.energyCells.filter((cell) => this.isNear(player, cell, 2200)).length;
-            if (nearbyOrbs < 36 && room.orbs.length < CORE_HEIST_ORB_TARGET + 150) {
-                const add = Math.min(16, 68 - nearbyOrbs);
+            if (nearbyOrbs < 30 && room.orbs.length < CORE_HEIST_ORB_TARGET + 36) {
+                const add = Math.min(5, 30 - nearbyOrbs);
                 for (let index = 0; index < add; index += 1) {
                     room.orbs.push(this.createOrb(Math.max(WORLD_WIDTH, WORLD_HEIGHT), Number(player.x || 0), Number(player.y || 0)));
                     changed = true;
                 }
             }
-            if (nearbyEnergy < 24 && room.energyCells.length < CORE_HEIST_ENERGY_TARGET + 90) {
-                const add = Math.min(7, 24 - nearbyEnergy);
+            if (nearbyEnergy < 10 && room.energyCells.length < CORE_HEIST_ENERGY_TARGET + 22) {
+                const add = Math.min(3, 10 - nearbyEnergy);
                 for (let index = 0; index < add; index += 1) {
                     room.energyCells.push(this.createEnergyCell(Math.max(WORLD_WIDTH, WORLD_HEIGHT), Number(player.x || 0), Number(player.y || 0)));
                     changed = true;
                 }
             }
         }
-        if (room.orbs.length > CORE_HEIST_ORB_TARGET + 85) {
-            room.orbs = room.orbs.slice(-(CORE_HEIST_ORB_TARGET + 85));
+        if (room.orbs.length > CORE_HEIST_ORB_TARGET + 36) {
+            room.orbs = room.orbs.slice(-(CORE_HEIST_ORB_TARGET + 36));
             changed = true;
         }
-        if (room.energyCells.length > CORE_HEIST_ENERGY_TARGET + 90) {
-            room.energyCells = room.energyCells.slice(-(CORE_HEIST_ENERGY_TARGET + 90));
+        if (room.energyCells.length > CORE_HEIST_ENERGY_TARGET + 22) {
+            room.energyCells = room.energyCells.slice(-(CORE_HEIST_ENERGY_TARGET + 22));
             changed = true;
         }
         if (changed)
@@ -3253,8 +3274,14 @@ let GameGateway = class GameGateway {
             const teamUnits = units.filter((unit) => String(unit.team || "cyan") === team);
             const enemies = units.filter((unit) => String(unit.team || "cyan") === enemyTeam);
             const tank = teamUnits.find((unit) => this.normalizeCoreHeistRole(unit.heistRole || "attacker") === "tank") || null;
-            const attackers = teamUnits.filter((unit) => this.normalizeCoreHeistRole(unit.heistRole || "attacker") === "attacker");
+            const defender = teamUnits.find((unit) => this.normalizeCoreHeistRole(unit.heistRole || "attacker") === "defender") || null;
+            const attackers = teamUnits
+                .filter((unit) => this.normalizeCoreHeistRole(unit.heistRole || "attacker") === "attacker")
+                .sort((a, b) => String(a?.id || "").localeCompare(String(b?.id || "")));
             const attackerIndex = Math.max(0, attackers.findIndex((unit) => unit.id === bot.id));
+            const botAttackers = attackers.filter((unit) => Boolean(unit?.isBot));
+            const tankEscortAttacker = botAttackers[0] || attackers[0] || null;
+            const isTankEscortAttacker = Boolean(tankEscortAttacker && String(tankEscortAttacker.id || "") === String(bot.id || ""));
             const nearbyEnemy = findNearest(bot, enemies, 1900);
             const enemyCarrier = enemies.find((unit) => String(unit.heistFlagId || "") === String(ownFlag?.id || "")) || null;
             const allyCarrier = teamUnits.find((unit) => Boolean(unit.heistFlagId)) || null;
@@ -3266,6 +3293,17 @@ let GameGateway = class GameGateway {
             const drones = Number(bot.drones || 0);
             const needsAttackerOrbs = drones < CORE_HEIST_BOT_ATTACKER_MIN_DRONES;
             const assaultTarget = enemyFlag || enemyBase;
+            const defenderInterceptPoint = (objective) => {
+                const fromBaseX = Number(objective?.x || ownBase?.x || bot.x) - Number(ownBase?.x || bot.x);
+                const fromBaseY = Number(objective?.y || ownBase?.y || bot.y) - Number(ownBase?.y || bot.y);
+                const objectiveDistance = Math.hypot(fromBaseX, fromBaseY) || 1;
+                const maxRange = Math.max(520, baseDistance * CORE_HEIST_DEFENDER_MAX_INTERCEPT_RATIO);
+                const travel = Math.min(objectiveDistance, maxRange);
+                return {
+                    x: Number(ownBase?.x || bot.x) + (fromBaseX / objectiveDistance) * travel,
+                    y: Number(ownBase?.y || bot.y) + (fromBaseY / objectiveDistance) * travel,
+                };
+            };
             const tankIntent = tank?.heistLeaderTarget && now - Number(tank.heistLeaderTarget.updatedAt || 0) < 1800
                 ? tank.heistLeaderTarget
                 : assaultTarget;
@@ -3282,41 +3320,62 @@ let GameGateway = class GameGateway {
                 emergencyMove = true;
             }
             else if (ownFlag?.status === "dropped") {
-                targetX = Number(ownFlag.x || ownBase?.x || bot.x);
-                targetY = Number(ownFlag.y || ownBase?.y || bot.y);
-                attackTarget = nearbyEnemy || baseThreat;
-                nextState = "recover-own-flag";
-                emergencyMove = true;
+                if (role === "defender") {
+                    const intercept = defenderInterceptPoint(ownFlag);
+                    targetX = intercept.x;
+                    targetY = intercept.y;
+                    attackTarget = nearbyEnemy && distanceSq(bot, nearbyEnemy) <= 1850 * 1850 ? nearbyEnemy : null;
+                    nextState = "defender-halfway-flag-recover";
+                }
+                else {
+                    targetX = Number(ownFlag.x || ownBase?.x || bot.x);
+                    targetY = Number(ownFlag.y || ownBase?.y || bot.y);
+                    attackTarget = nearbyEnemy || baseThreat;
+                    nextState = "recover-own-flag";
+                    emergencyMove = true;
+                }
             }
             else if (enemyCarrier) {
-                targetX = Number(enemyCarrier.x || ownBase?.x || bot.x);
-                targetY = Number(enemyCarrier.y || ownBase?.y || bot.y);
-                attackTarget = enemyCarrier;
-                nextState = role === "defender" ? "defend-carrier" : "intercept-carrier";
-                emergencyMove = true;
+                if (role === "defender") {
+                    const intercept = defenderInterceptPoint(enemyCarrier);
+                    targetX = intercept.x;
+                    targetY = intercept.y;
+                    attackTarget = distanceSq(bot, enemyCarrier) <= 2100 * 2100 ? enemyCarrier : null;
+                    nextState = "defender-halfway-carrier-intercept";
+                }
+                else {
+                    targetX = Number(enemyCarrier.x || ownBase?.x || bot.x);
+                    targetY = Number(enemyCarrier.y || ownBase?.y || bot.y);
+                    attackTarget = enemyCarrier;
+                    nextState = "intercept-carrier";
+                    emergencyMove = true;
+                }
             }
             else if (!combatReady) {
-                const prepareEnergy = Number(bot.energy || 0) <= CORE_HEIST_BOT_PREPARE_ENERGY_TARGET
+                const openingEmergencyEnergy = Number(bot.energy || 0) < 38
                     ? chooseResource(bot, room.energyCells || [], claimedEnergyIds, {
-                        maxDistance: 3900,
+                        maxDistance: 2600,
                         anchor: ownBase,
-                        anchorRadius: 3800,
-                        lockKey: "prepare-energy",
+                        anchorRadius: 3200,
+                        lockKey: `${role}-opening-emergency-energy`,
                     })
                     : null;
-                const prepareOrb = !prepareEnergy
+                const prepareOrb = !openingEmergencyEnergy
                     ? chooseResource(bot, room.orbs || [], claimedOrbIds, {
-                        maxDistance: 3400,
+                        maxDistance: role === "tank" ? 3900 : 3200,
                         anchor: ownBase,
-                        anchorRadius: 3300,
-                        lockKey: "prepare-orbs",
+                        anchorRadius: role === "tank" ? 3900 : 3000,
+                        laneTarget: assaultTarget,
+                        lockKey: `${role}-opening-orbs`,
                     })
                     : null;
-                if (prepareEnergy || prepareOrb) {
-                    const resource = prepareEnergy || prepareOrb;
+                if (openingEmergencyEnergy || prepareOrb) {
+                    const resource = openingEmergencyEnergy || prepareOrb;
                     targetX = Number(resource.x || bot.x);
                     targetY = Number(resource.y || bot.y);
-                    nextState = prepareEnergy ? "prepare-energy" : "prepare-orbs";
+                    nextState = openingEmergencyEnergy
+                        ? `${role}-opening-emergency-energy`
+                        : `${role}-opening-orbs`;
                 }
                 else {
                     const formation = role === "defender"
@@ -3405,80 +3464,111 @@ let GameGateway = class GameGateway {
                     emergencyMove = true;
                 }
                 else {
-                    const tankNeedsEnergy = Number(bot.energy || 0) < 82;
-                    const tankNeedsOrbs = drones < CORE_HEIST_BOT_TANK_MIN_DRONES;
-                    const tankEnergy = tankNeedsEnergy
+                    const emergencyEnergy = Number(bot.energy || 0) < 34
                         ? chooseResource(bot, room.energyCells || [], claimedEnergyIds, {
-                            maxDistance: 3300,
+                            maxDistance: 1450,
                             laneTarget: assaultTarget,
-                            lockKey: "tank-energy",
+                            lockKey: "tank-push-emergency-energy",
                         })
                         : null;
-                    const tankOrbs = !tankEnergy && tankNeedsOrbs
-                        ? chooseResource(bot, room.orbs || [], claimedOrbIds, {
-                            maxDistance: 3400,
-                            laneTarget: assaultTarget,
-                            lockKey: "tank-orbs",
-                        })
-                        : null;
-                    if (tankEnergy || tankOrbs) {
-                        const resource = tankEnergy || tankOrbs;
-                        targetX = Number(resource.x || bot.x);
-                        targetY = Number(resource.y || bot.y);
+                    if (emergencyEnergy) {
+                        targetX = Number(emergencyEnergy.x || bot.x);
+                        targetY = Number(emergencyEnergy.y || bot.y);
                         attackTarget = nearbyEnemy && distanceSq(nearbyEnemy, bot) < 1250 * 1250 ? nearbyEnemy : null;
-                        nextState = tankEnergy ? "leader-energy" : "leader-orbs";
+                        nextState = "tank-push-emergency-energy";
                     }
                     else {
                         targetX = Number(assaultTarget?.x || bot.x);
                         targetY = Number(assaultTarget?.y || bot.y);
-                        attackTarget = nearbyEnemy && distanceSq(nearbyEnemy, bot) < 1350 * 1350 ? nearbyEnemy : null;
+                        attackTarget = nearbyEnemy && distanceSq(nearbyEnemy, bot) < 1400 * 1400 ? nearbyEnemy : null;
                         nextState = "lead-flag-push";
                     }
                 }
             }
             else {
-                const side = attackerIndex % 2 === 0 ? -235 : 235;
+                const isHomeSupportAttacker = attackers.length > 1 && !isTankEscortAttacker;
                 const carrier = allyCarrier || null;
-                const leader = carrier || tank;
-                const leaderDestination = carrier?.heistFlagId
-                    ? ownBase
-                    : (tankIntent || assaultTarget);
-                const formation = leader
-                    ? formationBehind(leader, leaderDestination, side, carrier?.heistFlagId ? 285 : 380)
-                    : { x: Number(assaultTarget?.x || bot.x), y: Number(assaultTarget?.y || bot.y) };
-                const formationThreat = leader ? findNearest(leader, enemies, 2250) : nearbyEnemy;
-                const closeToFormation = !leader || distanceSq(bot, formation) <= 1100 * 1100;
-                const safeToFarm = !formationThreat && !baseThreat && !carrier && closeToFormation;
-                const attackerEnergy = safeToFarm && energyLow
-                    ? chooseResource(bot, room.energyCells || [], claimedEnergyIds, {
-                        maxDistance: 920,
-                        anchor: formation,
-                        anchorRadius: 980,
-                        laneTarget: formation,
-                        lockKey: "escort-energy",
-                    })
-                    : null;
-                const attackerOrbs = safeToFarm && !attackerEnergy && needsAttackerOrbs
-                    ? chooseResource(bot, room.orbs || [], claimedOrbIds, {
-                        maxDistance: 980,
-                        anchor: formation,
-                        anchorRadius: 1040,
-                        laneTarget: formation,
-                        lockKey: "escort-orbs",
-                    })
-                    : null;
-                if (attackerEnergy || attackerOrbs) {
-                    const resource = attackerEnergy || attackerOrbs;
-                    targetX = Number(resource.x || bot.x);
-                    targetY = Number(resource.y || bot.y);
-                    attackTarget = nearbyEnemy;
-                    nextState = attackerEnergy ? "escort-energy" : "escort-orbs";
+                if (isHomeSupportAttacker && defender && !carrier) {
+                    const guardDestination = baseThreat || ownBase;
+                    const supportFormation = formationBehind(defender, guardDestination, attackerIndex % 2 === 0 ? -230 : 230, 300);
+                    const supportThreat = baseThreat || findNearest(defender, enemies, 1750) || nearbyEnemy;
+                    const safeSupportFarm = !supportThreat && !enemyCarrier;
+                    const supportEnergy = safeSupportFarm && energyLow
+                        ? chooseResource(bot, room.energyCells || [], claimedEnergyIds, {
+                            maxDistance: 1050,
+                            anchor: ownBase,
+                            anchorRadius: Math.min(homeThreatRadius, 2400),
+                            lockKey: "defense-support-energy",
+                        })
+                        : null;
+                    const supportOrbs = safeSupportFarm && !supportEnergy && needsAttackerOrbs
+                        ? chooseResource(bot, room.orbs || [], claimedOrbIds, {
+                            maxDistance: 1150,
+                            anchor: ownBase,
+                            anchorRadius: Math.min(homeThreatRadius, 2450),
+                            lockKey: "defense-support-orbs",
+                        })
+                        : null;
+                    if (supportEnergy || supportOrbs) {
+                        const resource = supportEnergy || supportOrbs;
+                        targetX = Number(resource.x || bot.x);
+                        targetY = Number(resource.y || bot.y);
+                        attackTarget = nearbyEnemy;
+                        nextState = supportEnergy ? "defense-support-energy" : "defense-support-orbs";
+                    }
+                    else {
+                        targetX = Number(supportFormation.x || bot.x);
+                        targetY = Number(supportFormation.y || bot.y);
+                        attackTarget = supportThreat;
+                        nextState = supportThreat ? "defense-support-intercept" : "defense-support-guard";
+                        emergencyMove = Boolean(supportThreat);
+                    }
                 }
                 else {
-                    targetX = Number(formation.x || bot.x);
-                    targetY = Number(formation.y || bot.y);
-                    attackTarget = formationThreat || nearbyEnemy;
-                    nextState = carrier?.heistFlagId ? "protect-carrier" : "follow-tank";
+                    const side = isTankEscortAttacker ? -190 : (attackerIndex % 2 === 0 ? -235 : 235);
+                    const leader = carrier || tank;
+                    const leaderDestination = carrier?.heistFlagId
+                        ? ownBase
+                        : (tankIntent || assaultTarget);
+                    const formation = leader
+                        ? formationBehind(leader, leaderDestination, side, carrier?.heistFlagId ? 250 : (isTankEscortAttacker ? 300 : 380))
+                        : { x: Number(assaultTarget?.x || bot.x), y: Number(assaultTarget?.y || bot.y) };
+                    const formationThreat = leader ? findNearest(leader, enemies, 2350) : nearbyEnemy;
+                    const closeToFormation = !leader || distanceSq(bot, formation) <= 760 * 760;
+                    const safeToFarm = !formationThreat && !baseThreat && !carrier && closeToFormation;
+                    const attackerEnergy = safeToFarm && (isTankEscortAttacker ? Number(bot.energy || 0) < 35 : energyLow)
+                        ? chooseResource(bot, room.energyCells || [], claimedEnergyIds, {
+                            maxDistance: isTankEscortAttacker ? 520 : 920,
+                            anchor: formation,
+                            anchorRadius: isTankEscortAttacker ? 620 : 980,
+                            laneTarget: formation,
+                            lockKey: isTankEscortAttacker ? "tank-guard-critical-energy" : "escort-energy",
+                        })
+                        : null;
+                    const attackerOrbs = !isTankEscortAttacker && safeToFarm && !attackerEnergy && needsAttackerOrbs
+                        ? chooseResource(bot, room.orbs || [], claimedOrbIds, {
+                            maxDistance: 980,
+                            anchor: formation,
+                            anchorRadius: 1040,
+                            laneTarget: formation,
+                            lockKey: "escort-orbs",
+                        })
+                        : null;
+                    if (attackerEnergy || attackerOrbs) {
+                        const resource = attackerEnergy || attackerOrbs;
+                        targetX = Number(resource.x || bot.x);
+                        targetY = Number(resource.y || bot.y);
+                        attackTarget = nearbyEnemy;
+                        nextState = attackerEnergy ? "escort-energy" : "escort-orbs";
+                    }
+                    else {
+                        targetX = Number(formation.x || bot.x);
+                        targetY = Number(formation.y || bot.y);
+                        attackTarget = formationThreat || nearbyEnemy;
+                        nextState = carrier?.heistFlagId
+                            ? "protect-carrier"
+                            : (isTankEscortAttacker ? "tank-guard" : "follow-tank");
+                    }
                 }
             }
             if (role === "tank") {
@@ -3518,7 +3608,7 @@ let GameGateway = class GameGateway {
                 ? CORE_HEIST_BOT_ARRIVAL_RADIUS
                 : nextState.includes("patrol")
                     ? CORE_HEIST_BOT_DEFENDER_PATROL_ARRIVAL_RADIUS
-                    : nextState.includes("formation") || nextState.includes("vanguard") || nextState.includes("wait-for")
+                    : nextState.includes("formation") || nextState.includes("vanguard") || nextState.includes("wait-for") || nextState.includes("halfway")
                         ? 135
                         : 0;
             const shouldHoldAtTarget = !attackTarget && targetDistance <= arrivalRadius;
@@ -3890,12 +3980,24 @@ let GameGateway = class GameGateway {
         killer.drones = Math.min(MAX_DRONES, previousDrones + 1);
         killer.progress = 0;
         killer.nextDroneAt = this.getNextDroneAt(killer.drones || 0);
-        const nextMaxHp = Math.min(MAX_HP, (killer.maxHp || START_HP) + KILL_HP_REWARD);
+        const killerRole = room?.coreHeistMode
+            ? this.normalizeCoreHeistRole(killer?.heistRole || "attacker")
+            : "attacker";
+        const roleMaxHp = room?.coreHeistMode && killerRole === "tank"
+            ? CORE_HEIST_TANK_HP
+            : MAX_HP;
+        const nextMaxHp = Math.min(roleMaxHp, (killer.maxHp || START_HP) + KILL_HP_REWARD);
         killer.maxHp = nextMaxHp;
         killer.hp = Math.min(nextMaxHp, previousHp + KILL_HP_REWARD);
         killer.killAttackSpeedMultiplier = Math.max(MIN_KILL_ATTACK_SPEED_MULTIPLIER, (killer.killAttackSpeedMultiplier || 1) * KILL_ATTACK_SPEED_MULTIPLIER);
         if (this.usesProgressionPvpCombat(room)) {
-            killer.moveSpeedMultiplier = Math.min(NORMAL_MAX_MOVE_SPEED_MULTIPLIER, previousMoveSpeed + NORMAL_KILL_MOVE_SPEED_STEP);
+            const roleSpeedFloor = room?.coreHeistMode && killerRole === "attacker"
+                ? CORE_HEIST_ATTACKER_MOVE_SPEED_MULTIPLIER
+                : 1;
+            const roleSpeedCap = room?.coreHeistMode && killerRole === "attacker"
+                ? Math.max(NORMAL_MAX_MOVE_SPEED_MULTIPLIER, CORE_HEIST_ATTACKER_MOVE_SPEED_MULTIPLIER + 0.30)
+                : NORMAL_MAX_MOVE_SPEED_MULTIPLIER;
+            killer.moveSpeedMultiplier = Math.max(roleSpeedFloor, Math.min(roleSpeedCap, previousMoveSpeed + NORMAL_KILL_MOVE_SPEED_STEP));
             killer.attackDroneSpeedMultiplier = Math.min(NORMAL_MAX_ATTACK_DRONE_SPEED_MULTIPLIER, previousAttackDroneSpeed + NORMAL_KILL_ATTACK_DRONE_SPEED_STEP);
             const gainedHp = Math.max(0, Number(killer.hp || 0) - previousHp);
             if (gainedHp > 0) {
@@ -4188,11 +4290,12 @@ let GameGateway = class GameGateway {
         const rawDx = Number(b.x || 0) - Number(a.x || 0);
         const rawDy = Number(b.y || 0) - Number(a.y || 0);
         const rawDistance = Math.hypot(rawDx, rawDy);
-        if (rawDistance > BODY_COLLISION_DISTANCE)
-            return;
-        if (this.isBattlePrepareLocked(room, now))
-            return;
-        if (now - lastAt < BODY_COLLISION_COOLDOWN)
+        const coreHeistTeammates = Boolean(room?.coreHeistMode &&
+            String(a?.team || "cyan") === String(b?.team || "cyan"));
+        const collisionDistance = coreHeistTeammates
+            ? Math.max(BODY_COLLISION_DISTANCE, CORE_HEIST_TEAMMATE_SOLID_DISTANCE)
+            : BODY_COLLISION_DISTANCE;
+        if (rawDistance > collisionDistance)
             return;
         let dirX = 0;
         let dirY = 0;
@@ -4206,14 +4309,19 @@ let GameGateway = class GameGateway {
             dirX = Math.cos(angle);
             dirY = Math.sin(angle);
         }
-        if (room?.coreHeistMode &&
-            String(a?.team || "cyan") === String(b?.team || "cyan")) {
-            const overlap = Math.max(0, BODY_COLLISION_DISTANCE - rawDistance);
-            const separation = Math.max(4, Math.min(12, overlap * 0.22 + 2));
-            this.applyCollisionSeparation(a, -dirX, -dirY, separation, zoneRadius, room);
-            this.applyCollisionSeparation(b, dirX, dirY, separation, zoneRadius, room);
+        if (coreHeistTeammates) {
+            const overlap = Math.max(0, CORE_HEIST_TEAMMATE_SOLID_DISTANCE - rawDistance);
+            if (overlap > 0) {
+                const separation = Math.max(12, Math.min(42, overlap * 0.58 + 8));
+                this.applyCollisionSeparation(a, -dirX, -dirY, separation, zoneRadius, room);
+                this.applyCollisionSeparation(b, dirX, dirY, separation, zoneRadius, room);
+            }
             return;
         }
+        if (this.isBattlePrepareLocked(room, now))
+            return;
+        if (now - lastAt < BODY_COLLISION_COOLDOWN)
+            return;
         room.collisionCooldowns.set(key, now);
         const outcome = this.getBodyCollisionOutcome(a, b);
         const aWasAlive = a.alive;
@@ -4323,9 +4431,11 @@ let GameGateway = class GameGateway {
             angle,
             skin: normalizeSkin(player.skin || "cyan"),
             isTankCannon: isCoreHeistTank,
-            damage: player.berserkUntil && player.berserkUntil > now
-                ? BERSERK_PROJECTILE_DAMAGE
-                : PROJECTILE_DAMAGE,
+            damage: room?.coreHeistMode
+                ? CORE_HEIST_PROJECTILE_DAMAGE
+                : (player.berserkUntil && player.berserkUntil > now
+                    ? BERSERK_PROJECTILE_DAMAGE
+                    : PROJECTILE_DAMAGE),
             pierceLeft: (player.piercingShots || 0) > 0 ? 3 : 1,
             shieldBreaker: (player.shieldBreakerShots || 0) > 0,
             piercesShield: (player.shieldBreakerShots || 0) > 0,
@@ -6086,6 +6196,11 @@ let GameGateway = class GameGateway {
             const visiblePlayers = includeEntityDefinitions
                 ? this.filterNear(viewAnchor, playerCandidates.filter((other) => other.id !== player.id && (player.alive !== false || other.alive !== false)), player.alive === false ? VIEW_DISTANCE + 1500 : VIEW_DISTANCE + ZONE_TRANSFORM_RANGE_PADDING, ZONE_TRANSFORM_PLAYER_LIMIT).map((other) => this.serializeZonePvpStatePlayer(room, other))
                 : undefined;
+            const heistTeammates = room.coreHeistMode
+                ? this.getCoreHeistTeamPlayers(room, String(player?.team || "cyan"))
+                    .filter((other) => String(other?.id || "") !== String(player?.id || ""))
+                    .map((other) => this.serializeZonePvpStatePlayer(room, other))
+                : undefined;
             const payload = {
                 serverNow: now,
                 roomId: room.id,
@@ -6121,6 +6236,7 @@ let GameGateway = class GameGateway {
                 battleBeginFlashUntil: room.battleBeginFlashUntil || null,
                 you: this.serializeZonePvpStatePlayer(room, player),
                 players: visiblePlayers,
+                heistTeammates,
                 spectatorTargetId: spectatorTarget?.id || null,
                 spectatingPlayer: spectatorTarget
                     ? this.serializeZonePvpStatePlayer(room, spectatorTarget)

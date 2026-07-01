@@ -1752,6 +1752,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     safeZoneRadius: ZONE_RADIUS_FALLBACK,
     you: null,
     players: [],
+    heistTeammates: [],
     spectatingPlayer: null,
     orbs: [],
     minimapOrbs: [],
@@ -1981,6 +1982,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         countdown: null,
         you: null,
         players: [],
+        heistTeammates: [],
         spectatingPlayer: null,
         orbs: [],
         minimapOrbs: [],
@@ -2315,6 +2317,11 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         safeZoneRadius: state.safeZoneRadius || ZONE_RADIUS_FALLBACK,
         you: state.you || worldRef.current.you,
         players: Array.isArray(state.players) ? state.players.map((p) => ({ ...p, __seenAt: now })) : worldRef.current.players,
+        // Full friendly squad is sent by Core Heist separately from viewport
+        // entities, so the tactical map never loses teammates off-screen.
+        heistTeammates: Array.isArray(state.heistTeammates)
+          ? state.heistTeammates.map((p) => ({ ...p, __seenAt: now }))
+          : worldRef.current.heistTeammates,
         spectatingPlayer: state.spectatingPlayer
           ? { ...state.spectatingPlayer, __seenAt: now }
           : state.spectatingPlayer === null
@@ -4689,6 +4696,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       {cameraSubject && (
         <div className="core-heist-minimap-frame" aria-label="World map">
           <MiniMap
+            mode="core-heist"
             player={cameraSubject}
             worldWidth={worldWidth}
             worldHeight={worldHeight}
@@ -4696,7 +4704,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
             energyCells={renderData.minimapEnergyCells || renderData.energyCells || []}
             cores={renderData.minimapCores || renderData.cores || []}
             safeZoneRadius={null}
-            players={renderData.players || []}
+            players={renderData.heistTeammates || renderData.players || []}
             bases={heistMiniMapBases}
             flags={heistMiniMapFlags}
           />
