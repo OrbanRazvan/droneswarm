@@ -183,6 +183,7 @@ const CORE_HEIST_STATE_INTERVAL_MS = 500; // same slow HUD/static lane as Zone P
 // smooth through the transform lane and client interpolation, while item/HUD
 // packets cannot build a Socket.IO backlog during a long bot match.
 const CORE_HEIST_TRANSFORM_INTERVAL_MS = 20; // same 50 Hz latest-wins transform lane as Zone PvP.
+const CORE_HEIST_HEARTBEAT_INTERVAL_MS = 1000; // tiny independent session-health lane.
 const CORE_HEIST_LOOT_TICK_INTERVAL_MS = 50; // responsive pickup checks without a per-frame item rebuild.
 const CORE_HEIST_ITEM_MAINTENANCE_INTERVAL_MS = 1000; // bounded maintenance; never competes with movement.
 const CORE_HEIST_BOT_REPLAN_MIN_MS = 560;
@@ -201,8 +202,8 @@ const CORE_HEIST_TANK_DAMAGE_AFTER_TWO_IMPACTS = 10;
 const CORE_HEIST_TANK_IMPACTS_PER_ESCORT_LOSS = 2;
 // Dense enough to farm, but nowhere near the old full-screen loot flood.
 const CORE_HEIST_VIEWPORT_ITEM_STATE_INTERVAL_MS = 1000; // loot is static; keep Socket.IO state packets compact.
-const CORE_HEIST_VIEWPORT_ORB_LIMIT = 120;
-const CORE_HEIST_VIEWPORT_ENERGY_LIMIT = 36;
+const CORE_HEIST_VIEWPORT_ORB_LIMIT = 84;
+const CORE_HEIST_VIEWPORT_ENERGY_LIMIT = 24;
 // Other Core Heist roles move at the normal Zone speed. Attackers receive an
 // actual +2 world-units-per-frame advantage after the shared base multiplier.
 const CORE_HEIST_ATTACKER_MOVE_SPEED_BONUS = 2;
@@ -457,6 +458,7 @@ export class GameGateway {
   private readonly prisma = new PrismaClient();
   private loop: NodeJS.Timeout | null = null;
   private lastLoopAt = Date.now();
+  private lastLoopErrorLogAt = 0;
 
   constructor() {}
 
@@ -3302,6 +3304,10 @@ export class GameGateway {
       );
       this.lastLoopAt = now;
 
+      // The server has one authoritative tick for every arena mode. Never let
+      // a malformed room from Normal/BR/Zone escape this callback and stop the
+      // timer, transforms and bot simulation for every other active session.
+      try {
       for (const room of this.rooms.values()) {
         this.updateRoomStatus(room, now);
         if (room.status === "playing") {
@@ -3432,6 +3438,18 @@ export class GameGateway {
             }
           }
 
+          if (room?.coreHeistMode && room.status === "playing" && (
+            !room.lastCoreHeistHeartbeatAt ||
+            now - room.lastCoreHeistHeartbeatAt >= CORE_HEIST_HEARTBEAT_INTERVAL_MS
+          )) {
+            room.lastCoreHeistHeartbeatAt = now;
+            try {
+              this.emitCoreHeistHeartbeat(room, now);
+            } catch (error) {
+              this.reportCoreHeistStepError(room, "heartbeat", error, now);
+            }
+          }
+
           // Hot motion lane always goes first. It is the exact same latest-wins
           // channel used by Zone PvP, so a state/HUD error cannot freeze drones.
           if (room.status === "playing" && (
@@ -3487,6 +3505,13 @@ export class GameGateway {
             // eslint-disable-next-line no-console
             console.error(`[Zone PvP] recovered room tick error for ${room.id}`, error);
           }
+        }
+      }
+      } catch (error) {
+        if (!this.lastLoopErrorLogAt || now - this.lastLoopErrorLogAt >= 5000) {
+          this.lastLoopErrorLogAt = now;
+          // eslint-disable-next-line no-console
+          console.error("[Arena] recovered outer simulation tick error", error);
         }
       }
     }, 1000 / 60);
@@ -4137,6 +4162,100 @@ export class GameGateway {
   }
 
   /**
+   * Runtime sanitiser for the small 4v4 CTF room. It prevents one bad value
+   * from a bot, a projectile or an interrupted reconnect from poisoning the
+   * shared simulation tick with NaN/undefined values.
+   */
+  private hardenCoreHeistRuntime(room: any, now = Date.now()) {
+    if (!room?.coreHeistMode) return;
+
+    room.players = room.players instanceof Map ? room.players : new Map();
+    room.orbs = Array.isArray(room.orbs) ? room.orbs : [];
+    room.energyCells = Array.isArray(room.energyCells) ? room.energyCells : [];
+    room.projectiles = Array.isArray(room.projectiles) ? room.projectiles : [];
+    room.collisionCooldowns = room.collisionCooldowns instanceof Map
+      ? room.collisionCooldowns
+      : new Map();
+
+    if (!room.heist || !Array.isArray(room.heist.bases) || !Array.isArray(room.heist.flags)) {
+      const preservedScore = room?.heist?.score || {};
+      const fresh = this.createCoreHeistState(now);
+      fresh.score.cyan = Math.max(0, Number(preservedScore?.cyan || 0));
+      fresh.score.orange = Math.max(0, Number(preservedScore?.orange || 0));
+      fresh.matchEndsAt = Number(room?.heist?.matchEndsAt || 0) || now + CORE_HEIST_MATCH_DURATION_MS;
+      room.heist = fresh;
+    }
+
+    const isFiniteNumber = (value: any) => Number.isFinite(Number(value));
+    for (const player of room.players.values()) {
+      if (!player) continue;
+      const team = String(player?.team || "cyan") === "orange" ? "orange" : "cyan";
+      const role = this.normalizeCoreHeistRole(player?.heistRole || "attacker");
+      const spawn = this.getCoreHeistSpawn(room, team, Number(player?.heistSpawnIndex || 0));
+
+      if (!isFiniteNumber(player.x) || !isFiniteNumber(player.y)) {
+        player.x = spawn.x;
+        player.y = spawn.y;
+        player.prevX = spawn.x;
+        player.prevY = spawn.y;
+        player.velocityX = 0;
+        player.velocityY = 0;
+        player.knockbackX = 0;
+        player.knockbackY = 0;
+      }
+      if (!isFiniteNumber(player.prevX)) player.prevX = Number(player.x);
+      if (!isFiniteNumber(player.prevY)) player.prevY = Number(player.y);
+      if (!isFiniteNumber(player.velocityX)) player.velocityX = 0;
+      if (!isFiniteNumber(player.velocityY)) player.velocityY = 0;
+      if (!isFiniteNumber(player.knockbackX)) player.knockbackX = 0;
+      if (!isFiniteNumber(player.knockbackY)) player.knockbackY = 0;
+
+      const expectedMaxHp = role === "tank" ? CORE_HEIST_TANK_HP : START_HP;
+      if (!isFiniteNumber(player.maxHp) || Number(player.maxHp) <= 0) player.maxHp = expectedMaxHp;
+      if (!isFiniteNumber(player.hp)) player.hp = Number(player.maxHp);
+      player.hp = this.clamp(Number(player.hp), 0, Number(player.maxHp));
+      if (!isFiniteNumber(player.energy)) player.energy = START_ENERGY;
+      player.energy = this.clamp(Number(player.energy), 0, START_ENERGY);
+      if (!isFiniteNumber(player.drones)) player.drones = 0;
+      player.drones = this.clamp(Math.floor(Number(player.drones)), 0, MAX_DRONES);
+      if (!isFiniteNumber(player.progress)) player.progress = 0;
+      if (!isFiniteNumber(player.nextDroneAt) || Number(player.nextDroneAt) <= 0) {
+        player.nextDroneAt = this.getNextDroneAt(Number(player.drones));
+      }
+      player.team = team;
+      player.heistRole = role;
+      player.input = player.input && typeof player.input === "object" ? player.input : {};
+      if (player.alive !== false) player.alive = player.hp > 0;
+    }
+
+    room.projectiles = room.projectiles.filter((projectile: any) => {
+      if (!projectile) return false;
+      return isFiniteNumber(projectile.x) && isFiniteNumber(projectile.y) &&
+        isFiniteNumber(projectile.vx) && isFiniteNumber(projectile.vy);
+    });
+  }
+
+  /** A tiny health packet is independent from loot/HUD serialization. */
+  private emitCoreHeistHeartbeat(room: any, now = Date.now()) {
+    if (!room?.coreHeistMode || room.status !== "playing") return;
+    const heist = room.heist;
+    const packet = {
+      serverNow: now,
+      roomId: room.id,
+      roundId: room.roundId || null,
+      phaseVersion: Number(room.phaseVersion || 0),
+      status: room.status,
+      matchEndsAt: Number(heist?.matchEndsAt || 0),
+      remainingMs: Math.max(0, Number(heist?.matchEndsAt || 0) - now),
+    };
+    for (const player of room.players.values()) {
+      if (player?.isBot) continue;
+      const socket = this.server?.sockets?.sockets?.get(String(player.id));
+      if (socket?.connected) socket.volatile.compress(false).emit("zone-pvp:heartbeat", packet);
+    }
+  }
+
+  /**
    * One authoritative impact rule for both launched-drone hits and body rams.
    * Attackers/Defenders lose one escort + 20 HP, or 30 HP with no escort.
    * Tank armor consumes two impacts per escort loss; that resolved loss costs
@@ -4568,13 +4687,12 @@ export class GameGateway {
       }
     };
 
+    run("runtime-guard", () => this.hardenCoreHeistRuntime(room, now));
     run("respawn", () => this.reviveCoreHeistPlayers(room, now));
     run("bot-ai", () => this.updateCoreHeistBots(room, now));
-    run("movement", () => {
-      this.updatePlayers(room, now, zoneRadius, deltaFrames);
-      this.applyCoreHeistRolePassives(room, now, deltaFrames);
-      this.updateProjectiles(room, deltaFrames, now);
-    });
+    run("movement", () => this.updatePlayers(room, now, zoneRadius, deltaFrames));
+    run("role-passives", () => this.applyCoreHeistRolePassives(room, now, deltaFrames));
+    run("projectiles", () => this.updateProjectiles(room, deltaFrames, now));
 
     if (!room.lastZoneCollisionAt || now - room.lastZoneCollisionAt >= ZONE_COLLISION_TICK_INTERVAL_MS) {
       room.lastZoneCollisionAt = now;
@@ -7915,8 +8033,20 @@ export class GameGateway {
           Math.max(0, Math.min(MAX_DRONES, Number(unit.drones || 0))),
           // Index 8: skin — critical for CoreHeist role variants (heist-attacker-cyan etc).
           // Without this, bots appear as plain cyan drones until the slow state packet
-          // (260ms) arrives. The skin string is short and worth the extra bytes.
+          // arrives. The skin string is short and worth the extra bytes.
           unit.skin || "cyan",
+          // Core Heist embeds stable identity/role/HP in the hot lane. This
+          // removes the metadata race that could make a distant bot vanish when
+          // a slow state packet was delayed under load.
+          ...(room?.coreHeistMode
+            ? [
+                String(unit.id || ""),
+                String(unit.team || "cyan"),
+                this.normalizeCoreHeistRole(unit.heistRole || "attacker"),
+                Math.round(Number(unit.hp || 0) * 10) / 10,
+                Math.round(Number(unit.maxHp || START_HP) * 10) / 10,
+              ]
+            : []),
         ];
       });
 

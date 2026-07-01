@@ -122,6 +122,7 @@ const CORE_HEIST_EVENT_LOG_LIMIT = 12;
 const CORE_HEIST_EVENT_TTL_MS = 6500;
 const CORE_HEIST_STATE_INTERVAL_MS = 500;
 const CORE_HEIST_TRANSFORM_INTERVAL_MS = 20;
+const CORE_HEIST_HEARTBEAT_INTERVAL_MS = 1000;
 const CORE_HEIST_LOOT_TICK_INTERVAL_MS = 50;
 const CORE_HEIST_ITEM_MAINTENANCE_INTERVAL_MS = 1000;
 const CORE_HEIST_BOT_REPLAN_MIN_MS = 560;
@@ -138,8 +139,8 @@ const CORE_HEIST_TANK_DAMAGE_WITHOUT_ESCORT = 20;
 const CORE_HEIST_TANK_DAMAGE_AFTER_TWO_IMPACTS = 10;
 const CORE_HEIST_TANK_IMPACTS_PER_ESCORT_LOSS = 2;
 const CORE_HEIST_VIEWPORT_ITEM_STATE_INTERVAL_MS = 1000;
-const CORE_HEIST_VIEWPORT_ORB_LIMIT = 120;
-const CORE_HEIST_VIEWPORT_ENERGY_LIMIT = 36;
+const CORE_HEIST_VIEWPORT_ORB_LIMIT = 84;
+const CORE_HEIST_VIEWPORT_ENERGY_LIMIT = 24;
 const CORE_HEIST_ATTACKER_MOVE_SPEED_BONUS = 2;
 const CORE_HEIST_DEFENDER_MAX_INTERCEPT_RATIO = 0.48;
 const CORE_HEIST_DEFENDER_HP_REGEN_PER_SECOND = 9;
@@ -308,6 +309,7 @@ let GameGateway = class GameGateway {
         this.prisma = new client_1.PrismaClient();
         this.loop = null;
         this.lastLoopAt = Date.now();
+        this.lastLoopErrorLogAt = 0;
     }
     normalizeGameStatsMode(value) {
         const mode = String(value || "").trim().toLowerCase();
@@ -2531,153 +2533,171 @@ let GameGateway = class GameGateway {
             const now = Date.now();
             const deltaFrames = Math.min(3, Math.max(0.35, (now - this.lastLoopAt) / (1000 / 60)));
             this.lastLoopAt = now;
-            for (const room of this.rooms.values()) {
-                this.updateRoomStatus(room, now);
-                if (room.status === "playing") {
-                    const zoneRadius = this.getSafeZoneRadius(room);
-                    this.updatePlayers(room, now, zoneRadius, deltaFrames);
-                    this.applyZoneDamage(room, now, zoneRadius);
-                    this.handleBodyCollisions(room, now, zoneRadius);
-                    this.collectOrbs(room, zoneRadius);
-                    this.collectEnergy(room, zoneRadius);
-                    this.collectCores(room, zoneRadius);
-                    this.updateProjectiles(room, deltaFrames, now);
-                    this.maintainWorldItems(room, zoneRadius, now);
-                    this.updateWinCondition(room, now);
-                }
-                if (!room.lastBroadcastAt || now - room.lastBroadcastAt >= 25) {
-                    room.lastBroadcastAt = now;
-                    this.broadcastRoomState(room, now);
-                }
-                this.cleanupRoom(room, now);
-            }
-            for (const room of this.normalRooms.values()) {
-                const zoneRadius = NORMAL_ROOM_ZONE_RADIUS;
-                this.updatePlayers(room, now, zoneRadius, deltaFrames);
-                this.handleBodyCollisions(room, now, zoneRadius);
-                this.collectOrbs(room, zoneRadius);
-                this.collectEnergy(room, zoneRadius);
-                this.collectCores(room, zoneRadius);
-                this.updateProjectiles(room, deltaFrames, now);
-                this.maintainWorldItems(room, zoneRadius, now);
-                this.cleanupCombatEvents(room, now);
-                const broadcastInterval = room.players.size <= 1
-                    ? NORMAL_STATE_INTERVAL_SOLO_MS
-                    : room.players.size >= PVP_HEAVY_STATE_THRESHOLD
-                        ? NORMAL_STATE_INTERVAL_HEAVY_MS
-                        : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
-                            ? NORMAL_STATE_INTERVAL_CROWDED_MS
-                            : NORMAL_STATE_INTERVAL_MS;
-                if (!room.lastBroadcastAt ||
-                    now - room.lastBroadcastAt >= broadcastInterval) {
-                    room.lastBroadcastAt = now;
-                    this.broadcastNormalRoomState(room, now);
-                }
-                this.cleanupNormalRoom(room, now);
-            }
-            for (const room of this.battleRoyaleOnlineRooms.values()) {
-                this.updateBattleRoyaleOnlineRoomStatus(room, now);
-                if (room.status === "playing") {
-                    const zoneRadius = this.getBattleRoyaleOnlineZoneRadius(room);
-                    this.updatePlayers(room, now, zoneRadius, deltaFrames);
-                    this.applyBattleRoyaleOnlineZoneDamage(room, now, zoneRadius);
-                    this.handleBodyCollisions(room, now, zoneRadius);
-                    this.collectOrbs(room, zoneRadius);
-                    this.collectEnergy(room, zoneRadius);
-                    this.collectCores(room, zoneRadius);
-                    this.updateProjectiles(room, deltaFrames, now);
-                    this.maintainWorldItems(room, zoneRadius, now);
-                    this.updateBattleRoyaleOnlineWinCondition(room, now);
-                }
-                const broadcastInterval = room.players.size >= 24
-                    ? BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS
-                    : BATTLE_ROYALE_STATE_INTERVAL_MS;
-                if (!room.lastBroadcastAt ||
-                    now - room.lastBroadcastAt >= broadcastInterval) {
-                    room.lastBroadcastAt = now;
-                    this.broadcastBattleRoyaleOnlineRoomState(room, now);
-                }
-                this.cleanupBattleRoyaleOnlineRoom(room, now);
-            }
-            for (const room of this.zonePvpRooms.values()) {
-                try {
-                    this.updateZonePvpRoomStatus(room, now);
+            try {
+                for (const room of this.rooms.values()) {
+                    this.updateRoomStatus(room, now);
                     if (room.status === "playing") {
-                        const zoneRadius = this.getZonePvpZoneRadius(room);
-                        if (room?.coreHeistMode) {
-                            this.tickCoreHeistRoom(room, now, deltaFrames, zoneRadius);
-                        }
-                        else {
-                            this.updateZonePvpBots(room, now, zoneRadius);
-                            this.updatePlayers(room, now, zoneRadius, deltaFrames);
-                            this.applyZonePvpZoneDamage(room, now, zoneRadius);
-                            this.updateProjectiles(room, deltaFrames, now);
-                            if (!room.lastZoneCollisionAt || now - room.lastZoneCollisionAt >= ZONE_COLLISION_TICK_INTERVAL_MS) {
-                                room.lastZoneCollisionAt = now;
-                                this.handleBodyCollisions(room, now, zoneRadius);
-                            }
-                            if (!room.lastZoneLootAt || now - room.lastZoneLootAt >= ZONE_LOOT_TICK_INTERVAL_MS) {
-                                room.lastZoneLootAt = now;
-                                this.collectOrbs(room, zoneRadius);
-                                this.collectEnergy(room, zoneRadius);
-                                this.collectCores(room, zoneRadius);
-                            }
-                            if (!room.lastZoneItemMaintenanceAt || now - room.lastZoneItemMaintenanceAt >= ZONE_ITEM_MAINTENANCE_INTERVAL_MS) {
-                                room.lastZoneItemMaintenanceAt = now;
-                                this.maintainWorldItems(room, zoneRadius, now);
-                                this.cleanupCombatEvents(room, now);
-                            }
-                            this.updateZonePvpWinCondition(room, now);
-                        }
+                        const zoneRadius = this.getSafeZoneRadius(room);
+                        this.updatePlayers(room, now, zoneRadius, deltaFrames);
+                        this.applyZoneDamage(room, now, zoneRadius);
+                        this.handleBodyCollisions(room, now, zoneRadius);
+                        this.collectOrbs(room, zoneRadius);
+                        this.collectEnergy(room, zoneRadius);
+                        this.collectCores(room, zoneRadius);
+                        this.updateProjectiles(room, deltaFrames, now);
+                        this.maintainWorldItems(room, zoneRadius, now);
+                        this.updateWinCondition(room, now);
                     }
-                    if (room.status === "playing" && (!room.lastTransformBroadcastAt ||
-                        now - room.lastTransformBroadcastAt >= (room?.coreHeistMode
-                            ? CORE_HEIST_TRANSFORM_INTERVAL_MS
-                            : ZONE_TRANSFORM_INTERVAL_MS))) {
-                        room.lastTransformBroadcastAt = now;
-                        try {
-                            this.broadcastZonePvpTransforms(room, now);
-                        }
-                        catch (error) {
-                            this.reportCoreHeistStepError(room, "transform-broadcast", error, now);
-                        }
-                    }
-                    const broadcastInterval = room?.coreHeistMode
-                        ? CORE_HEIST_STATE_INTERVAL_MS
-                        : room.players.size >= PVP_HEAVY_STATE_THRESHOLD
-                            ? ZONE_STATE_INTERVAL_HEAVY_MS
-                            : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
-                                ? ZONE_STATE_INTERVAL_CROWDED_MS
-                                : ZONE_STATE_INTERVAL_MS;
-                    if (!room.lastBroadcastAt || now - room.lastBroadcastAt >= broadcastInterval) {
+                    if (!room.lastBroadcastAt || now - room.lastBroadcastAt >= 25) {
                         room.lastBroadcastAt = now;
+                        this.broadcastRoomState(room, now);
+                    }
+                    this.cleanupRoom(room, now);
+                }
+                for (const room of this.normalRooms.values()) {
+                    const zoneRadius = NORMAL_ROOM_ZONE_RADIUS;
+                    this.updatePlayers(room, now, zoneRadius, deltaFrames);
+                    this.handleBodyCollisions(room, now, zoneRadius);
+                    this.collectOrbs(room, zoneRadius);
+                    this.collectEnergy(room, zoneRadius);
+                    this.collectCores(room, zoneRadius);
+                    this.updateProjectiles(room, deltaFrames, now);
+                    this.maintainWorldItems(room, zoneRadius, now);
+                    this.cleanupCombatEvents(room, now);
+                    const broadcastInterval = room.players.size <= 1
+                        ? NORMAL_STATE_INTERVAL_SOLO_MS
+                        : room.players.size >= PVP_HEAVY_STATE_THRESHOLD
+                            ? NORMAL_STATE_INTERVAL_HEAVY_MS
+                            : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
+                                ? NORMAL_STATE_INTERVAL_CROWDED_MS
+                                : NORMAL_STATE_INTERVAL_MS;
+                    if (!room.lastBroadcastAt ||
+                        now - room.lastBroadcastAt >= broadcastInterval) {
+                        room.lastBroadcastAt = now;
+                        this.broadcastNormalRoomState(room, now);
+                    }
+                    this.cleanupNormalRoom(room, now);
+                }
+                for (const room of this.battleRoyaleOnlineRooms.values()) {
+                    this.updateBattleRoyaleOnlineRoomStatus(room, now);
+                    if (room.status === "playing") {
+                        const zoneRadius = this.getBattleRoyaleOnlineZoneRadius(room);
+                        this.updatePlayers(room, now, zoneRadius, deltaFrames);
+                        this.applyBattleRoyaleOnlineZoneDamage(room, now, zoneRadius);
+                        this.handleBodyCollisions(room, now, zoneRadius);
+                        this.collectOrbs(room, zoneRadius);
+                        this.collectEnergy(room, zoneRadius);
+                        this.collectCores(room, zoneRadius);
+                        this.updateProjectiles(room, deltaFrames, now);
+                        this.maintainWorldItems(room, zoneRadius, now);
+                        this.updateBattleRoyaleOnlineWinCondition(room, now);
+                    }
+                    const broadcastInterval = room.players.size >= 24
+                        ? BATTLE_ROYALE_STATE_INTERVAL_CROWDED_MS
+                        : BATTLE_ROYALE_STATE_INTERVAL_MS;
+                    if (!room.lastBroadcastAt ||
+                        now - room.lastBroadcastAt >= broadcastInterval) {
+                        room.lastBroadcastAt = now;
+                        this.broadcastBattleRoyaleOnlineRoomState(room, now);
+                    }
+                    this.cleanupBattleRoyaleOnlineRoom(room, now);
+                }
+                for (const room of this.zonePvpRooms.values()) {
+                    try {
+                        this.updateZonePvpRoomStatus(room, now);
+                        if (room.status === "playing") {
+                            const zoneRadius = this.getZonePvpZoneRadius(room);
+                            if (room?.coreHeistMode) {
+                                this.tickCoreHeistRoom(room, now, deltaFrames, zoneRadius);
+                            }
+                            else {
+                                this.updateZonePvpBots(room, now, zoneRadius);
+                                this.updatePlayers(room, now, zoneRadius, deltaFrames);
+                                this.applyZonePvpZoneDamage(room, now, zoneRadius);
+                                this.updateProjectiles(room, deltaFrames, now);
+                                if (!room.lastZoneCollisionAt || now - room.lastZoneCollisionAt >= ZONE_COLLISION_TICK_INTERVAL_MS) {
+                                    room.lastZoneCollisionAt = now;
+                                    this.handleBodyCollisions(room, now, zoneRadius);
+                                }
+                                if (!room.lastZoneLootAt || now - room.lastZoneLootAt >= ZONE_LOOT_TICK_INTERVAL_MS) {
+                                    room.lastZoneLootAt = now;
+                                    this.collectOrbs(room, zoneRadius);
+                                    this.collectEnergy(room, zoneRadius);
+                                    this.collectCores(room, zoneRadius);
+                                }
+                                if (!room.lastZoneItemMaintenanceAt || now - room.lastZoneItemMaintenanceAt >= ZONE_ITEM_MAINTENANCE_INTERVAL_MS) {
+                                    room.lastZoneItemMaintenanceAt = now;
+                                    this.maintainWorldItems(room, zoneRadius, now);
+                                    this.cleanupCombatEvents(room, now);
+                                }
+                                this.updateZonePvpWinCondition(room, now);
+                            }
+                        }
+                        if (room?.coreHeistMode && room.status === "playing" && (!room.lastCoreHeistHeartbeatAt ||
+                            now - room.lastCoreHeistHeartbeatAt >= CORE_HEIST_HEARTBEAT_INTERVAL_MS)) {
+                            room.lastCoreHeistHeartbeatAt = now;
+                            try {
+                                this.emitCoreHeistHeartbeat(room, now);
+                            }
+                            catch (error) {
+                                this.reportCoreHeistStepError(room, "heartbeat", error, now);
+                            }
+                        }
+                        if (room.status === "playing" && (!room.lastTransformBroadcastAt ||
+                            now - room.lastTransformBroadcastAt >= (room?.coreHeistMode
+                                ? CORE_HEIST_TRANSFORM_INTERVAL_MS
+                                : ZONE_TRANSFORM_INTERVAL_MS))) {
+                            room.lastTransformBroadcastAt = now;
+                            try {
+                                this.broadcastZonePvpTransforms(room, now);
+                            }
+                            catch (error) {
+                                this.reportCoreHeistStepError(room, "transform-broadcast", error, now);
+                            }
+                        }
+                        const broadcastInterval = room?.coreHeistMode
+                            ? CORE_HEIST_STATE_INTERVAL_MS
+                            : room.players.size >= PVP_HEAVY_STATE_THRESHOLD
+                                ? ZONE_STATE_INTERVAL_HEAVY_MS
+                                : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
+                                    ? ZONE_STATE_INTERVAL_CROWDED_MS
+                                    : ZONE_STATE_INTERVAL_MS;
+                        if (!room.lastBroadcastAt || now - room.lastBroadcastAt >= broadcastInterval) {
+                            room.lastBroadcastAt = now;
+                            try {
+                                this.broadcastZonePvpRoomState(room, now);
+                            }
+                            catch (error) {
+                                this.reportCoreHeistStepError(room, "state-broadcast", error, now);
+                            }
+                        }
                         try {
-                            this.broadcastZonePvpRoomState(room, now);
+                            this.flushZonePvpWorldDelta(room, now);
                         }
                         catch (error) {
-                            this.reportCoreHeistStepError(room, "state-broadcast", error, now);
+                            this.reportCoreHeistStepError(room, "world-delta", error, now);
+                        }
+                        try {
+                            this.cleanupZonePvpRoom(room, now);
+                        }
+                        catch (error) {
+                            this.reportCoreHeistStepError(room, "room-cleanup", error, now);
                         }
                     }
-                    try {
-                        this.flushZonePvpWorldDelta(room, now);
-                    }
                     catch (error) {
-                        this.reportCoreHeistStepError(room, "world-delta", error, now);
-                    }
-                    try {
-                        this.cleanupZonePvpRoom(room, now);
-                    }
-                    catch (error) {
-                        this.reportCoreHeistStepError(room, "room-cleanup", error, now);
+                        room.zoneLoopErrorCount = Number(room.zoneLoopErrorCount || 0) + 1;
+                        room.lastZoneLoopErrorAt = now;
+                        if (!room.lastZoneLoopErrorLogAt || now - room.lastZoneLoopErrorLogAt >= 5000) {
+                            room.lastZoneLoopErrorLogAt = now;
+                            console.error(`[Zone PvP] recovered room tick error for ${room.id}`, error);
+                        }
                     }
                 }
-                catch (error) {
-                    room.zoneLoopErrorCount = Number(room.zoneLoopErrorCount || 0) + 1;
-                    room.lastZoneLoopErrorAt = now;
-                    if (!room.lastZoneLoopErrorLogAt || now - room.lastZoneLoopErrorLogAt >= 5000) {
-                        room.lastZoneLoopErrorLogAt = now;
-                        console.error(`[Zone PvP] recovered room tick error for ${room.id}`, error);
-                    }
+            }
+            catch (error) {
+                if (!this.lastLoopErrorLogAt || now - this.lastLoopErrorLogAt >= 5000) {
+                    this.lastLoopErrorLogAt = now;
+                    console.error("[Arena] recovered outer simulation tick error", error);
                 }
             }
         }, 1000 / 60);
@@ -3242,6 +3262,104 @@ let GameGateway = class GameGateway {
         room.lastCoreHeistStepErrorLogAt = now;
         console.error(`[Core Heist] recovered ${stage} step in room ${room.id}`, error);
     }
+    hardenCoreHeistRuntime(room, now = Date.now()) {
+        if (!room?.coreHeistMode)
+            return;
+        room.players = room.players instanceof Map ? room.players : new Map();
+        room.orbs = Array.isArray(room.orbs) ? room.orbs : [];
+        room.energyCells = Array.isArray(room.energyCells) ? room.energyCells : [];
+        room.projectiles = Array.isArray(room.projectiles) ? room.projectiles : [];
+        room.collisionCooldowns = room.collisionCooldowns instanceof Map
+            ? room.collisionCooldowns
+            : new Map();
+        if (!room.heist || !Array.isArray(room.heist.bases) || !Array.isArray(room.heist.flags)) {
+            const preservedScore = room?.heist?.score || {};
+            const fresh = this.createCoreHeistState(now);
+            fresh.score.cyan = Math.max(0, Number(preservedScore?.cyan || 0));
+            fresh.score.orange = Math.max(0, Number(preservedScore?.orange || 0));
+            fresh.matchEndsAt = Number(room?.heist?.matchEndsAt || 0) || now + CORE_HEIST_MATCH_DURATION_MS;
+            room.heist = fresh;
+        }
+        const isFiniteNumber = (value) => Number.isFinite(Number(value));
+        for (const player of room.players.values()) {
+            if (!player)
+                continue;
+            const team = String(player?.team || "cyan") === "orange" ? "orange" : "cyan";
+            const role = this.normalizeCoreHeistRole(player?.heistRole || "attacker");
+            const spawn = this.getCoreHeistSpawn(room, team, Number(player?.heistSpawnIndex || 0));
+            if (!isFiniteNumber(player.x) || !isFiniteNumber(player.y)) {
+                player.x = spawn.x;
+                player.y = spawn.y;
+                player.prevX = spawn.x;
+                player.prevY = spawn.y;
+                player.velocityX = 0;
+                player.velocityY = 0;
+                player.knockbackX = 0;
+                player.knockbackY = 0;
+            }
+            if (!isFiniteNumber(player.prevX))
+                player.prevX = Number(player.x);
+            if (!isFiniteNumber(player.prevY))
+                player.prevY = Number(player.y);
+            if (!isFiniteNumber(player.velocityX))
+                player.velocityX = 0;
+            if (!isFiniteNumber(player.velocityY))
+                player.velocityY = 0;
+            if (!isFiniteNumber(player.knockbackX))
+                player.knockbackX = 0;
+            if (!isFiniteNumber(player.knockbackY))
+                player.knockbackY = 0;
+            const expectedMaxHp = role === "tank" ? CORE_HEIST_TANK_HP : START_HP;
+            if (!isFiniteNumber(player.maxHp) || Number(player.maxHp) <= 0)
+                player.maxHp = expectedMaxHp;
+            if (!isFiniteNumber(player.hp))
+                player.hp = Number(player.maxHp);
+            player.hp = this.clamp(Number(player.hp), 0, Number(player.maxHp));
+            if (!isFiniteNumber(player.energy))
+                player.energy = START_ENERGY;
+            player.energy = this.clamp(Number(player.energy), 0, START_ENERGY);
+            if (!isFiniteNumber(player.drones))
+                player.drones = 0;
+            player.drones = this.clamp(Math.floor(Number(player.drones)), 0, MAX_DRONES);
+            if (!isFiniteNumber(player.progress))
+                player.progress = 0;
+            if (!isFiniteNumber(player.nextDroneAt) || Number(player.nextDroneAt) <= 0) {
+                player.nextDroneAt = this.getNextDroneAt(Number(player.drones));
+            }
+            player.team = team;
+            player.heistRole = role;
+            player.input = player.input && typeof player.input === "object" ? player.input : {};
+            if (player.alive !== false)
+                player.alive = player.hp > 0;
+        }
+        room.projectiles = room.projectiles.filter((projectile) => {
+            if (!projectile)
+                return false;
+            return isFiniteNumber(projectile.x) && isFiniteNumber(projectile.y) &&
+                isFiniteNumber(projectile.vx) && isFiniteNumber(projectile.vy);
+        });
+    }
+    emitCoreHeistHeartbeat(room, now = Date.now()) {
+        if (!room?.coreHeistMode || room.status !== "playing")
+            return;
+        const heist = room.heist;
+        const packet = {
+            serverNow: now,
+            roomId: room.id,
+            roundId: room.roundId || null,
+            phaseVersion: Number(room.phaseVersion || 0),
+            status: room.status,
+            matchEndsAt: Number(heist?.matchEndsAt || 0),
+            remainingMs: Math.max(0, Number(heist?.matchEndsAt || 0) - now),
+        };
+        for (const player of room.players.values()) {
+            if (player?.isBot)
+                continue;
+            const socket = this.server?.sockets?.sockets?.get(String(player.id));
+            if (socket?.connected)
+                socket.volatile.compress(false).emit("zone-pvp:heartbeat", packet);
+        }
+    }
     applyCoreHeistImpactDamage(room, target, now = Date.now(), source = "impact") {
         const role = this.normalizeCoreHeistRole(target?.heistRole || "attacker");
         const hasEscort = Number(target?.drones || 0) > 0;
@@ -3648,13 +3766,12 @@ let GameGateway = class GameGateway {
                 this.reportCoreHeistStepError(room, stage, error, now);
             }
         };
+        run("runtime-guard", () => this.hardenCoreHeistRuntime(room, now));
         run("respawn", () => this.reviveCoreHeistPlayers(room, now));
         run("bot-ai", () => this.updateCoreHeistBots(room, now));
-        run("movement", () => {
-            this.updatePlayers(room, now, zoneRadius, deltaFrames);
-            this.applyCoreHeistRolePassives(room, now, deltaFrames);
-            this.updateProjectiles(room, deltaFrames, now);
-        });
+        run("movement", () => this.updatePlayers(room, now, zoneRadius, deltaFrames));
+        run("role-passives", () => this.applyCoreHeistRolePassives(room, now, deltaFrames));
+        run("projectiles", () => this.updateProjectiles(room, deltaFrames, now));
         if (!room.lastZoneCollisionAt || now - room.lastZoneCollisionAt >= ZONE_COLLISION_TICK_INTERVAL_MS) {
             room.lastZoneCollisionAt = now;
             run("collisions", () => this.handleBodyCollisions(room, now, zoneRadius));
@@ -6205,6 +6322,15 @@ let GameGateway = class GameGateway {
                     flags,
                     Math.max(0, Math.min(MAX_DRONES, Number(unit.drones || 0))),
                     unit.skin || "cyan",
+                    ...(room?.coreHeistMode
+                        ? [
+                            String(unit.id || ""),
+                            String(unit.team || "cyan"),
+                            this.normalizeCoreHeistRole(unit.heistRole || "attacker"),
+                            Math.round(Number(unit.hp || 0) * 10) / 10,
+                            Math.round(Number(unit.maxHp || START_HP) * 10) / 10,
+                        ]
+                        : []),
                 ];
             });
             const projectileRows = this.filterNear(viewAnchor, room.projectiles || [], range + 460, ZONE_TRANSFORM_PROJECTILE_LIMIT).map((projectile) => {

@@ -62,7 +62,7 @@ const REMOTE_STALE_TIMEOUT_MS = 5000;
 const ZONE_PACKET_SILENCE_BEFORE_CHECK_MS = 20000;
 // Core Heist runs a compact 50 Hz transform lane. Detect a genuine silence
 // much sooner than the large Zone PvP lobby, then request a reliable resync.
-const CORE_HEIST_PACKET_SILENCE_BEFORE_CHECK_MS = 7000;
+const CORE_HEIST_PACKET_SILENCE_BEFORE_CHECK_MS = 3500;
 const ZONE_SESSION_CHECK_TIMEOUT_MS = 8000;
 const ZONE_BINARY_PROTOCOL_VERSION = 1;
 const ZONE_BINARY_PLAYER_BYTES = 32;
@@ -1061,11 +1061,17 @@ function decodeZonePlayerRow(row, meta = {}) {
   const flags = Number(row[6] || 0);
   const netId = Number(row[0] || 0);
   // row[8] carries the skin string when available (CoreHeist role variants).
-  // Falls back to meta.skin so non-heist modes are unaffected.
+  // Core Heist extends the tuple with identity/team/role/HP so one delayed
+  // low-frequency state packet can never make a remote bot lose its metadata.
   const rowSkin = row[8] ? String(row[8]) : null;
+  const rowId = row[9] ? String(row[9]) : null;
+  const rowTeam = row[10] ? String(row[10]) : null;
+  const rowRole = row[11] ? String(row[11]) : null;
+  const rowHp = Number(row[12]);
+  const rowMaxHp = Number(row[13]);
   return {
     ...(meta || {}),
-    id: meta?.id || zoneNetKey(netId),
+    id: rowId || meta?.id || zoneNetKey(netId),
     netId,
     x: Number(row[1] || 0),
     y: Number(row[2] || 0),
@@ -1079,6 +1085,10 @@ function decodeZonePlayerRow(row, meta = {}) {
     isBot: Boolean(flags & 16) || Boolean(meta?.isBot),
     drones: Number(row[7] ?? meta?.drones ?? 0),
     skin: normalizeSkin(rowSkin || meta?.skin || 'cyan'),
+    team: rowTeam || meta?.team || null,
+    heistRole: rowRole || meta?.heistRole || null,
+    hp: Number.isFinite(rowHp) ? rowHp : meta?.hp,
+    maxHp: Number.isFinite(rowMaxHp) ? rowMaxHp : meta?.maxHp,
   };
 }
 
@@ -2807,6 +2817,29 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       consumeMovementFrame(packet);
     };
 
+    const applyCoreHeistHeartbeat = (packet = {}) => {
+      const packetRoomId = String(packet?.roomId || "");
+      const currentRoomId = String(zonePhaseRef.current?.roomId || worldRef.current?.roomId || "");
+      if (packetRoomId && currentRoomId && packetRoomId !== currentRoomId) return;
+      if (String(worldRef.current?.mode || "") !== "core-heist") return;
+
+      lastZoneServerPacketAtRef.current = Date.now();
+      updateServerClockOffset(packet?.serverNow);
+      const current = worldRef.current;
+      const previousHeist = current?.heist || {};
+      const nextHeist = {
+        ...previousHeist,
+        matchEndsAt: Number(packet?.matchEndsAt || previousHeist?.matchEndsAt || 0),
+        remainingMs: Math.max(0, Number(packet?.remainingMs ?? previousHeist?.remainingMs ?? 0)),
+      };
+      worldRef.current = {
+        ...current,
+        serverNow: Number(packet?.serverNow || current?.serverNow || 0),
+        status: packet?.status || current?.status,
+        heist: nextHeist,
+      };
+    };
+
     // Legacy binary packets are intentionally ignored. The JSON transform lane
     // now contains complete entities, so bots never wait for separate metadata.
     const applyBinaryTransforms = () => {};
@@ -3112,6 +3145,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     socket.on("zone-pvp:round-closed", handleZoneRoundClosed);
     socket.on("zone-pvp:state", applyState);
     socket.on("zone-pvp:movement", applyMovementFrame);
+    socket.on("zone-pvp:heartbeat", applyCoreHeistHeartbeat);
     // The former binary lane is intentionally not subscribed. It could produce
     // incomplete entity definitions on mobile and make bots disappear.
     socket.on("zone-pvp:collision", applyZoneCollisionImpulse);
@@ -3259,6 +3293,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       socket.off("zone-pvp:round-closed", handleZoneRoundClosed);
       socket.off("zone-pvp:state", applyState);
       socket.off("zone-pvp:movement", applyMovementFrame);
+      socket.off("zone-pvp:heartbeat", applyCoreHeistHeartbeat);
       socket.off("zone-pvp:collision", applyZoneCollisionImpulse);
       socket.off("zone-pvp:combat", applyPrivateCombatEvent);
       socket.off("zone-pvp:heist-event", applyCoreHeistEvent);

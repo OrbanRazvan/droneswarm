@@ -16,6 +16,7 @@ export declare class GameGateway {
     private readonly prisma;
     private loop;
     private lastLoopAt;
+    private lastLoopErrorLogAt;
     constructor();
     private normalizeGameStatsMode;
     private normalizeGameStatsUserId;
@@ -142,6 +143,8 @@ export declare class GameGateway {
     private getCoreHeistEnemyTeam;
     private applyCoreHeistRolePassives;
     private reportCoreHeistStepError;
+    private hardenCoreHeistRuntime;
+    private emitCoreHeistHeartbeat;
     private applyCoreHeistImpactDamage;
     private updateCoreHeistBots;
     private tickCoreHeistRoom;
