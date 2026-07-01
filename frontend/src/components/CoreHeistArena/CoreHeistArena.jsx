@@ -3670,11 +3670,13 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 980, liveCameraScale);
       // Core Heist has a denser server economy. These are render caps only:
       // the server remains authoritative for every orb and energy cell.
+      // Core Heist has only eight participants. Keep a generous pickup
+      // budget so energy cells and orbs are visible in the actual world.
       const renderLimits = mobilePerformanceRef.current
-        ? { detailed: 6, total: 60, orbs: 56, energy: 20, cores: 4, projectiles: 5, simpleProjectiles: 30 }
+        ? { detailed: 6, total: 60, orbs: 88, energy: 36, cores: 4, projectiles: 5, simpleProjectiles: 30 }
         : constrainedDesktopRef.current
-          ? { detailed: 7, total: 60, orbs: 96, energy: 34, cores: 6, projectiles: 10, simpleProjectiles: 34 }
-          : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 220, energy: 78, cores: 9, projectiles: 36, simpleProjectiles: 45 };
+          ? { detailed: 7, total: 60, orbs: 160, energy: 64, cores: 6, projectiles: 10, simpleProjectiles: 34 }
+          : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 360, energy: 140, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
       // Map insertion order is not distance order. On a good desktop we keep
       // the existing per-frame sort. On a weak desktop, only the *membership*
@@ -3802,7 +3804,8 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         // Zone PvP shares the same premium space background as the good-desktop
         // profile. Pixi hides it only temporarily if emergency frame pressure is measured.
         worldTheme: "premium-space-battle",
-        staticItemBudget: mobilePerformanceRef.current ? 52 : 110,
+        // Pixi's actual world layer receives a separate visual budget.
+        staticItemBudget: mobilePerformanceRef.current ? 92 : 240,
         safeZoneRadius: zoneRadius,
         // Core Heist has no shrinking zone. Keeping Zone's huge radius active
         // wasted a world-layer draw and could cover objective graphics.
@@ -4212,10 +4215,10 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y * cameraScale : 0;
   const bounds = getViewportBounds(cameraX, cameraY, viewport, 720, cameraScale);
   const reactiveRenderLimits = isMobileControls
-    ? { detailed: 6, total: 50, orbs: 64, energy: 22, cores: 4, projectiles: 5, simpleProjectiles: 26 }
+    ? { detailed: 6, total: 50, orbs: 88, energy: 36, cores: 4, projectiles: 5, simpleProjectiles: 26 }
     : constrainedDesktopRef.current
-      ? { detailed: 10, total: 60, orbs: 124, energy: 44, cores: 7, projectiles: 14, simpleProjectiles: 42 }
-      : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 220, energy: 78, cores: 9, projectiles: 36, simpleProjectiles: 45 };
+      ? { detailed: 10, total: 60, orbs: 160, energy: 64, cores: 7, projectiles: 14, simpleProjectiles: 42 }
+      : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 340, energy: 136, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
   const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), reactiveRenderLimits.orbs);
   const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), reactiveRenderLimits.energy);
@@ -4438,11 +4441,13 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const zoneRemainingMinutes = Math.floor(zoneRemainingMs / 60000);
   const zoneRemainingSeconds = Math.floor((zoneRemainingMs % 60000) / 1000).toString().padStart(2, "0");
 
-  const hp = hudYou?.hp ?? 100;
-  const maxHp = hudYou?.maxHp ?? 100;
-  const energy = hudYou?.energy ?? 100;
-  const progress = hudYou?.progress ?? 0;
-  const nextDroneAt = hudYou?.nextDroneAt ?? 5;
+  // Server combat can use fractional values internally; the HUD must always
+  // present clean whole numbers to the player.
+  const hp = Math.max(0, Math.round(Number(hudYou?.hp ?? 100)));
+  const maxHp = Math.max(1, Math.round(Number(hudYou?.maxHp ?? 100)));
+  const energy = Math.max(0, Math.min(100, Math.round(Number(hudYou?.energy ?? 100))));
+  const progress = Math.max(0, Math.round(Number(hudYou?.progress ?? 0)));
+  const nextDroneAt = Math.max(1, Math.round(Number(hudYou?.nextDroneAt ?? 5)));
 
   const heist = hudData.heist || renderData.heist || null;
   const heistScore = heist?.score || { cyan: 0, orange: 0 };
@@ -4576,7 +4581,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         worldWidth={worldWidth}
         worldHeight={worldHeight}
         worldTheme="premium-space-battle"
-        staticItemBudget={isRealMobileDevice() ? 52 : 110}
+        staticItemBudget={isRealMobileDevice() ? 92 : 240}
         heistObjectives={hudData.heist || renderData.heist || null}
         safeZoneRadius={null}
         showZone={false}
@@ -4688,6 +4693,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
             worldWidth={worldWidth}
             worldHeight={worldHeight}
             orbs={renderData.minimapOrbs || []}
+            energyCells={renderData.minimapEnergyCells || renderData.energyCells || []}
             cores={renderData.minimapCores || renderData.cores || []}
             safeZoneRadius={null}
             players={renderData.players || []}

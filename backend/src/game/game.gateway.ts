@@ -139,12 +139,21 @@ const CORE_HEIST_BASE_PERIMETER_RADIUS = 860;
 const CORE_HEIST_MAX_DEATHS = 2;
 // Core Heist is an eight-player objective mode. It can safely have a denser
 // opening economy than the 60-seat modes without producing heavy packets.
-const CORE_HEIST_OPENING_ORBS_PER_BASE = 112;
-const CORE_HEIST_MIDFIELD_ORB_COUNT = 260;
-const CORE_HEIST_OPENING_ENERGY_PER_BASE = 44;
-const CORE_HEIST_MIDFIELD_ENERGY_COUNT = 86;
-const CORE_HEIST_ORB_TARGET = 540;
-const CORE_HEIST_ENERGY_TARGET = 200;
+const CORE_HEIST_OPENING_ORBS_PER_BASE = 100;
+const CORE_HEIST_MIDFIELD_ORB_COUNT = 400;
+const CORE_HEIST_OPENING_ENERGY_PER_BASE = 35;
+const CORE_HEIST_MIDFIELD_ENERGY_COUNT = 180;
+// Guaranteed dense resources directly in and around every home base. The rest
+// of the economy remains random across the full world, so both opening farm
+// and long routes are rewarding.
+const CORE_HEIST_BASE_CLOSE_ORBS_PER_BASE = 46;
+const CORE_HEIST_BASE_CLOSE_ENERGY_PER_BASE = 20;
+// Core Heist is only 4v4, so it can sustain a denser world economy. Clients
+// still receive only their nearby, server-authoritative subset.
+const CORE_HEIST_ORB_TARGET = 960;
+const CORE_HEIST_ENERGY_TARGET = 360;
+const CORE_HEIST_ORB_COLLECT_DISTANCE = 235;
+const CORE_HEIST_ENERGY_COLLECT_DISTANCE = 210;
 const CORE_HEIST_BOT_HOME_THREAT_RADIUS = 2700;
 const CORE_HEIST_BOT_HOME_FARM_RADIUS = 2300;
 const CORE_HEIST_BOT_PREPARE_ENERGY_TARGET = 88;
@@ -227,7 +236,7 @@ const ZONE_TRANSFORM_PLAYER_LIMIT = 60;
 const ZONE_TRANSFORM_PROJECTILE_LIMIT = 36;
 const ZONE_TRANSFORM_RANGE_PADDING = 820;
 const ZONE_WORLD_DELTA_INTERVAL_MS = 250;
-const ZONE_LOOT_TICK_INTERVAL_MS = 50;
+const ZONE_LOOT_TICK_INTERVAL_MS = 34;
 const ZONE_COLLISION_TICK_INTERVAL_MS = 34;
 const ZONE_ITEM_MAINTENANCE_INTERVAL_MS = 260;
 // Kept only for backwards-compatible type references. Zone no longer depends on
@@ -236,7 +245,7 @@ const ZONE_TRANSFORM_PROTOCOL_VERSION = 1;
 const ZONE_TRANSFORM_PLAYER_BYTES = 32;
 const ZONE_TRANSFORM_PROJECTILE_BYTES = 28;
 const STATIC_STATE_INTERVAL_MS = 1400; // minimap + leaderboard
-const VIEWPORT_ITEM_STATE_INTERVAL_MS = 550; // static nearby loot, per player
+const VIEWPORT_ITEM_STATE_INTERVAL_MS = 320; // nearby loot refreshes quickly; transforms remain on a separate hot lane
 const PVP_CROWDED_STATE_THRESHOLD = 12;
 const PVP_HEAVY_STATE_THRESHOLD = 28;
 const ITEM_SPATIAL_CELL_SIZE = 1000;
@@ -3645,75 +3654,81 @@ export class GameGateway {
     const seededOrbs: any[] = [];
     const seededEnergy: any[] = [];
 
-    // Core Heist is only 4v4, so it can use a richer permanent economy than
-    // the 60-player modes without heavy replication. Both sides receive the
-    // same base economy, while the central lane stays worth contesting.
+    const randomBasePoint = (base: any, minRadius: number, maxRadius: number, margin: number) => {
+      const angle = Math.random() * Math.PI * 2;
+      const radius = minRadius + Math.sqrt(Math.random()) * Math.max(1, maxRadius - minRadius);
+      return {
+        x: this.clamp(Number(base?.x || WORLD_WIDTH * 0.5) + Math.cos(angle) * radius, margin, WORLD_WIDTH - margin),
+        y: this.clamp(Number(base?.y || WORLD_HEIGHT * 0.5) + Math.sin(angle) * radius, margin, WORLD_HEIGHT - margin),
+      };
+    };
+
+    // Each base has a generous, randomized local economy. It is deliberately
+    // scattered instead of ring-shaped so routes look natural and players can
+    // always replenish inside and just outside their own perimeter.
     for (const base of bases) {
       for (let index = 0; index < CORE_HEIST_OPENING_ORBS_PER_BASE; index += 1) {
-        const angle =
-          (index / CORE_HEIST_OPENING_ORBS_PER_BASE) * Math.PI * 2 +
-          String(base?.team || "").length * 0.19;
-        const ring = Math.floor(index / 8);
-        const radius = 500 + ring * 190 + (index % 8) * 24;
-
+        const point = randomBasePoint(base, 240, 2100, 220);
         seededOrbs.push({
           id: crypto.randomUUID(),
-          x: this.clamp(
-            Number(base?.x || WORLD_WIDTH * 0.5) + Math.cos(angle) * radius,
-            220,
-            WORLD_WIDTH - 220,
-          ),
-          y: this.clamp(
-            Number(base?.y || WORLD_HEIGHT * 0.5) + Math.sin(angle) * radius,
-            220,
-            WORLD_HEIGHT - 220,
-          ),
-          color: COLORS[index % COLORS.length],
+          x: point.x,
+          y: point.y,
+          color: COLORS[Math.floor(Math.random() * COLORS.length)],
         });
       }
 
-      // Batteries are distributed as a second, wider ring. They are plentiful
-      // enough for the defender to sustain a base patrol and for the push team
-      // to return home without starving its shield economy.
       for (let index = 0; index < CORE_HEIST_OPENING_ENERGY_PER_BASE; index += 1) {
-        const angle =
-          (index / CORE_HEIST_OPENING_ENERGY_PER_BASE) * Math.PI * 2 +
-          (String(base?.team || "").length + 3) * 0.27;
-        const ring = Math.floor(index / 6);
-        const radius = 650 + ring * 270 + (index % 6) * 34;
+        const point = randomBasePoint(base, 360, 2350, 240);
         seededEnergy.push({
           id: crypto.randomUUID(),
-          x: this.clamp(Number(base?.x || WORLD_WIDTH * 0.5) + Math.cos(angle) * radius, 240, WORLD_WIDTH - 240),
-          y: this.clamp(Number(base?.y || WORLD_HEIGHT * 0.5) + Math.sin(angle) * radius, 240, WORLD_HEIGHT - 240),
+          x: point.x,
+          y: point.y,
         });
       }
     }
 
-    // A wide, staggered lane network keeps the centre contested while still
-    // putting resources across the entire route between the two bases.
-    for (let index = 0; index < CORE_HEIST_MIDFIELD_ORB_COUNT; index += 1) {
-      const columns = 20;
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-      const x = WORLD_WIDTH * 0.5 + (column - 9.5) * 330 + (row % 2 ? 118 : -118);
-      const y = WORLD_HEIGHT * 0.5 + (row - 6) * 440 + ((column % 3) - 1) * 92;
+    // A close, randomized pocket is always visible at each base. It prevents
+    // the opening area from looking empty while still avoiding a rigid ring.
+    for (const base of bases) {
+      for (let index = 0; index < CORE_HEIST_BASE_CLOSE_ORBS_PER_BASE; index += 1) {
+        const point = randomBasePoint(base, 105, 820, 180);
+        seededOrbs.push({
+          id: crypto.randomUUID(),
+          x: point.x,
+          y: point.y,
+          color: COLORS[Math.floor(Math.random() * COLORS.length)],
+        });
+      }
 
+      for (let index = 0; index < CORE_HEIST_BASE_CLOSE_ENERGY_PER_BASE; index += 1) {
+        const point = randomBasePoint(base, 130, 920, 190);
+        seededEnergy.push({
+          id: crypto.randomUUID(),
+          x: point.x,
+          y: point.y,
+        });
+      }
+    }
+
+    // The rest is truly map-wide random distribution: not a line, not a grid.
+    // This keeps every route between the bases viable and makes exploration
+    // worthwhile even after the opening farm.
+    for (let index = 0; index < CORE_HEIST_MIDFIELD_ORB_COUNT; index += 1) {
+      const point = this.randomSafePoint(Math.max(WORLD_WIDTH, WORLD_HEIGHT), 220);
       seededOrbs.push({
         id: crypto.randomUUID(),
-        x: this.clamp(x, 220, WORLD_WIDTH - 220),
-        y: this.clamp(y, 220, WORLD_HEIGHT - 220),
-        color: COLORS[(index + 2) % COLORS.length],
+        x: point.x,
+        y: point.y,
+        color: COLORS[Math.floor(Math.random() * COLORS.length)],
       });
     }
 
     for (let index = 0; index < CORE_HEIST_MIDFIELD_ENERGY_COUNT; index += 1) {
-      const columns = 14;
-      const column = index % columns;
-      const row = Math.floor(index / columns);
+      const point = this.randomSafePoint(Math.max(WORLD_WIDTH, WORLD_HEIGHT), 240);
       seededEnergy.push({
         id: crypto.randomUUID(),
-        x: this.clamp(WORLD_WIDTH * 0.5 + (column - 6.5) * 480 + (row % 2 ? 145 : -145), 240, WORLD_WIDTH - 240),
-        y: this.clamp(WORLD_HEIGHT * 0.5 + (row - 3) * 690 + ((column % 2) ? 160 : -160), 240, WORLD_HEIGHT - 240),
+        x: point.x,
+        y: point.y,
       });
     }
 
@@ -3725,42 +3740,55 @@ export class GameGateway {
   private ensureCoreHeistResources(room: any, zoneRadius: number) {
     if (!room?.coreHeistMode) return;
     const alive = this.getAlivePlayers(room);
+    let changed = false;
 
-    // Keep the world dense, but cap it tightly for the eight-seat mode.
-    while ((room.orbs || []).length < CORE_HEIST_ORB_TARGET) {
-      room.orbs.push(this.createOrb(zoneRadius));
+    room.orbs = Array.isArray(room.orbs) ? room.orbs : [];
+    room.energyCells = Array.isArray(room.energyCells) ? room.energyCells : [];
+
+    // Refill to the global target with genuinely random world positions.
+    while (room.orbs.length < CORE_HEIST_ORB_TARGET) {
+      room.orbs.push(this.createOrb(Math.max(WORLD_WIDTH, WORLD_HEIGHT)));
+      changed = true;
     }
-    while ((room.energyCells || []).length < CORE_HEIST_ENERGY_TARGET) {
-      room.energyCells.push(this.createEnergyCell(zoneRadius));
+    while (room.energyCells.length < CORE_HEIST_ENERGY_TARGET) {
+      room.energyCells.push(this.createEnergyCell(Math.max(WORLD_WIDTH, WORLD_HEIGHT)));
+      changed = true;
     }
 
-    // Every active drone receives a few reachable resources. This is vital for
-    // defenders that patrol a base and for Tank/Attacker formations in transit.
+    // A player should never travel through an empty area. This local safety
+    // net keeps base defense, the Tank push and flank routes playable while the
+    // majority of loot remains distributed across the full world.
     for (const player of alive) {
-      const nearbyOrbs = (room.orbs || []).filter((orb: any) => this.isNear(player, orb, 1900)).length;
-      const nearbyEnergy = (room.energyCells || []).filter((cell: any) => this.isNear(player, cell, 2050)).length;
+      const nearbyOrbs = room.orbs.filter((orb: any) => this.isNear(player, orb, 2100)).length;
+      const nearbyEnergy = room.energyCells.filter((cell: any) => this.isNear(player, cell, 2200)).length;
 
-      if (nearbyOrbs < 32 && room.orbs.length < CORE_HEIST_ORB_TARGET + 72) {
-        const add = Math.min(8, 32 - nearbyOrbs);
+      if (nearbyOrbs < 36 && room.orbs.length < CORE_HEIST_ORB_TARGET + 150) {
+        const add = Math.min(16, 68 - nearbyOrbs);
         for (let index = 0; index < add; index += 1) {
-          room.orbs.push(this.createOrb(zoneRadius, Number(player.x || 0), Number(player.y || 0)));
+          room.orbs.push(this.createOrb(Math.max(WORLD_WIDTH, WORLD_HEIGHT), Number(player.x || 0), Number(player.y || 0)));
+          changed = true;
         }
       }
 
-      if (nearbyEnergy < 10 && room.energyCells.length < CORE_HEIST_ENERGY_TARGET + 42) {
-        const add = Math.min(4, 10 - nearbyEnergy);
+      if (nearbyEnergy < 24 && room.energyCells.length < CORE_HEIST_ENERGY_TARGET + 90) {
+        const add = Math.min(7, 24 - nearbyEnergy);
         for (let index = 0; index < add; index += 1) {
-          room.energyCells.push(this.createEnergyCell(zoneRadius, Number(player.x || 0), Number(player.y || 0)));
+          room.energyCells.push(this.createEnergyCell(Math.max(WORLD_WIDTH, WORLD_HEIGHT), Number(player.x || 0), Number(player.y || 0)));
+          changed = true;
         }
       }
     }
 
-    if (room.orbs.length > CORE_HEIST_ORB_TARGET + 84) {
-      room.orbs = room.orbs.slice(-(CORE_HEIST_ORB_TARGET + 84));
+    if (room.orbs.length > CORE_HEIST_ORB_TARGET + 85) {
+      room.orbs = room.orbs.slice(-(CORE_HEIST_ORB_TARGET + 85));
+      changed = true;
     }
-    if (room.energyCells.length > CORE_HEIST_ENERGY_TARGET + 48) {
-      room.energyCells = room.energyCells.slice(-(CORE_HEIST_ENERGY_TARGET + 48));
+    if (room.energyCells.length > CORE_HEIST_ENERGY_TARGET + 90) {
+      room.energyCells = room.energyCells.slice(-(CORE_HEIST_ENERGY_TARGET + 90));
+      changed = true;
     }
+
+    if (changed) room.itemSpatialDirty = true;
   }
 
   private initializeCoreHeistRoom(room: any, now = Date.now()) {
@@ -5767,14 +5795,19 @@ export class GameGateway {
 
       let collected = 0;
       const collectedOrbIds: string[] = [];
-      const candidates = room.orbSpatialIndex
-        ? this.querySpatialIndex(
-            room.orbSpatialIndex,
-            player.x,
-            player.y,
-            ORB_COLLECT_DISTANCE + 180,
-          )
-        : room.orbs;
+      const pickupDistance = room?.coreHeistMode
+        ? CORE_HEIST_ORB_COLLECT_DISTANCE
+        : ORB_COLLECT_DISTANCE;
+      const candidates = room?.coreHeistMode
+        ? room.orbs
+        : room.orbSpatialIndex
+          ? this.querySpatialIndex(
+              room.orbSpatialIndex,
+              player.x,
+              player.y,
+              pickupDistance + 180,
+            )
+          : room.orbs;
 
       for (const orb of candidates) {
         if (
@@ -5798,8 +5831,8 @@ export class GameGateway {
 
         if (
           endDx * endDx + endDy * endDy >
-            ORB_COLLECT_DISTANCE * ORB_COLLECT_DISTANCE &&
-          pathDistance > ORB_COLLECT_DISTANCE
+            pickupDistance * pickupDistance &&
+          pathDistance > pickupDistance
         ) {
           continue;
         }
@@ -5845,6 +5878,9 @@ export class GameGateway {
       // Keep the next collect pass and the next network snapshot in sync with
       // the authoritative arrays; stale index references caused the old
       // repeated/missing-count bug.
+      if (room?.coreHeistMode) {
+        this.ensureCoreHeistResources(room, zoneRadius);
+      }
       this.refreshRoomSpatialIndexes(room, Date.now(), true);
 
       this.emitWorldItemDelta(room, {
@@ -5863,14 +5899,19 @@ export class GameGateway {
 
       let collected = 0;
       const collectedEnergyIds: string[] = [];
-      const candidates = room.energySpatialIndex
-        ? this.querySpatialIndex(
-            room.energySpatialIndex,
-            player.x,
-            player.y,
-            ENERGY_CELL_COLLECT_DISTANCE + 180,
-          )
-        : room.energyCells;
+      const pickupDistance = room?.coreHeistMode
+        ? CORE_HEIST_ENERGY_COLLECT_DISTANCE
+        : ENERGY_CELL_COLLECT_DISTANCE;
+      const candidates = room?.coreHeistMode
+        ? room.energyCells
+        : room.energySpatialIndex
+          ? this.querySpatialIndex(
+              room.energySpatialIndex,
+              player.x,
+              player.y,
+              pickupDistance + 180,
+            )
+          : room.energyCells;
 
       for (const cell of candidates) {
         if (
@@ -5894,8 +5935,8 @@ export class GameGateway {
 
         if (
           endDx * endDx + endDy * endDy >
-            ENERGY_CELL_COLLECT_DISTANCE * ENERGY_CELL_COLLECT_DISTANCE &&
-          pathDistance > ENERGY_CELL_COLLECT_DISTANCE
+            pickupDistance * pickupDistance &&
+          pathDistance > pickupDistance
         ) {
           continue;
         }
@@ -5945,6 +5986,9 @@ export class GameGateway {
         }
       }
 
+      if (room?.coreHeistMode) {
+        this.ensureCoreHeistResources(room, zoneRadius);
+      }
       this.refreshRoomSpatialIndexes(room, Date.now(), true);
       this.emitWorldItemDelta(room, {
         removedEnergyIds: [...collectedIds],
@@ -6201,7 +6245,8 @@ export class GameGateway {
       }
     }
 
-    if (now - (room.lastLocalItemAt || 0) > 1800) {
+    const localItemRefreshMs = room?.coreHeistMode ? 650 : 1800;
+    if (now - (room.lastLocalItemAt || 0) > localItemRefreshMs) {
       room.lastLocalItemAt = now;
       this.ensureLocalItemsAroundPlayers(room, zoneRadius);
     }
@@ -7720,10 +7765,10 @@ export class GameGateway {
         : null;
 
     if (includeStaticState) {
-      const minimapOrbStride = room.coreHeistMode ? 2 : 3;
-      const minimapOrbLimit = room.coreHeistMode ? 270 : 120;
+      const minimapOrbStride = room.coreHeistMode ? 1 : 3;
+      const minimapOrbLimit = room.coreHeistMode ? 420 : 120;
       const minimapEnergyStride = room.coreHeistMode ? 1 : 2;
-      const minimapEnergyLimit = room.coreHeistMode ? 170 : 60;
+      const minimapEnergyLimit = room.coreHeistMode ? 240 : 60;
       minimapOrbs = [...room.orbs]
         .sort((a, b) => a.id.localeCompare(b.id))
         .filter((_, index) => index % minimapOrbStride === 0)
@@ -7764,7 +7809,11 @@ export class GameGateway {
       }
 
       const viewAnchor = spectatorTarget || player;
+      // Core Heist has only eight pilots and a dense economy. Send its nearby
+      // pickups in every state packet so local/deployed clients never wait on
+      // a stale spatial-index refresh before seeing world loot.
       const includeViewportItems =
+        Boolean(room?.coreHeistMode) ||
         !player.lastViewportItemStateAt ||
         now - player.lastViewportItemStateAt >= VIEWPORT_ITEM_STATE_INTERVAL_MS;
       if (includeViewportItems) player.lastViewportItemStateAt = now;
@@ -7875,17 +7924,38 @@ export class GameGateway {
       };
 
       if (includeViewportItems) {
-        const visibleOrbLimit = room.coreHeistMode ? 230 : 140;
-        const visibleEnergyLimit = room.coreHeistMode ? 78 : 30;
-        payload.orbs = room.orbSpatialIndex
-          ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, visibleOrbLimit)
-          : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, visibleOrbLimit);
-        payload.energyCells = room.energySpatialIndex
-          ? this.filterNearIndexed(viewAnchor, room.energyCells, VIEW_DISTANCE, visibleEnergyLimit)
-          : this.filterNear(viewAnchor, room.energyCells, VIEW_DISTANCE, visibleEnergyLimit);
-        payload.cores = room.coreSpatialIndex
-          ? this.filterNearIndexed(viewAnchor, room.coreSpatialIndex, VIEW_DISTANCE + 600, 8)
-          : this.filterNear(viewAnchor, room.cores, VIEW_DISTANCE + 600, 8);
+        const visibleOrbLimit = room.coreHeistMode ? 380 : 140;
+        const visibleEnergyLimit = room.coreHeistMode ? 150 : 30;
+
+        if (room.coreHeistMode) {
+          // Do not depend on a cached index for the 4v4 resource lane. A full
+          // exact scan of roughly one thousand static items is cheap here and
+          // guarantees that nearby world pickups arrive after spawn, collect
+          // and deployment without any stale-index gaps.
+          payload.orbs = this.filterNear(
+            viewAnchor,
+            room.orbs,
+            VIEW_DISTANCE + 720,
+            visibleOrbLimit,
+          );
+          payload.energyCells = this.filterNear(
+            viewAnchor,
+            room.energyCells,
+            VIEW_DISTANCE + 720,
+            visibleEnergyLimit,
+          );
+          payload.cores = this.filterNear(viewAnchor, room.cores, VIEW_DISTANCE + 600, 8);
+        } else {
+          payload.orbs = room.orbSpatialIndex
+            ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, visibleOrbLimit)
+            : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, visibleOrbLimit);
+          payload.energyCells = room.energySpatialIndex
+            ? this.filterNearIndexed(viewAnchor, room.energySpatialIndex, VIEW_DISTANCE, visibleEnergyLimit)
+            : this.filterNear(viewAnchor, room.energyCells, VIEW_DISTANCE, visibleEnergyLimit);
+          payload.cores = room.coreSpatialIndex
+            ? this.filterNearIndexed(viewAnchor, room.coreSpatialIndex, VIEW_DISTANCE + 600, 8)
+            : this.filterNear(viewAnchor, room.cores, VIEW_DISTANCE + 600, 8);
+        }
       }
 
       if (includeStaticState) {

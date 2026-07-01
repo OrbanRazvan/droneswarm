@@ -3746,9 +3746,15 @@ function PixiArenaRenderer({
               : adaptiveTier === 1
                 ? Math.min(baseItemBudget, config.visualFirstWeakDesktop ? 70 : config.lowSpecDesktop ? 38 : 78)
                 : baseItemBudget;
-          const itemBudget = adaptiveItemCap;
-          const orbBudget = Math.floor(itemBudget * 0.70);
-          const energyBudget = Math.floor(itemBudget * 0.24);
+          const isCoreHeist = Boolean(data.heistObjectives?.bases?.length);
+          // Reserve visible slots for energy cells as well as orbs in Core
+          // Heist. This affects the actual Pixi world layer, never the map.
+          const coreHeistMinimumBudget = config.weakMobile || config.lowSpecDesktop ? 84 : 210;
+          const itemBudget = isCoreHeist
+            ? Math.min(staticBudgetCeiling, Math.max(adaptiveItemCap, coreHeistMinimumBudget))
+            : adaptiveItemCap;
+          const orbBudget = Math.floor(itemBudget * (isCoreHeist ? 0.66 : 0.70));
+          const energyBudget = Math.floor(itemBudget * (isCoreHeist ? 0.29 : 0.24));
           const coreBudget = Math.max(2, itemBudget - orbBudget - energyBudget);
 
           upsertStaticLayer({
