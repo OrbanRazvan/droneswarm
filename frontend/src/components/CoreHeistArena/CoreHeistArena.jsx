@@ -3203,10 +3203,15 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       // Inputs are latest-wins. Reliable input at 50 Hz can form a TCP queue on
       // mobile and makes *other* drones appear seconds behind. A reliable STOP
       // packet handles release, while active held input is volatile and current.
+      // EXCEPTION: on mobile with active movement, use reliable emit so the server
+      // always receives the moving state and correctly drains energy.
       const sendStop = !hasActiveControl && hadActiveControlRef.current;
       hadActiveControlRef.current = hasActiveControl;
       if (sendStop) {
         socket.emit("zone-pvp:input-stop", { seq: input.seq });
+      } else if (input.mobileMove && hasActiveControl) {
+        // Mobile movement: reliable so energy drain is not blocked by dropped packets
+        socket.emit("zone-pvp:input", input);
       } else {
         socket.volatile.emit("zone-pvp:input", input);
       }

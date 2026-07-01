@@ -3542,9 +3542,8 @@ let GameGateway = class GameGateway {
                 if (!combatReady) {
                     const midX = (Number(squad.ownBase?.x || 0) + Number(squad.enemyBase?.x || 0)) / 2;
                     const midY = (Number(squad.ownBase?.y || 0) + Number(squad.enemyBase?.y || 0)) / 2;
-                    const orbAnchor = { x: midX, y: midY };
-                    const guardR2 = Math.min(1200, baseDist * 0.35);
-                    const orb = pickResource(bot, "def-open-orb", room.orbs || [], claimedOrbs, { maxDist: guardR2 + 1500, anchor: ownBase, anchorR: guardR2 + 1200 });
+                    const guardR2 = Math.min(1400, baseDist * 0.40);
+                    const orb = pickResource(bot, "def-open-orb", room.orbs || [], claimedOrbs, { maxDist: guardR2, anchor: ownBase, anchorR: guardR2 });
                     if (orb) {
                         targetPt = { x: Number(orb.x || bot.x), y: Number(orb.y || bot.y) };
                         state = "defender-opening-farm";
@@ -3610,11 +3609,14 @@ let GameGateway = class GameGateway {
                 const openingFarm = !combatReady;
                 const teamScore = Number(heistScore[team] || 0);
                 const flagUrgent = teamScore > 0 || Number(heistScore[this.getCoreHeistEnemyTeam(team)] || 0) >= CORE_HEIST_TARGET_SCORE - 1;
+                const enemyFlagTakenByEnemy = String(enemyFlag?.status || "") === "carried" &&
+                    enemies.some((e) => String(e?.heistFlagId || "") === enemyFlagId);
                 if (openingFarm) {
                     const midX = (Number(squad.ownBase?.x || 0) + Number(squad.enemyBase?.x || 0)) / 2;
                     const midY = (Number(squad.ownBase?.y || 0) + Number(squad.enemyBase?.y || 0)) / 2;
-                    const orbAnchor = { x: midX, y: midY };
-                    const orb = pickResource(bot, "tank-open-orb", room.orbs || [], claimedOrbs, { maxDist: 4000, anchor: orbAnchor, anchorR: 3500 });
+                    const corridorAnchor = { x: midX, y: midY };
+                    const corridorR = baseDist * 0.52;
+                    const orb = pickResource(bot, "tank-open-orb", room.orbs || [], claimedOrbs, { maxDist: corridorR + 800, anchor: corridorAnchor, anchorR: corridorR });
                     if (orb) {
                         targetPt = { x: Number(orb.x || bot.x), y: Number(orb.y || bot.y) };
                         state = "tank-opening-farm";
@@ -3623,6 +3625,13 @@ let GameGateway = class GameGateway {
                         targetPt = { x: Number(midX), y: Number(midY) };
                         state = "tank-opening-move";
                     }
+                }
+                else if (enemyFlagTakenByEnemy) {
+                    const interceptPt = clampW(Number(ownBase.x || 0) + (Number(enemyBase.x || 0) - Number(ownBase.x || 0)) * 0.35, Number(ownBase.y || 0) + (Number(enemyBase.y || 0) - Number(ownBase.y || 0)) * 0.35);
+                    targetPt = interceptPt;
+                    attackTarget = pickThreat(bot, enemies, 2400, ownFlagId);
+                    state = "tank-return-defend";
+                    useShield = combatReady && Number(bot?.energy || 0) >= 24 && Boolean(attackTarget) && dist(bot, attackTarget) < 900;
                 }
                 else if (flagUrgent && !friendlyCarrier) {
                     const flagTarget2 = { x: Number(enemyFlag.x || enemyBase.x || 0), y: Number(enemyFlag.y || enemyBase.y || 0) };
@@ -3757,19 +3766,27 @@ let GameGateway = class GameGateway {
                         useShield = combatReady && Number(bot?.energy || 0) >= 22 && Boolean(attackTarget) && dist(bot, attackTarget) < 800;
                     }
                     else {
+                        const flagAvailable = String(enemyFlag?.status || "") === "home" || String(enemyFlag?.status || "") === "dropped";
                         const flagPos = { x: Number(enemyFlag.x || enemyBase.x || 0), y: Number(enemyFlag.y || enemyBase.y || 0) };
-                        const needRes = fNeedRes > 0.45 || lowDrones;
-                        const orbAnchor = flagPos;
-                        const orb = needRes ? pickResource(bot, "tg-orb", room.orbs || [], claimedOrbs, { maxDist: 2000, anchor: orbAnchor, anchorR: 2500 }) : null;
-                        if (orb) {
-                            targetPt = { x: Number(orb.x || bot.x), y: Number(orb.y || bot.y) };
-                            state = "tankguard-farm";
-                            attackTarget = pickThreat(bot, enemies, 2000, ownFlagId);
+                        if (!flagAvailable) {
+                            const midPoint = clampW((Number(ownBase.x || 0) + Number(enemyBase.x || 0)) * 0.42, (Number(ownBase.y || 0) + Number(enemyBase.y || 0)) * 0.42);
+                            targetPt = midPoint;
+                            attackTarget = pickThreat(bot, enemies, 2200, ownFlagId);
+                            state = "tankguard-hold-mid";
                         }
                         else {
-                            targetPt = flagPos;
-                            attackTarget = pickThreat(bot, enemies, 2200, ownFlagId);
-                            state = "tankguard-push-flag";
+                            const needRes = fNeedRes > 0.45 || lowDrones;
+                            const orb = needRes ? pickResource(bot, "tg-orb", room.orbs || [], claimedOrbs, { maxDist: 2000 }) : null;
+                            if (orb) {
+                                targetPt = { x: Number(orb.x || bot.x), y: Number(orb.y || bot.y) };
+                                state = "tankguard-farm";
+                                attackTarget = pickThreat(bot, enemies, 2000, ownFlagId);
+                            }
+                            else {
+                                targetPt = flagPos;
+                                attackTarget = pickThreat(bot, enemies, 2200, ownFlagId);
+                                state = "tankguard-push-flag";
+                            }
                         }
                     }
                 }
@@ -3868,19 +3885,34 @@ let GameGateway = class GameGateway {
                         }, now);
                     }
                     else {
-                        heist.score[team] = Number(heist.score?.[team] || 0) + 1;
-                        heist.lastScoreAt = now;
-                        this.pushCombatEvent(room, player, "FLAG CAPTURED", "drone-reward", now);
-                        this.pushCoreHeistEvent(room, {
-                            type: "captured",
-                            actor: player,
-                            flag: carried,
-                            scoreTeam: team,
-                        }, now);
-                        this.resetCoreHeistFlag(carried);
-                        if (Number(heist.score?.[team] || 0) >= CORE_HEIST_TARGET_SCORE) {
-                            this.finishCoreHeistMatch(room, player, team, now, "flag-capture");
-                            return;
+                        const myFlag = this.getCoreHeistFlag(room, team);
+                        const myFlagCarriedByEnemy = myFlag && String(myFlag.status || "") === "carried" &&
+                            String(myFlag.carrierId || "") !== String(player.id || "") &&
+                            !([...room.players.values()].find((p) => String(p?.id || "") === String(myFlag.carrierId || "") &&
+                                String(p?.team || "cyan") === team));
+                        if (myFlagCarriedByEnemy) {
+                            carried.status = "dropped";
+                            carried.carrierId = null;
+                            carried.x = Number(player.x || carried.x || 0);
+                            carried.y = Number(player.y || carried.y || 0);
+                            player.heistFlagId = null;
+                            this.pushCombatEvent(room, player, "SCORE BLOCKED", "damage", now);
+                        }
+                        else {
+                            heist.score[team] = Number(heist.score?.[team] || 0) + 1;
+                            heist.lastScoreAt = now;
+                            this.pushCombatEvent(room, player, "FLAG CAPTURED", "drone-reward", now);
+                            this.pushCoreHeistEvent(room, {
+                                type: "captured",
+                                actor: player,
+                                flag: carried,
+                                scoreTeam: team,
+                            }, now);
+                            this.resetCoreHeistFlag(carried);
+                            if (Number(heist.score?.[team] || 0) >= CORE_HEIST_TARGET_SCORE) {
+                                this.finishCoreHeistMatch(room, player, team, now, "flag-capture");
+                                return;
+                            }
                         }
                     }
                 }
@@ -3899,7 +3931,7 @@ let GameGateway = class GameGateway {
                     ownFlag.droppedAt = 0;
                     player.heistFlagId = ownFlag.id;
                     this.pushCombatEvent(room, player, "OWN FLAG RECOVERED", "heal", now);
-                    this.broadcastZonePvpRoomState(room, now, true);
+                    room.lastBroadcastAt = 0;
                     continue;
                 }
             }
@@ -3921,7 +3953,7 @@ let GameGateway = class GameGateway {
                         actor: player,
                         flag: enemyFlag,
                     }, now);
-                    this.broadcastZonePvpRoomState(room, now, true);
+                    room.lastBroadcastAt = 0;
                 }
             }
         }
@@ -4027,7 +4059,12 @@ let GameGateway = class GameGateway {
             let dx = 0;
             let dy = 0;
             const input = player.input || {};
-            const inputFresh = player.isBot || !player.lastInputReceivedAt || now - player.lastInputReceivedAt <= 280;
+            const inputTimeout = player.isBot
+                ? Infinity
+                : (Boolean(input?.mobileMove) ? 600 : 280);
+            const inputFresh = player.isBot ||
+                !player.lastInputReceivedAt ||
+                now - player.lastInputReceivedAt <= inputTimeout;
             if (!inputFresh) {
                 player.input = {};
             }

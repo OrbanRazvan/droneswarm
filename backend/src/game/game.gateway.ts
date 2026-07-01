@@ -4482,9 +4482,9 @@ export class GameGateway {
         if (!combatReady) {
           const midX = (Number(squad.ownBase?.x||0) + Number(squad.enemyBase?.x||0)) / 2;
           const midY = (Number(squad.ownBase?.y||0) + Number(squad.enemyBase?.y||0)) / 2;
-          const orbAnchor = { x: midX, y: midY };
-          const guardR2 = Math.min(1200, baseDist * 0.35);
-          const orb = pickResource(bot,"def-open-orb",room.orbs||[],claimedOrbs,{maxDist:guardR2+1500, anchor:ownBase, anchorR:guardR2+1200});
+          const guardR2 = Math.min(1400, baseDist * 0.40);
+          // Defender farmeste STRICT in perimetrul bazei proprii + culoar proxim
+          const orb = pickResource(bot,"def-open-orb",room.orbs||[],claimedOrbs,{maxDist:guardR2, anchor:ownBase, anchorR:guardR2});
           if (orb) { targetPt={x:Number(orb.x||bot.x),y:Number(orb.y||bot.y)}; state="defender-opening-farm"; }
           else { targetPt=getDefenderPatrolTarget(bot,ownBase,enemyBase); state="defender-opening-patrol"; }
         } else {
@@ -4546,15 +4546,31 @@ export class GameGateway {
         // Urgenta mare daca echipa are deja un punct (graba dupa al doilea steag)
         const teamScore = Number(heistScore[team] || 0);
         const flagUrgent = teamScore > 0 || Number(heistScore[this.getCoreHeistEnemyTeam(team)] || 0) >= CORE_HEIST_TARGET_SCORE - 1;
+        // Steagul inamic e luat de inamic (nu e disponibil pentru pickup)
+        const enemyFlagTakenByEnemy = String(enemyFlag?.status||"") === "carried" &&
+          enemies.some((e:any) => String(e?.heistFlagId||"") === enemyFlagId);
 
         if (openingFarm) {
-          // Farm agresiv in opening phase - merge spre culoarul central pentru orbs
+          // Farm agresiv in opening phase STRICT pe culoarul central
+          // Nu iesim in afara coridorului - maxDist calculat din jumatatea drumului
           const midX = (Number(squad.ownBase?.x||0) + Number(squad.enemyBase?.x||0)) / 2;
           const midY = (Number(squad.ownBase?.y||0) + Number(squad.enemyBase?.y||0)) / 2;
-          const orbAnchor = { x: midX, y: midY };
-          const orb = pickResource(bot,"tank-open-orb",room.orbs||[],claimedOrbs,{maxDist:4000, anchor:orbAnchor, anchorR:3500});
+          const corridorAnchor = { x: midX, y: midY };
+          const corridorR = baseDist * 0.52; // 52% din distanta totala = culoar central
+          const orb = pickResource(bot,"tank-open-orb",room.orbs||[],claimedOrbs,{maxDist:corridorR+800, anchor:corridorAnchor, anchorR:corridorR});
           if (orb) { targetPt={x:Number(orb.x||bot.x),y:Number(orb.y||bot.y)}; state="tank-opening-farm"; }
           else { targetPt={x:Number(midX),y:Number(midY)}; state="tank-opening-move"; }
+        } else if (enemyFlagTakenByEnemy) {
+          // Steagul inamic e deja furat de ei — tank se intoarce spre baza proprie
+          // si apara/intercepteaza purtatorii lor
+          const interceptPt = clampW(
+            Number(ownBase.x||0) + (Number(enemyBase.x||0)-Number(ownBase.x||0))*0.35,
+            Number(ownBase.y||0) + (Number(enemyBase.y||0)-Number(ownBase.y||0))*0.35,
+          );
+          targetPt = interceptPt;
+          attackTarget = pickThreat(bot, enemies, 2400, ownFlagId);
+          state = "tank-return-defend";
+          useShield = combatReady && Number(bot?.energy||0)>=24 && Boolean(attackTarget) && dist(bot,attackTarget)<900;
         } else if (flagUrgent && !friendlyCarrier) {
           // Urgenta: merge direct la steagul inamic, fara farm intermediar
           const flagTarget2 = {x:Number(enemyFlag.x||enemyBase.x||0), y:Number(enemyFlag.y||enemyBase.y||0)};
@@ -4679,17 +4695,29 @@ export class GameGateway {
             emergencyMode = Boolean(attackTarget&&dist(bot,attackTarget)<1000);
             useShield = combatReady && Number(bot?.energy||0)>=22 && Boolean(attackTarget) && dist(bot,attackTarget)<800;
           } else {
-            // tankGuard fara lider: merge spre steagul inamic ca sa sustina
-            // viitorul raider sau sa ia el steagul daca nu e altcineva
+            // tankGuard fara lider: comportament depinde de starea steagului inamic
+            const flagAvailable = String(enemyFlag?.status||"") === "home" || String(enemyFlag?.status||"") === "dropped";
             const flagPos = {x:Number(enemyFlag.x||enemyBase.x||0), y:Number(enemyFlag.y||enemyBase.y||0)};
-            const needRes = fNeedRes > 0.45 || lowDrones;
-            const orbAnchor = flagPos; // ia orbs pe drum spre steag
-            const orb = needRes ? pickResource(bot,"tg-orb",room.orbs||[],claimedOrbs,{maxDist:2000, anchor:orbAnchor, anchorR:2500}) : null;
-            if (orb) { targetPt={x:Number(orb.x||bot.x),y:Number(orb.y||bot.y)}; state="tankguard-farm"; attackTarget=pickThreat(bot,enemies,2000,ownFlagId); }
-            else {
-              targetPt = flagPos;
+
+            if (!flagAvailable) {
+              // Steagul inamic nu e disponibil - apara baza proprie / intercepteaza
+              const midPoint = clampW(
+                (Number(ownBase.x||0) + Number(enemyBase.x||0)) * 0.42,
+                (Number(ownBase.y||0) + Number(enemyBase.y||0)) * 0.42,
+              );
+              targetPt = midPoint;
               attackTarget = pickThreat(bot, enemies, 2200, ownFlagId);
-              state = "tankguard-push-flag";
+              state = "tankguard-hold-mid";
+            } else {
+              // Steagul inamic e disponibil - merge sa il ia
+              const needRes = fNeedRes > 0.45 || lowDrones;
+              const orb = needRes ? pickResource(bot,"tg-orb",room.orbs||[],claimedOrbs,{maxDist:2000}) : null;
+              if (orb) { targetPt={x:Number(orb.x||bot.x),y:Number(orb.y||bot.y)}; state="tankguard-farm"; attackTarget=pickThreat(bot,enemies,2000,ownFlagId); }
+              else {
+                targetPt = flagPos;
+                attackTarget = pickThreat(bot, enemies, 2200, ownFlagId);
+                state = "tankguard-push-flag";
+              }
             }
           }
         }
@@ -4815,19 +4843,40 @@ export class GameGateway {
               flag: carried,
             }, now);
           } else {
-            heist.score[team] = Number(heist.score?.[team] || 0) + 1;
-            heist.lastScoreAt = now;
-            this.pushCombatEvent(room, player, "FLAG CAPTURED", "drone-reward", now);
-            this.pushCoreHeistEvent(room, {
-              type: "captured",
-              actor: player,
-              flag: carried,
-              scoreTeam: team,
-            }, now);
-            this.resetCoreHeistFlag(carried);
-            if (Number(heist.score?.[team] || 0) >= CORE_HEIST_TARGET_SCORE) {
-              this.finishCoreHeistMatch(room, player, team, now, "flag-capture");
-              return;
+            // Regula explicita: poti puncta DOAR daca steagul tau NU e dus de un inamic
+            // (poate fi acasa sau cazut pe jos, dar nu in mainile inamicului)
+            const myFlag = this.getCoreHeistFlag(room, team);
+            const myFlagCarriedByEnemy = myFlag && String(myFlag.status||"") === "carried" &&
+              String(myFlag.carrierId||"") !== String(player.id||"") &&
+              !([...room.players.values()].find((p:any) =>
+                String(p?.id||"") === String(myFlag.carrierId||"") &&
+                String(p?.team||"cyan") === team
+              ));
+            if (myFlagCarriedByEnemy) {
+              // Nu putem puncta - steagul nostru e dus de inamic
+              // Setam un mesaj de hint si eliberam steagul inamic capturat
+              // (il lasam jos, nu il resetam la baza lor - raman sanse de recuperare)
+              carried.status = "dropped";
+              carried.carrierId = null;
+              carried.x = Number(player.x || carried.x || 0);
+              carried.y = Number(player.y || carried.y || 0);
+              player.heistFlagId = null;
+              this.pushCombatEvent(room, player, "SCORE BLOCKED", "damage", now);
+            } else {
+              heist.score[team] = Number(heist.score?.[team] || 0) + 1;
+              heist.lastScoreAt = now;
+              this.pushCombatEvent(room, player, "FLAG CAPTURED", "drone-reward", now);
+              this.pushCoreHeistEvent(room, {
+                type: "captured",
+                actor: player,
+                flag: carried,
+                scoreTeam: team,
+              }, now);
+              this.resetCoreHeistFlag(carried);
+              if (Number(heist.score?.[team] || 0) >= CORE_HEIST_TARGET_SCORE) {
+                this.finishCoreHeistMatch(room, player, team, now, "flag-capture");
+                return;
+              }
             }
           }
         }
@@ -4850,7 +4899,8 @@ export class GameGateway {
           ownFlag.droppedAt = 0;
           player.heistFlagId = ownFlag.id;
           this.pushCombatEvent(room, player, "OWN FLAG RECOVERED", "heal", now);
-          this.broadcastZonePvpRoomState(room, now, true);
+          // Defer forced broadcast to next scheduled tick - avoids blocking 60Hz loop
+          room.lastBroadcastAt = 0;
           continue;
         }
       }
@@ -4874,7 +4924,8 @@ export class GameGateway {
             actor: player,
             flag: enemyFlag,
           }, now);
-          this.broadcastZonePvpRoomState(room, now, true);
+          // Defer broadcast - avoids 60Hz loop spike
+          room.lastBroadcastAt = 0;
         }
       }
     }
@@ -5001,10 +5052,15 @@ export class GameGateway {
       // Nu continuam sa deplasam drona la infinit daca telefonul a intrat in
       // background sau ultimul pachet de input s-a pierdut. Clientul activ
       // trimite heartbeat mult mai des decat acest timeout.
-      // Human input is latest-wins and expires quickly after a lost STOP packet.
-      // Bots keep their held vector until the next tactical replan (up to 320 ms),
-      // otherwise they visibly pause before every AI decision.
-      const inputFresh = player.isBot || !player.lastInputReceivedAt || now - player.lastInputReceivedAt <= 280;
+      // Human input is latest-wins. On mobile, socket.volatile.emit can drop
+      // packets under congestion so we use a longer timeout. Bots keep their
+      // held vector until next replan (up to 620ms by design).
+      const inputTimeout = player.isBot
+        ? Infinity
+        : (Boolean(input?.mobileMove) ? 600 : 280);
+      const inputFresh = player.isBot ||
+        !player.lastInputReceivedAt ||
+        now - player.lastInputReceivedAt <= inputTimeout;
       if (!inputFresh) {
         player.input = {};
       }
