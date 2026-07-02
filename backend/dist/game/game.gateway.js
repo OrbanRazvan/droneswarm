@@ -5977,7 +5977,21 @@ let GameGateway = class GameGateway {
         }, now);
         this.refreshRoomSpatialIndexes(room, now, true);
     }
-    fillCaptureTheFlagBots(room) {
+    fillCaptureTheFlagBots(room, replacementSeat = null) {
+        const seatToReplace = replacementSeat && !replacementSeat?.isBot
+            ? {
+                team: String(replacementSeat?.team || "cyan") === "orange" ? "orange" : "cyan",
+                role: String(replacementSeat?.ctfRole || ""),
+                packId: this.normalizeCaptureTheFlagPackId(replacementSeat?.ctfSelectedPackId),
+                skin: String(replacementSeat?.skin || ""),
+                roleLabel: replacementSeat?.ctfRoleLabel || null,
+                roleVariant: replacementSeat?.ctfRoleVariant || null,
+                skinFamily: replacementSeat?.ctfSkinFamily || null,
+                skinVariantKey: replacementSeat?.ctfSkinVariantKey || null,
+                roleProfileVersion: replacementSeat?.ctfRoleProfileVersion || null,
+                botSlot: Number(replacementSeat?.ctfBotSlot || 0),
+            }
+            : null;
         const existingBotPacks = new Set([...room.players.values()]
             .filter((player) => player?.isBot)
             .map((player) => String(player?.ctfSelectedPackId || ""))
@@ -5990,11 +6004,17 @@ let GameGateway = class GameGateway {
             ...this.shuffleCaptureTheFlagRoster([...CAPTURE_THE_FLAG_BOT_PACK_IDS]),
         ];
         let packCursor = 0;
+        let replacementConsumed = false;
         while (room.players.size < CAPTURE_THE_FLAG_ROOM_MAX_PLAYERS) {
-            const provisionalTeam = this.assignCaptureTheFlagTeam(room);
+            const useReplacementSeat = Boolean(seatToReplace && !replacementConsumed);
+            const provisionalTeam = useReplacementSeat
+                ? seatToReplace.team
+                : this.assignCaptureTheFlagTeam(room);
             const provisionalSlot = this.getCaptureTheFlagTeamPlayers(room, provisionalTeam).length;
             const spawn = this.getCaptureTheFlagSpawn(room, provisionalTeam, provisionalSlot);
-            const botPackId = packCycle[packCursor++] || this.getRandomCaptureTheFlagBotPackId();
+            const botPackId = useReplacementSeat
+                ? seatToReplace.packId
+                : (packCycle[packCursor++] || this.getRandomCaptureTheFlagBotPackId());
             const bot = this.createCaptureTheFlagPlayer({
                 id: `ctf-bot-${crypto.randomUUID()}`,
                 data: { ctfSelectedPackId: botPackId },
@@ -6002,9 +6022,25 @@ let GameGateway = class GameGateway {
                 x: spawn.x,
                 y: spawn.y,
                 isBot: true,
-                index: room.players.size,
+                index: useReplacementSeat ? seatToReplace.botSlot : room.players.size,
             });
+            if (useReplacementSeat) {
+                bot.ctfRole = seatToReplace.role || null;
+                bot.ctfRoleLabel = seatToReplace.roleLabel;
+                bot.ctfRoleVariant = seatToReplace.roleVariant;
+                bot.ctfSkinFamily = seatToReplace.skinFamily;
+                bot.ctfSkinVariantKey = seatToReplace.skinVariantKey;
+                bot.ctfSkinTeam = provisionalTeam;
+                bot.ctfRoleProfileVersion = seatToReplace.roleProfileVersion;
+                bot.ctfSelectedPackId = seatToReplace.packId;
+                bot.skin = seatToReplace.skin || bot.skin;
+                bot.ctfReplacementFor = "departed-human-seat";
+                replacementConsumed = true;
+            }
             room.players.set(bot.id, bot);
+        }
+        if (room.status === "playing") {
+            this.assignCaptureTheFlagBotRoles(room, false);
         }
     }
     shuffleCaptureTheFlagRoster(entries = []) {
@@ -7034,6 +7070,20 @@ let GameGateway = class GameGateway {
         if (!room)
             return;
         const player = room.players.get(socketId);
+        const departedHumanSeat = player && !player.isBot && room.status === "playing"
+            ? {
+                team: player.team,
+                ctfRole: player.ctfRole,
+                ctfSelectedPackId: player.ctfSelectedPackId,
+                skin: player.skin,
+                ctfRoleLabel: player.ctfRoleLabel,
+                ctfRoleVariant: player.ctfRoleVariant,
+                ctfSkinFamily: player.ctfSkinFamily,
+                ctfSkinVariantKey: player.ctfSkinVariantKey,
+                ctfRoleProfileVersion: player.ctfRoleProfileVersion,
+                ctfBotSlot: player.ctfBotSlot,
+            }
+            : null;
         if (player) {
             this.dropCaptureTheFlagCarrier(room, player, Date.now());
             room.players.delete(socketId);
@@ -7056,8 +7106,9 @@ let GameGateway = class GameGateway {
             room.status = "waiting";
             room.countdownStartedAt = null;
         }
-        if (room.status === "playing")
-            this.fillCaptureTheFlagBots(room);
+        if (room.status === "playing") {
+            this.fillCaptureTheFlagBots(room, departedHumanSeat);
+        }
         this.broadcastCaptureTheFlagState(room, Date.now(), true);
     }
     cleanupCaptureTheFlagRoom(room, now = Date.now()) {

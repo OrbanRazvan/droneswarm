@@ -7765,9 +7765,28 @@ export class GameGateway {
     this.refreshRoomSpatialIndexes(room, now, true);
   }
 
-  private fillCaptureTheFlagBots(room: any) {
-    // Build a shuffled pack cycle for visual variety. The first bots added to
-    // a room receive different CTF packs whenever possible; only after every
+  private fillCaptureTheFlagBots(room: any, replacementSeat: any = null) {
+    // When a real player leaves a live CTF match, the first replacement AI
+    // inherits that exact seat: team, class and equipped CTF pack. This keeps
+    // the roster balanced and makes the handoff visually seamless instead of
+    // replacing a Dark Galactic Tank, for example, with a random AI hull.
+    const seatToReplace = replacementSeat && !replacementSeat?.isBot
+      ? {
+        team: String(replacementSeat?.team || "cyan") === "orange" ? "orange" : "cyan",
+        role: String(replacementSeat?.ctfRole || ""),
+        packId: this.normalizeCaptureTheFlagPackId(replacementSeat?.ctfSelectedPackId),
+        skin: String(replacementSeat?.skin || ""),
+        roleLabel: replacementSeat?.ctfRoleLabel || null,
+        roleVariant: replacementSeat?.ctfRoleVariant || null,
+        skinFamily: replacementSeat?.ctfSkinFamily || null,
+        skinVariantKey: replacementSeat?.ctfSkinVariantKey || null,
+        roleProfileVersion: replacementSeat?.ctfRoleProfileVersion || null,
+        botSlot: Number(replacementSeat?.ctfBotSlot || 0),
+      }
+      : null;
+
+    // Build a shuffled pack cycle for normal AI backfill. The first bots added
+    // to a room receive different CTF packs whenever possible; only after every
     // collection has been used can a pack repeat.
     const existingBotPacks = new Set(
       [...room.players.values()]
@@ -7783,12 +7802,18 @@ export class GameGateway {
       ...this.shuffleCaptureTheFlagRoster([...CAPTURE_THE_FLAG_BOT_PACK_IDS]),
     ];
     let packCursor = 0;
+    let replacementConsumed = false;
 
     while (room.players.size < CAPTURE_THE_FLAG_ROOM_MAX_PLAYERS) {
-      const provisionalTeam = this.assignCaptureTheFlagTeam(room);
+      const useReplacementSeat = Boolean(seatToReplace && !replacementConsumed);
+      const provisionalTeam = useReplacementSeat
+        ? seatToReplace.team
+        : this.assignCaptureTheFlagTeam(room);
       const provisionalSlot = this.getCaptureTheFlagTeamPlayers(room, provisionalTeam).length;
       const spawn = this.getCaptureTheFlagSpawn(room, provisionalTeam, provisionalSlot);
-      const botPackId = packCycle[packCursor++] || this.getRandomCaptureTheFlagBotPackId();
+      const botPackId = useReplacementSeat
+        ? seatToReplace.packId
+        : (packCycle[packCursor++] || this.getRandomCaptureTheFlagBotPackId());
       const bot = this.createCaptureTheFlagPlayer({
         id: `ctf-bot-${crypto.randomUUID()}`,
         data: { ctfSelectedPackId: botPackId },
@@ -7796,9 +7821,34 @@ export class GameGateway {
         x: spawn.x,
         y: spawn.y,
         isBot: true,
-        index: room.players.size,
+        index: useReplacementSeat ? seatToReplace.botSlot : room.players.size,
       });
+
+      if (useReplacementSeat) {
+        // Preserve the precise visual identity immediately for the outgoing
+        // snapshot. assignCaptureTheFlagBotRoles() below then validates the
+        // class profile against the same role + pack without changing the hull.
+        bot.ctfRole = seatToReplace.role || null;
+        bot.ctfRoleLabel = seatToReplace.roleLabel;
+        bot.ctfRoleVariant = seatToReplace.roleVariant;
+        bot.ctfSkinFamily = seatToReplace.skinFamily;
+        bot.ctfSkinVariantKey = seatToReplace.skinVariantKey;
+        bot.ctfSkinTeam = provisionalTeam;
+        bot.ctfRoleProfileVersion = seatToReplace.roleProfileVersion;
+        bot.ctfSelectedPackId = seatToReplace.packId;
+        bot.skin = seatToReplace.skin || bot.skin;
+        bot.ctfReplacementFor = "departed-human-seat";
+        replacementConsumed = true;
+      }
+
       room.players.set(bot.id, bot);
+    }
+
+    // A live round must never wait for the next AI planner frame to repair the
+    // class roster. This preserves the departed player's exact Attack/Tank/
+    // Defender seat and resolves the same selected pack before state broadcast.
+    if (room.status === "playing") {
+      this.assignCaptureTheFlagBotRoles(room, false);
     }
   }
 
@@ -9042,6 +9092,25 @@ export class GameGateway {
     const room = this.getCaptureTheFlagRoomBySocket(socketId);
     if (!room) return;
     const player = room.players.get(socketId);
+
+    // Keep a frozen copy before deleting the real pilot. In a live round this
+    // becomes the cosmetic/class seed for the AI replacement, so the bot stays
+    // on the exact CTF seat rather than being assigned a new random pack.
+    const departedHumanSeat = player && !player.isBot && room.status === "playing"
+      ? {
+        team: player.team,
+        ctfRole: player.ctfRole,
+        ctfSelectedPackId: player.ctfSelectedPackId,
+        skin: player.skin,
+        ctfRoleLabel: player.ctfRoleLabel,
+        ctfRoleVariant: player.ctfRoleVariant,
+        ctfSkinFamily: player.ctfSkinFamily,
+        ctfSkinVariantKey: player.ctfSkinVariantKey,
+        ctfRoleProfileVersion: player.ctfRoleProfileVersion,
+        ctfBotSlot: player.ctfBotSlot,
+      }
+      : null;
+
     if (player) {
       this.dropCaptureTheFlagCarrier(room, player, Date.now());
       room.players.delete(socketId);
@@ -9065,7 +9134,9 @@ export class GameGateway {
       room.status = "waiting";
       room.countdownStartedAt = null;
     }
-    if (room.status === "playing") this.fillCaptureTheFlagBots(room);
+    if (room.status === "playing") {
+      this.fillCaptureTheFlagBots(room, departedHumanSeat);
+    }
     this.broadcastCaptureTheFlagState(room, Date.now(), true);
   }
 
