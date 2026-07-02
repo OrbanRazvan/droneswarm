@@ -504,3 +504,47 @@
     width: min(100%, 84px) !important;
   }
 }
+
+
+/* =========================================================
+   SHOP PREVIEWS — use the exact static Pixi hull renderer that Dashboard
+   passes as StaticDronePreview. These sizing rules only affect Shop cards.
+========================================================= */
+.store-drone-tile > .static-drone-preview {
+  --preview-size: min(100%, 112px);
+  width: min(100%, 112px) !important;
+  height: auto !important;
+  margin: 0 auto !important;
+  flex: 0 0 auto;
+}
+
+.store-pack-card.is-ctf .store-drone-tile > .static-drone-preview {
+  --preview-size: min(100%, 126px);
+  width: min(100%, 126px) !important;
+}
+
+.store-equipped-loadout .store-drone-tile > .static-drone-preview {
+  --preview-size: min(100%, 118px);
+  width: min(100%, 118px) !important;
+}
+
+.store-drone-tile > .static-drone-preview svg {
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: visible !important;
+}
+
+.store-pack-card.is-ctf .store-drone-tile > .static-drone-preview svg {
+  filter:
+    drop-shadow(0 0 7px rgba(109, 255, 177, 0.28))
+    drop-shadow(0 0 16px rgba(0, 220, 245, 0.13));
+}
+
+@media (max-width: 760px) {
+  .store-drone-tile > .static-drone-preview,
+  .store-pack-card.is-ctf .store-drone-tile > .static-drone-preview {
+    --preview-size: min(100%, 92px);
+    width: min(100%, 92px) !important;
+  }
+}

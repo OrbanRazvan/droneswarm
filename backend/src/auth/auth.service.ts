@@ -49,6 +49,9 @@ const ALLOWED_CTF_PACK_IDS = [
   'ctf-pack-medieval-forge',
   'ctf-pack-military-prototype',
   'ctf-pack-dark-galactic',
+  'ctf-pack-abyssal-phantom',
+  'ctf-pack-solar-dynasty',
+  'ctf-pack-crimson-ronin',
 ];
 
 @Injectable()

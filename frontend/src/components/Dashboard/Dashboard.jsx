@@ -257,11 +257,11 @@ const CTF_PREVIEW_PACKS = [
     family: "Starter Command",
     name: "Starter Command Pack",
     price: "FREE",
-    subtitle: "The default CTF deployment set: a fast Cadet Scout, reinforced Cadet Bastion, and perimeter-ready Cadet Sentinel.",
+    subtitle: "The default 4v4 deployment set: a fast Cadet Scout, reinforced Cadet Bastion, and perimeter-ready Cadet Sentinel.",
     skins: [
-      { id: "ctf-blue-attack-alpha-basic-scout", name: "Cadet Scout", role: "ATTACK", family: "starter", colors: ["#2f7fff", "#eaf7ff", "#061322", "#ffd166"] },
-      { id: "ctf-blue-tank-basic-bastion", name: "Cadet Bastion", role: "TANK", family: "starter", colors: ["#2f7fff", "#eaf7ff", "#061322", "#ffd166"] },
-      { id: "ctf-blue-defense-basic-sentinel", name: "Cadet Sentinel", role: "DEFENDER", family: "starter", colors: ["#2f7fff", "#eaf7ff", "#061322", "#ffd166"] },
+      { id: "ctf-blue-attack-alpha-basic-scout", name: "Cadet Scout", role: "ATTACK", family: "starter", colors: ["#00b9d7", "#9af6ff", "#04212e", "#f4feff"] },
+      { id: "ctf-blue-tank-basic-bastion", name: "Cadet Bastion", role: "TANK", family: "starter", colors: ["#2166cf", "#9bc8ff", "#081735", "#f2f8ff"] },
+      { id: "ctf-blue-defense-basic-sentinel", name: "Cadet Sentinel", role: "DEFENDER", family: "starter", colors: ["#00a994", "#a5fff0", "#002a28", "#f1fffc"] },
     ],
   },
   {
@@ -270,7 +270,7 @@ const CTF_PREVIEW_PACKS = [
     family: "Galactic Command",
     name: "Galactic Command Pack",
     price: "€3.00",
-    subtitle: "A three-unit command formation featuring an ion interceptor, armored flag carrier, and perimeter defense platform.",
+    subtitle: "Ion strike hardware with a knife-edge interceptor, command carrier armor, and a high-energy perimeter shield.",
     skins: [
       { id: "ctf-blue-attack-alpha-raptor", name: "Ion Raptor", role: "ATTACK", family: "galactic", colors: ["#00ddff", "#9dfff8", "#00192d", "#f2ffff"] },
       { id: "ctf-blue-tank-bastion", name: "Bastion Core", role: "TANK", family: "galactic", colors: ["#2878ff", "#9ec6ff", "#07173d", "#eaf5ff"] },
@@ -283,7 +283,7 @@ const CTF_PREVIEW_PACKS = [
     family: "Medieval Forge",
     name: "Medieval Forge Pack",
     price: "€3.00",
-    subtitle: "An arcane-forge trio built around rune plating, reinforced siege armor, and a warded defense core.",
+    subtitle: "Arcane-fused combat frames with lance geometry, rune-forged siege plating, and a warded shield citadel.",
     skins: [
       { id: "ctf-blue-attack-alpha-viper", name: "Rune Viper", role: "ATTACK", family: "medieval", colors: ["#31ffc8", "#b7ffea", "#002d27", "#f3fffa"] },
       { id: "ctf-blue-tank-juggernaut", name: "Juggernaut Rune", role: "TANK", family: "medieval", colors: ["#00aeef", "#91e5ff", "#002c47", "#f1fdff"] },
@@ -296,7 +296,7 @@ const CTF_PREVIEW_PACKS = [
     family: "Military Prototype",
     name: "Military Prototype Pack",
     price: "€3.00",
-    subtitle: "A tactical three-drone set with angular armor, active sensor arrays, and hardened objective control.",
+    subtitle: "Low-profile tactical frames built from stealth facets, armored field plates, and fortified sensor barricades.",
     skins: [
       { id: "ctf-blue-attack-alpha-talon", name: "Talon Strike", role: "ATTACK", family: "military", colors: ["#16a7ff", "#8de2ff", "#03204f", "#f0fbff"] },
       { id: "ctf-blue-tank-atlas", name: "Atlas Plate", role: "TANK", family: "military", colors: ["#147acb", "#a4e2ff", "#06233b", "#f5fcff"] },
@@ -309,14 +309,54 @@ const CTF_PREVIEW_PACKS = [
     family: "Dark Galactic",
     name: "Dark Galactic Pack",
     price: "€3.00",
-    subtitle: "A dark-galactic strike formation with void-reactor hulls, stealth geometry, and cold-ion systems.",
+    subtitle: "Void-reactor hulls with razor stealth wings, siege-grade shadow plating, and cold-ion defense hardware.",
     skins: [
       { id: "ctf-blue-attack-alpha-dark-voidfang", name: "Voidfang", role: "ATTACK", family: "dark-galactic", colors: ["#203f8f", "#9cbef5", "#020511", "#56caf1"] },
-      { id: "ctf-blue-tank-dark-voidfang", name: "Voidfang Bastion", role: "TANK", family: "dark-galactic", colors: ["#0f3c68", "#9ad5f5", "#01050c", "#47cbf1"] },
+      { id: "ctf-blue-tank-dark-voidfang", name: "Voidfang Dreadnought", role: "TANK", family: "dark-galactic", colors: ["#0f3c68", "#9ad5f5", "#01050c", "#47cbf1"] },
       { id: "ctf-blue-defense-dark-voidfang", name: "Voidfang Aegis", role: "DEFENDER", family: "dark-galactic", colors: ["#1a6367", "#a2f0f5", "#02090c", "#54f1d2"] },
     ],
   },
+  {
+    id: "ctf-pack-abyssal-phantom",
+    kind: "ctf",
+    family: "Abyssal Phantom",
+    name: "Abyssal Phantom Pack",
+    price: "€3.00",
+    subtitle: "Deep-sea stealth architecture: a manta interceptor, Leviathan siege chassis, and a tidal perimeter ward.",
+    skins: [
+      { id: "ctf-blue-attack-alpha-abyssal-razor", name: "Abyssal Razor", role: "ATTACK", family: "abyssal", colors: ["#0a6d8c", "#7df8ff", "#02131d", "#cffcff"] },
+      { id: "ctf-blue-tank-abyssal-leviathan", name: "Leviathan Frame", role: "TANK", family: "abyssal", colors: ["#075985", "#86f5ff", "#031721", "#e2fdff"] },
+      { id: "ctf-blue-defense-abyssal-ward", name: "Tidal Ward", role: "DEFENDER", family: "abyssal", colors: ["#0f766e", "#8bfff2", "#03201f", "#eaffff"] },
+    ],
+  },
+  {
+    id: "ctf-pack-solar-dynasty",
+    kind: "ctf",
+    family: "Solar Dynasty",
+    name: "Solar Dynasty Pack",
+    price: "€3.00",
+    subtitle: "Regal solar-war machines with a lance fighter, plated sun-bastion, and a radiant halo defense field.",
+    skins: [
+      { id: "ctf-blue-attack-alpha-solar-lancer", name: "Solar Lancer", role: "ATTACK", family: "solar", colors: ["#f59e0b", "#fff1a6", "#2b1600", "#ffffff"] },
+      { id: "ctf-blue-tank-solar-bastion", name: "Solar Bastion", role: "TANK", family: "solar", colors: ["#d97706", "#ffdfa0", "#2a1600", "#fffbeb"] },
+      { id: "ctf-blue-defense-solar-halo", name: "Solar Halo", role: "DEFENDER", family: "solar", colors: ["#fbbf24", "#fff3b0", "#302000", "#fffff3"] },
+    ],
+  },
+  {
+    id: "ctf-pack-crimson-ronin",
+    kind: "ctf",
+    family: "Crimson Ronin",
+    name: "Crimson Ronin Pack",
+    price: "€3.00",
+    subtitle: "Blade-forged combat hardware featuring a katana interceptor, Shogun command tank, and Torii gate defender.",
+    skins: [
+      { id: "ctf-blue-attack-alpha-ronin-blade", name: "Ronin Blade", role: "ATTACK", family: "ronin", colors: ["#e11d48", "#ffa8b8", "#23030d", "#fff4f6"] },
+      { id: "ctf-blue-tank-ronin-shogun", name: "Shogun Frame", role: "TANK", family: "ronin", colors: ["#be123c", "#ff9daf", "#23020a", "#fff3f5"] },
+      { id: "ctf-blue-defense-ronin-gate", name: "Torii Guard", role: "DEFENDER", family: "ronin", colors: ["#7c3aed", "#d9c5ff", "#18072f", "#f7f2ff"] },
+    ],
+  },
 ];
+
 
 function getPreviewColors(skin) {
   if (Array.isArray(skin?.colors) && skin.colors.length >= 4) {
@@ -342,142 +382,116 @@ function getCtfFamilyFromSkin(skin) {
   const id = String(skin?.id || skin || "").toLowerCase();
   if (id.includes("basic-")) return "starter";
   if (id.includes("dark-")) return "dark-galactic";
+  if (id.includes("abyssal-")) return "abyssal";
+  if (id.includes("solar-")) return "solar";
+  if (id.includes("ronin-")) return "ronin";
   if (/(viper|valkyrie|scythe|helix|juggernaut|citadel|warden|oracle)/.test(id)) return "medieval";
   if (/(talon|eclipse|atlas|bulwark)/.test(id)) return "military";
   return "galactic";
 }
 
-function StaticRotor({ x, y, primary, secondary, dark, highlight, compact = false }) {
-  const r = compact ? 15 : 23;
-  const core = compact ? 3.7 : 5.5;
-  const blade = compact ? 9 : 14;
+function StaticRotor({ x, y, primary, secondary, dark, highlight }) {
+  const radius = 23;
+  const hubRadius = 5.8;
+  const bladeLength = radius * 0.64;
 
   return (
     <g>
-      <circle cx={x} cy={y} r={r} fill={dark} stroke={secondary} strokeWidth={compact ? 1.8 : 2.8} />
-      <circle cx={x} cy={y} r={r - (compact ? 3 : 5)} fill="#020713" stroke={primary} strokeWidth={compact ? 1 : 1.4} opacity="0.92" />
-      <path d={`M ${x - blade} ${y - blade * 0.34} L ${x + blade} ${y + blade * 0.34}`} stroke={secondary} strokeWidth={compact ? 2.8 : 4.5} opacity="0.55" strokeLinecap="round" />
-      <path d={`M ${x - blade * 0.34} ${y + blade} L ${x + blade * 0.34} ${y - blade}`} stroke={primary} strokeWidth={compact ? 2.8 : 4.5} opacity="0.46" strokeLinecap="round" />
-      <circle cx={x} cy={y} r={core + 2} fill={dark} />
-      <circle cx={x} cy={y} r={core} fill={primary} />
-      <circle cx={x - core * 0.32} cy={y - core * 0.38} r={Math.max(1.1, core * 0.34)} fill={highlight} />
+      <circle cx={x} cy={y} r={radius} fill={dark} fillOpacity="0.95" />
+      <circle cx={x} cy={y} r={radius - 2.8} fill="#020713" fillOpacity="0.9" />
+      <circle cx={x} cy={y} r={radius} fill="none" stroke={secondary} strokeWidth="2.8" strokeOpacity="0.84" />
+      <circle cx={x} cy={y} r={radius - 5.2} fill="none" stroke={primary} strokeWidth="1.55" strokeOpacity="0.58" />
+      <path
+        d={`M ${x - bladeLength} ${y - bladeLength * 0.34} L ${x + bladeLength} ${y + bladeLength * 0.34}`}
+        fill="none"
+        stroke={secondary}
+        strokeWidth="4.5"
+        strokeLinecap="round"
+        strokeOpacity="0.42"
+      />
+      <path
+        d={`M ${x - bladeLength * 0.34} ${y + bladeLength} L ${x + bladeLength * 0.34} ${y - bladeLength}`}
+        fill="none"
+        stroke={primary}
+        strokeWidth="4.5"
+        strokeLinecap="round"
+        strokeOpacity="0.31"
+      />
+      <circle cx={x} cy={y} r={hubRadius + 2.2} fill={dark} />
+      <circle cx={x} cy={y} r={hubRadius} fill={primary} />
+      <circle cx={x - hubRadius * 0.32} cy={y - hubRadius * 0.38} r={hubRadius * 0.34} fill={highlight} fillOpacity="0.92" />
     </g>
   );
 }
 
-function StaticCtfSignature({ role, family, primary, secondary, dark, highlight }) {
-  if (!role) return null;
+function getCtfVisualMeta(skin = {}) {
+  const id = String(skin?.id || skin || "").toLowerCase();
+  const roleFromId =
+    id.includes("-attack-alpha-") ? "attack-alpha" :
+    id.includes("-attack-bravo-") ? "attack-bravo" :
+    id.includes("-tank-") ? "tank" :
+    id.includes("-defense-") ? "defense" :
+    "";
 
-  if (family === "starter") {
-    // Starter Command uses one disciplined academy palette per team: enamel
-    // blue/red, silver optics and gold command markings. Its class geometry is
-    // intentionally separate from the paid collections.
-    if (role === "ATTACK") {
-      return (
-        <g>
-          <path d="M 0 -70 L 14 -39 L 38 -16 L 27 5 L 17 42 L 0 59 L -17 42 L -27 5 L -38 -16 L -14 -39 Z" fill={dark} stroke={secondary} strokeWidth="2.35" />
-          <path d="M 0 -61 L 9 -34 L 29 -14 L 18 5 L 9 33 L 0 47 L -9 33 L -18 5 L -29 -14 L -9 -34 Z" fill={primary} />
-          <path d="M -57 -9 L -25 -9 L -17 8 L -54 29 Z" fill={dark} stroke={secondary} strokeWidth="1.8" />
-          <path d="M 57 -9 L 25 -9 L 17 8 L 54 29 Z" fill={dark} stroke={secondary} strokeWidth="1.8" />
-          <path d="M -44 -4 L -27 -4 L -22 6 L -45 19 Z" fill={highlight} opacity="0.95" />
-          <path d="M 44 -4 L 27 -4 L 22 6 L 45 19 Z" fill={highlight} opacity="0.95" />
-          <path d="M 0 -53 L 7 -24 L 5 2 L 0 15 L -5 2 L -7 -24 Z" fill={secondary} />
-        </g>
-      );
-    }
-    if (role === "TANK") {
-      return (
-        <g>
-          <rect x="-54" y="-45" width="108" height="90" rx="22" fill={dark} stroke={secondary} strokeWidth="2.8" />
-          <path d="M -43 -37 L 43 -37 L 49 -14 L 38 35 L 19 55 L -19 55 L -38 35 L -49 -14 Z" fill={primary} />
-          <rect x="-31" y="-29" width="62" height="20" rx="7" fill={dark} stroke={highlight} strokeWidth="1.8" />
-          {[-26, -8, 8, 26].map((x) => <rect key={x} x={x - 5} y="-23" width="10" height="7" rx="2" fill={highlight} />)}
-          <rect x="-59" y="-11" width="13" height="44" rx="5" fill={dark} stroke={highlight} strokeWidth="1.6" />
-          <rect x="46" y="-11" width="13" height="44" rx="5" fill={dark} stroke={highlight} strokeWidth="1.6" />
-        </g>
-      );
-    }
+  const roleFromProp = String(skin?.role || "").toLowerCase();
+  const role =
+    roleFromId ||
+    (roleFromProp.includes("tank") ? "tank" :
+      roleFromProp.includes("defender") || roleFromProp.includes("defense") ? "defense" :
+        roleFromProp.includes("attack") ? "attack-alpha" : "");
+
+  const variantMatch = id.match(/(?:attack-alpha|attack-bravo|tank|defense)-(.+)$/);
+  const variant = variantMatch?.[1] || "";
+
+  const family =
+    String(skin?.family || "").toLowerCase() ||
+    (variant.startsWith("basic-") ? "starter" :
+      variant.startsWith("dark-") ? "dark-galactic" :
+      variant.startsWith("abyssal-") ? "abyssal" :
+      variant.startsWith("solar-") ? "solar" :
+      variant.startsWith("ronin-") ? "ronin" :
+      /^(viper|valkyrie|scythe|helix|juggernaut|citadel|warden|oracle)$/.test(variant) ? "medieval" :
+      /^(talon|eclipse|atlas|bulwark)$/.test(variant) ? "military" :
+      "galactic");
+
+  return { role, variant, family, isCtf: Boolean(id.startsWith("ctf-") || role) };
+}
+
+function StaticCtfArm({ x, y, fromX, fromY, width, accentWidth, primary, secondary, dark, highlight }) {
+  return (
+    <g>
+      <line x1={fromX} y1={fromY} x2={x} y2={y} stroke={dark} strokeWidth={width} strokeLinecap="round" />
+      <line x1={fromX} y1={fromY} x2={x} y2={y} stroke={primary} strokeWidth={accentWidth} strokeLinecap="round" strokeOpacity="0.88" />
+      <line x1={fromX} y1={fromY} x2={x} y2={y} stroke={secondary} strokeWidth="1.25" strokeLinecap="round" strokeOpacity="0.76" />
+      <StaticRotor x={x} y={y} primary={primary} secondary={secondary} dark={dark} highlight={highlight} />
+    </g>
+  );
+}
+
+function StaticCtfFactionSignature({ family, role, primary, secondary, dark, highlight }) {
+  if (family === "dark-galactic") {
     return (
       <g>
-        <path d="M 0 -68 L 38 -45 L 59 -7 L 49 35 L 20 64 L -20 64 L -49 35 L -59 -7 L -38 -45 Z" fill={dark} stroke={secondary} strokeWidth="2.7" />
-        <path d="M 0 -57 L 30 -38 L 46 -5 L 37 26 L 15 52 L -15 52 L -37 26 L -46 -5 L -30 -38 Z" fill={primary} />
-        <path d="M 0 -42 L 17 -21 L 25 0 L 15 24 L 0 40 L -15 24 L -25 0 L -17 -21 Z" fill={dark} stroke={highlight} strokeWidth="2.1" />
-        <rect x="-64" y="-22" width="14" height="52" rx="5" fill={dark} stroke={highlight} strokeWidth="1.8" />
-        <rect x="50" y="-22" width="14" height="52" rx="5" fill={dark} stroke={highlight} strokeWidth="1.8" />
-        <path d="M -44 40 L 0 59 L 44 40" fill="none" stroke={highlight} strokeWidth="3.6" strokeLinecap="round" />
+        <path d="M -78 -26 L -34 -31 L -18 -8 L -67 16 L -86 4 Z" fill={dark} stroke={secondary} strokeWidth="2.2" strokeOpacity="0.72" />
+        <path d="M 78 -26 L 34 -31 L 18 -8 L 67 16 L 86 4 Z" fill={dark} stroke={secondary} strokeWidth="2.2" strokeOpacity="0.72" />
+        <path d="M -70 -18 L -38 -20 L -28 -4 L -62 9 Z" fill={primary} fillOpacity="0.58" />
+        <path d="M 70 -18 L 38 -20 L 28 -4 L 62 9 Z" fill={primary} fillOpacity="0.58" />
+        <path d="M 0 -57 L 16 -14 L 10 31 L 0 46 L -10 31 L -16 -14 Z" fill={dark} stroke={secondary} strokeWidth="2.5" strokeOpacity="0.80" />
+        <path d="M 0 -39 L 8 -12 L 6 18 L 0 27 L -6 18 L -8 -12 Z" fill={highlight} fillOpacity="0.98" />
+        {[-20, 0, 20].map((x) => <rect key={x} x={x - 4} y="34" width="8" height="15" rx="3" fill={secondary} fillOpacity="0.82" />)}
       </g>
     );
   }
 
-  if (family === "dark-galactic") {    return (
-      <g>
-        <path d="M -78 -26 L -34 -31 L -18 -8 L -67 16 L -86 4 Z" fill={dark} stroke={secondary} strokeWidth="2.1" opacity="0.96" />
-        <path d="M 78 -26 L 34 -31 L 18 -8 L 67 16 L 86 4 Z" fill={dark} stroke={secondary} strokeWidth="2.1" opacity="0.96" />
-        <path d="M -70 -18 L -38 -20 L -28 -4 L -62 9 Z" fill={primary} opacity="0.62" />
-        <path d="M 70 -18 L 38 -20 L 28 -4 L 62 9 Z" fill={primary} opacity="0.62" />
-        <path d="M 0 -57 L 16 -14 L 10 31 L 0 46 L -10 31 L -16 -14 Z" fill={dark} stroke={secondary} strokeWidth="2.4" />
-        <path d="M 0 -39 L 8 -12 L 6 18 L 0 27 L -6 18 L -8 -12 Z" fill={highlight} opacity="0.96" />
-      </g>
-    );
-  }
-
-  if (role === "ATTACK") {
-    if (family === "medieval") {
-      return (
-        <g>
-          <path d="M 0 -70 L 13 -44 L 27 -31 L 13 -22 L 0 -34 L -13 -22 L -27 -31 L -13 -44 Z" fill={dark} stroke={secondary} strokeWidth="2.2" />
-          <path d="M -66 6 L -32 5 L -22 22 L -53 42 Z" fill={primary} stroke={highlight} strokeWidth="1.2" opacity="0.8" />
-          <path d="M 66 6 L 32 5 L 22 22 L 53 42 Z" fill={primary} stroke={highlight} strokeWidth="1.2" opacity="0.8" />
-        </g>
-      );
-    }
-    if (family === "military") {
-      return (
-        <g>
-          <path d="M -66 -20 L -34 -26 L -23 -3 L -58 18 Z" fill={dark} stroke={secondary} strokeWidth="1.8" />
-          <path d="M 66 -20 L 34 -26 L 23 -3 L 58 18 Z" fill={dark} stroke={secondary} strokeWidth="1.8" />
-          <path d="M -59 -16 L -37 -20 L -31 -5 L -53 10 Z" fill={primary} opacity="0.8" />
-          <path d="M 59 -16 L 37 -20 L 31 -5 L 53 10 Z" fill={primary} opacity="0.8" />
-        </g>
-      );
-    }
+  if (family === "galactic") {
     return (
       <g>
-        <path d="M -66 -9 L -26 -20 L -15 -4 L -54 30 Z" fill={dark} stroke={secondary} strokeWidth="1.8" />
-        <path d="M 66 -9 L 26 -20 L 15 -4 L 54 30 Z" fill={dark} stroke={secondary} strokeWidth="1.8" />
-        <path d="M -58 -4 L -27 -10 L -21 1 L -50 22 Z" fill={primary} opacity="0.75" />
-        <path d="M 58 -4 L 27 -10 L 21 1 L 50 22 Z" fill={primary} opacity="0.75" />
-        <path d="M 0 -41 L 10 -7 L 0 19 L -10 -7 Z" fill={highlight} opacity="0.94" />
-      </g>
-    );
-  }
-
-  if (role === "TANK") {
-    if (family === "medieval") {
-      return (
-        <g>
-          <path d="M -49 -31 L -27 -49 L 27 -49 L 49 -31 L 45 38 L 22 54 L -22 54 L -45 38 Z" fill={dark} stroke={secondary} strokeWidth="4" />
-          <rect x="-24" y="-16" width="48" height="46" rx="13" fill={dark} opacity="0.72" />
-          <circle cx="0" cy="6" r="13" fill={highlight} opacity="0.9" />
-        </g>
-      );
-    }
-    if (family === "military") {
-      return (
-        <g>
-          <circle cx="0" cy="0" r="39" fill={dark} opacity="0.66" stroke={secondary} strokeWidth="4" />
-          <circle cx="0" cy="0" r="28" fill="none" stroke={highlight} strokeWidth="2.5" opacity="0.76" />
-          <path d="M -45 -28 L -60 16" stroke={primary} strokeWidth="9" opacity="0.72" strokeLinecap="round" />
-          <path d="M 45 -28 L 60 16" stroke={primary} strokeWidth="9" opacity="0.72" strokeLinecap="round" />
-        </g>
-      );
-    }
-    return (
-      <g>
-        <rect x="-55" y="-6" width="14" height="44" rx="6" fill={dark} stroke={secondary} strokeWidth="2" />
-        <rect x="41" y="-6" width="14" height="44" rx="6" fill={dark} stroke={secondary} strokeWidth="2" />
-        <path d="M -42 -25 L 42 -25 L 50 13 L 31 46 L -31 46 L -50 13 Z" fill={dark} stroke={highlight} strokeWidth="2.2" />
-        <path d="M -27 -32 L 27 -32 L 33 -17 L -33 -17 Z" fill={primary} opacity="0.85" />
+        <path d="M -66 -9 L -26 -20 L -15 -4 L -54 30 Z" fill={dark} stroke={secondary} strokeWidth="1.8" strokeOpacity="0.76" />
+        <path d="M 66 -9 L 26 -20 L 15 -4 L 54 30 Z" fill={dark} stroke={secondary} strokeWidth="1.8" strokeOpacity="0.76" />
+        <path d="M -58 -4 L -27 -10 L -21 1 L -50 22 Z" fill={primary} fillOpacity="0.72" />
+        <path d="M 58 -4 L 27 -10 L 21 1 L 50 22 Z" fill={primary} fillOpacity="0.72" />
+        <path d="M 0 -41 L 10 -7 L 0 19 L -10 -7 Z" fill={highlight} fillOpacity="0.94" />
+        {[-13, 0, 13].map((x) => <path key={x} d={`M ${x - 3} 25 L ${x + 3} 25 L ${x + 1} 34 L ${x - 1} 34 Z`} fill={secondary} fillOpacity="0.92" />)}
       </g>
     );
   }
@@ -485,26 +499,393 @@ function StaticCtfSignature({ role, family, primary, secondary, dark, highlight 
   if (family === "medieval") {
     return (
       <g>
-        <rect x="-50" y="-27" width="15" height="54" rx="6" fill={dark} stroke={secondary} strokeWidth="2" />
-        <rect x="35" y="-27" width="15" height="54" rx="6" fill={dark} stroke={secondary} strokeWidth="2" />
-        <circle cx="0" cy="0" r="35" fill="none" stroke={highlight} strokeWidth="3.3" opacity="0.8" />
+        <path d="M 0 -70 L 13 -44 L 27 -31 L 13 -22 L 0 -34 L -13 -22 L -27 -31 L -13 -44 Z" fill={dark} stroke={secondary} strokeWidth="2.3" strokeOpacity="0.82" />
+        <path d="M -66 6 L -32 5 L -22 22 L -53 42 Z" fill={primary} fillOpacity="0.72" stroke={highlight} strokeWidth="1.35" strokeOpacity="0.62" />
+        <path d="M 66 6 L 32 5 L 22 22 L 53 42 Z" fill={primary} fillOpacity="0.72" stroke={highlight} strokeWidth="1.35" strokeOpacity="0.62" />
+        {[-16, 0, 16].map((x) => <path key={x} d={`M ${x} 14 L ${x + 6} 27 L ${x} 40 L ${x - 6} 27 Z`} fill={highlight} fillOpacity="0.86" />)}
       </g>
     );
   }
-  if (family === "military") {
-    return (
-      <g>
-        <rect x="-57" y="-18" width="16" height="48" rx="7" fill={primary} stroke={highlight} strokeWidth="2" />
-        <rect x="41" y="-18" width="16" height="48" rx="7" fill={primary} stroke={highlight} strokeWidth="2" />
-        <path d="M -45 -39 L 0 -53 L 45 -39" fill="none" stroke={secondary} strokeWidth="5" strokeLinecap="round" />
-      </g>
-    );
-  }
+
   return (
     <g>
-      <circle cx="0" cy="0" r="55" fill="none" stroke={secondary} strokeWidth="4.2" opacity="0.85" />
-      <path d="M -46 -16 L -61 5 L -43 29" fill="none" stroke={highlight} strokeWidth="4" opacity="0.78" />
-      <path d="M 46 -16 L 61 5 L 43 29" fill="none" stroke={highlight} strokeWidth="4" opacity="0.78" />
+      <path d="M -66 -20 L -34 -26 L -23 -3 L -58 18 Z" fill={dark} stroke={secondary} strokeWidth="1.8" strokeOpacity="0.74" />
+      <path d="M 66 -20 L 34 -26 L 23 -3 L 58 18 Z" fill={dark} stroke={secondary} strokeWidth="1.8" strokeOpacity="0.74" />
+      <path d="M -59 -16 L -37 -20 L -31 -5 L -53 10 Z" fill={primary} fillOpacity="0.78" />
+      <path d="M 59 -16 L 37 -20 L 31 -5 L 53 10 Z" fill={primary} fillOpacity="0.78" />
+      <path d="M -26 -48 L 26 -48 L 33 -33 L -33 -33 Z" fill={dark} stroke={secondary} strokeWidth="1.55" strokeOpacity="0.72" />
+      {[-12, 0, 12].map((x) => <path key={x} d={`M ${x - 3} -44 L ${x + 3} -44 L ${x + 2} -38 L ${x - 2} -38 Z`} fill={highlight} fillOpacity="0.98" />)}
+    </g>
+  );
+}
+
+function StaticCtfVariantDetails({ role, variant, family, primary, secondary, dark, highlight }) {
+  if (family === "dark-galactic") {
+    if (variant === "dark-voidfang") {
+      return (
+        <g fill="none" stroke={highlight} strokeWidth="4.4" strokeLinecap="round" strokeOpacity="0.82">
+          <path d="M -64 13 L -31 31 L -55 46" />
+          <path d="M 64 13 L 31 31 L 55 46" />
+        </g>
+      );
+    }
+    return null;
+  }
+
+  const key = `${role}:${variant}`;
+  switch (key) {
+    case "attack-alpha:raptor":
+      return (
+        <g>
+          <path d="M -31 12 L -12 18 L -28 42 L -49 27 Z" fill={secondary} fillOpacity="0.72" />
+          <path d="M 31 12 L 12 18 L 28 42 L 49 27 Z" fill={secondary} fillOpacity="0.72" />
+          <path d="M -16 35 L 0 49 L 16 35" fill="none" stroke={highlight} strokeWidth="3.2" strokeOpacity="0.86" />
+        </g>
+      );
+    case "attack-alpha:viper":
+      return (
+        <g>
+          <path d="M -12 -54 L -3 -30 L -12 -3 L -26 -35 Z" fill={highlight} fillOpacity="0.84" />
+          <path d="M 12 -54 L 3 -30 L 12 -3 L 26 -35 Z" fill={highlight} fillOpacity="0.84" />
+          <path d="M -47 5 L -21 16 L -38 35 L -58 22 Z" fill={dark} fillOpacity="0.96" />
+          <path d="M 47 5 L 21 16 L 38 35 L 58 22 Z" fill={dark} fillOpacity="0.96" />
+          <circle cx="0" cy="4" r="11" fill={secondary} fillOpacity="0.62" />
+        </g>
+      );
+    case "attack-alpha:talon":
+      return (
+        <g>
+          <path d="M -48 -17 L -24 2 L -50 27" fill="none" stroke={secondary} strokeWidth="8" strokeLinecap="round" strokeOpacity="0.78" />
+          <path d="M 48 -17 L 24 2 L 50 27" fill="none" stroke={secondary} strokeWidth="8" strokeLinecap="round" strokeOpacity="0.78" />
+          <path d="M 0 -58 L 11 -24 L 0 7 L -11 -24 Z" fill={highlight} fillOpacity="0.92" />
+          <rect x="-14" y="27" width="28" height="10" rx="4" fill={dark} stroke={primary} strokeWidth="2" strokeOpacity="0.72" />
+        </g>
+      );
+    case "tank:bastion":
+      return (
+        <g>
+          <rect x="-55" y="-6" width="14" height="44" rx="6" fill={dark} stroke={secondary} strokeWidth="2" strokeOpacity="0.68" />
+          <rect x="41" y="-6" width="14" height="44" rx="6" fill={dark} stroke={secondary} strokeWidth="2" strokeOpacity="0.68" />
+        </g>
+      );
+    case "tank:juggernaut":
+      return (
+        <g>
+          <path d="M -49 -31 L -27 -49 L 27 -49 L 49 -31 L 45 38 L 22 54 L -22 54 L -45 38 Z" fill="none" stroke={secondary} strokeWidth="4.2" strokeOpacity="0.84" />
+          <rect x="-24" y="-16" width="48" height="46" rx="13" fill={dark} fillOpacity="0.68" />
+          <circle cx="0" cy="6" r="13" fill={highlight} fillOpacity="0.84" />
+        </g>
+      );
+    case "tank:atlas":
+      return (
+        <g>
+          <circle cx="0" cy="0" r="39" fill="none" stroke={secondary} strokeWidth="4.2" strokeOpacity="0.80" />
+          <circle cx="0" cy="0" r="28" fill="none" stroke={highlight} strokeWidth="2.5" strokeOpacity="0.62" />
+          <path d="M -45 -28 L -60 16" fill="none" stroke={primary} strokeWidth="9" strokeLinecap="round" strokeOpacity="0.62" />
+          <path d="M 45 -28 L 60 16" fill="none" stroke={primary} strokeWidth="9" strokeLinecap="round" strokeOpacity="0.62" />
+        </g>
+      );
+    case "defense:aegis":
+      return (
+        <g>
+          <circle cx="0" cy="0" r="55" fill="none" stroke={secondary} strokeWidth="4.2" strokeOpacity="0.76" />
+          <path d="M -46 -16 L -61 5 L -43 29" fill="none" stroke={highlight} strokeWidth="4" strokeLinecap="round" strokeOpacity="0.68" />
+          <path d="M 46 -16 L 61 5 L 43 29" fill="none" stroke={highlight} strokeWidth="4" strokeLinecap="round" strokeOpacity="0.68" />
+        </g>
+      );
+    case "defense:warden":
+      return (
+        <g>
+          <rect x="-42" y="-27" width="15" height="54" rx="6" fill={dark} stroke={secondary} strokeWidth="2" strokeOpacity="0.72" />
+          <rect x="35" y="-27" width="15" height="54" rx="6" fill={dark} stroke={secondary} strokeWidth="2" strokeOpacity="0.72" />
+          <circle cx="0" cy="0" r="35" fill="none" stroke={highlight} strokeWidth="3.4" strokeOpacity="0.74" />
+        </g>
+      );
+    case "defense:bulwark":
+      return (
+        <g>
+          <rect x="-57" y="-18" width="16" height="48" rx="7" fill={primary} fillOpacity="0.78" stroke={highlight} strokeWidth="2" strokeOpacity="0.66" />
+          <rect x="41" y="-18" width="16" height="48" rx="7" fill={primary} fillOpacity="0.78" stroke={highlight} strokeWidth="2" strokeOpacity="0.66" />
+          <path d="M -45 -39 L 0 -53 L 45 -39" fill="none" stroke={secondary} strokeWidth="5" strokeLinecap="round" strokeOpacity="0.74" />
+          <path d="M -45 37 L 0 53 L 45 37" fill="none" stroke={secondary} strokeWidth="5" strokeLinecap="round" strokeOpacity="0.74" />
+        </g>
+      );
+    default:
+      return null;
+  }
+}
+
+function StaticStarterCommandHull({ role, primary, secondary, dark, highlight }) {
+  const rotors = [[-59, -45], [59, -45], [-59, 45], [59, 45]];
+  const armProps = (x, y, fromX, fromY, width, accentWidth) => (
+    <StaticCtfArm
+      key={`${x}-${y}`}
+      x={x}
+      y={y}
+      fromX={fromX}
+      fromY={fromY}
+      width={width}
+      accentWidth={accentWidth}
+      primary={primary}
+      secondary={secondary}
+      dark={dark}
+      highlight={highlight}
+    />
+  );
+
+  if (role === "tank") {
+    return (
+      <g>
+        {rotors.map(([x, y]) => armProps(x, y, x < 0 ? -31 : 31, y < 0 ? -15 : 22, 16, 7))}
+        <rect x="-52" y="-44" width="104" height="88" rx="22" fill={dark} stroke={secondary} strokeWidth="2.6" strokeOpacity="0.82" />
+        <path d="M -42 -37 L 42 -37 L 48 -15 L 37 35 L 19 55 L -19 55 L -37 35 L -48 -15 Z" fill={primary} fillOpacity="0.96" />
+        <rect x="-30" y="-29" width="60" height="20" rx="7" fill={dark} stroke={highlight} strokeWidth="1.8" strokeOpacity="0.90" />
+        {[-26, -8, 8, 26].map((x) => <rect key={x} x={x - 5} y="-23" width="10" height="7" rx="2" fill={highlight} fillOpacity="0.96" />)}
+        <path d="M 0 -5 L 18 8 L 14 30 L 0 41 L -14 30 L -18 8 Z" fill={dark} fillOpacity="0.88" stroke={secondary} strokeWidth="2" strokeOpacity="0.86" />
+        <path d="M 0 1 L 8 11 L 6 25 L 0 30 L -6 25 L -8 11 Z" fill={secondary} fillOpacity="0.96" />
+        <rect x="-58" y="-12" width="13" height="44" rx="5" fill={dark} stroke={highlight} strokeWidth="1.65" strokeOpacity="0.76" />
+        <rect x="45" y="-12" width="13" height="44" rx="5" fill={dark} stroke={highlight} strokeWidth="1.65" strokeOpacity="0.76" />
+      </g>
+    );
+  }
+
+  if (role === "defense") {
+    return (
+      <g>
+        {rotors.map(([x, y]) => armProps(x, y, x < 0 ? -22 : 22, y < 0 ? -19 : 19, 12.6, 5.5))}
+        <path d="M 0 -68 L 38 -45 L 59 -7 L 49 35 L 20 64 L -20 64 L -49 35 L -59 -7 L -38 -45 Z" fill={dark} stroke={secondary} strokeWidth="2.6" strokeOpacity="0.84" />
+        <path d="M 0 -57 L 30 -38 L 46 -5 L 37 26 L 15 52 L -15 52 L -37 26 L -46 -5 L -30 -38 Z" fill={primary} fillOpacity="0.98" />
+        <path d="M 0 -42 L 17 -21 L 25 0 L 15 24 L 0 40 L -15 24 L -25 0 L -17 -21 Z" fill={dark} fillOpacity="0.90" stroke={highlight} strokeWidth="2.1" strokeOpacity="0.90" />
+        <path d="M 0 -29 L 8 -9 L 10 8 L 0 23 L -10 8 L -8 -9 Z" fill={secondary} fillOpacity="0.96" />
+        <rect x="-64" y="-22" width="14" height="52" rx="5" fill={dark} stroke={highlight} strokeWidth="1.8" strokeOpacity="0.76" />
+        <rect x="50" y="-22" width="14" height="52" rx="5" fill={dark} stroke={highlight} strokeWidth="1.8" strokeOpacity="0.76" />
+        <path d="M -44 40 L 0 59 L 44 40" fill="none" stroke={highlight} strokeWidth="3.6" strokeLinecap="round" strokeOpacity="0.82" />
+      </g>
+    );
+  }
+
+  if (role === "attack-bravo") {
+    return (
+      <g>
+        {rotors.map(([x, y], index) => armProps(x, y, x < 0 ? -21 : 21, y < 0 ? -14 : 15, 10.2, 4.3))}
+        <path d="M 0 -60 L 38 -31 L 49 -2 L 31 34 L 0 59 L -31 34 L -49 -2 L -38 -31 Z" fill={dark} />
+        <path d="M 0 -52 L 29 -27 L 38 -1 L 22 27 L 0 48 L -22 27 L -38 -1 L -29 -27 Z" fill={primary} />
+        <path d="M -60 5 L -28 10 L -37 40 L -69 25 Z" fill={dark} stroke={secondary} strokeWidth="1.6" strokeOpacity="0.76" />
+        <path d="M 60 5 L 28 10 L 37 40 L 69 25 Z" fill={dark} stroke={secondary} strokeWidth="1.6" strokeOpacity="0.76" />
+        <path d="M -49 11 L -30 15 L -35 28 L -55 20 Z" fill={highlight} fillOpacity="0.86" />
+        <path d="M 49 11 L 30 15 L 35 28 L 55 20 Z" fill={highlight} fillOpacity="0.86" />
+        <path d="M 0 -46 L 15 -19 L 11 7 L 0 20 L -11 7 L -15 -19 Z" fill={secondary} fillOpacity="0.90" />
+        <rect x="-18" y="29" width="36" height="10" rx="4" fill={dark} stroke={highlight} strokeWidth="1.6" strokeOpacity="0.86" />
+      </g>
+    );
+  }
+
+  return (
+    <g>
+      {rotors.map(([x, y]) => armProps(x, y, x < 0 ? -14 : 14, y < 0 ? -9 : 12, 9.8, 4.2))}
+      <path d="M 0 -74 L 14 -41 L 38 -17 L 29 3 L 18 43 L 0 62 L -18 43 L -29 3 L -38 -17 L -14 -41 Z" fill={dark} />
+      <path d="M 0 -66 L 9 -37 L 30 -15 L 20 4 L 10 35 L 0 51 L -10 35 L -20 4 L -30 -15 L -9 -37 Z" fill={primary} />
+      <path d="M -54 -9 L -24 -9 L -17 7 L -53 28 Z" fill={dark} stroke={secondary} strokeWidth="1.65" strokeOpacity="0.78" />
+      <path d="M 54 -9 L 24 -9 L 17 7 L 53 28 Z" fill={dark} stroke={secondary} strokeWidth="1.65" strokeOpacity="0.78" />
+      <path d="M -43 -5 L -27 -5 L -23 5 L -45 19 Z" fill={highlight} fillOpacity="0.92" />
+      <path d="M 43 -5 L 27 -5 L 23 5 L 45 19 Z" fill={highlight} fillOpacity="0.92" />
+      <path d="M 0 -56 L 7 -26 L 5 2 L 0 15 L -5 2 L -7 -26 Z" fill={secondary} fillOpacity="0.98" />
+      <path d="M 0 22 L 12 38 L 0 49 L -12 38 Z" fill={highlight} fillOpacity="0.88" />
+    </g>
+  );
+}
+
+function StaticPremiumCtfHull({ role, variant, family, primary, secondary, dark, highlight }) {
+  const rotors = [[-59, -45], [59, -45], [-59, 45], [59, 45]];
+  const arm = (x, y, fromX, fromY, width = 10, accentWidth = 4.8, rotor = 22) => (
+    <StaticCtfArm
+      key={`${x}-${y}`}
+      x={x}
+      y={y}
+      fromX={fromX}
+      fromY={fromY}
+      width={width}
+      accentWidth={accentWidth}
+      primary={primary}
+      secondary={secondary}
+      dark={dark}
+      highlight={highlight}
+    />
+  );
+  const arms = (resolver, width, accent, rotor) =>
+    rotors.map(([x, y]) => {
+      const [fromX, fromY] = resolver(x, y);
+      return arm(x, y, fromX, fromY, width, accent, rotor);
+    });
+
+  const Reactor = ({ y = 8, size = 11 }) => (
+    <g>
+      <path d={`M 0 ${y - size} L ${size * 0.72} ${y - size * 0.20} L ${size * 0.62} ${y + size * 0.68} L 0 ${y + size} L ${-size * 0.62} ${y + size * 0.68} L ${-size * 0.72} ${y - size * 0.20} Z`} fill={dark} stroke={highlight} strokeWidth="1.75" strokeOpacity="0.88" />
+      <path d={`M 0 ${y - size * 0.56} L ${size * 0.34} ${y - size * 0.05} L ${size * 0.30} ${y + size * 0.36} L 0 ${y + size * 0.56} L ${-size * 0.30} ${y + size * 0.36} L ${-size * 0.34} ${y - size * 0.05} Z`} fill={secondary} fillOpacity="0.98" />
+    </g>
+  );
+
+  if (role === "attack-alpha" || role === "attack-bravo") {
+    if (family === "galactic") {
+      return <g>{arms((x, y) => [x < 0 ? -13 : 13, y < 0 ? -12 : 12], 9.4, 4.3, 21)}
+        <path d="M 0 -76 L 13 -45 L 48 -18 L 33 -1 L 20 43 L 0 65 L -20 43 L -33 -1 L -48 -18 L -13 -45 Z" fill={dark} />
+        <path d="M 0 -67 L 8 -41 L 38 -16 L 23 1 L 12 36 L 0 53 L -12 36 L -23 1 L -38 -16 L -8 -41 Z" fill={primary} />
+        <path d="M -67 -20 L -29 -23 L -19 -6 L -57 22 Z" fill={dark} stroke={secondary} strokeWidth="1.8" strokeOpacity="0.82" />
+        <path d="M 67 -20 L 29 -23 L 19 -6 L 57 22 Z" fill={dark} stroke={secondary} strokeWidth="1.8" strokeOpacity="0.82" />
+        <path d="M 0 -60 L 7 -33 L 4 -2 L 0 15 L -4 -2 L -7 -33 Z" fill={highlight} fillOpacity="0.98" /><Reactor y={35} size={9} />
+      </g>;
+    }
+    if (family === "medieval") {
+      return <g>{arms((x, y) => [x < 0 ? -16 : 16, y < 0 ? -9 : 10], 10.2, 4.5, 22)}
+        <path d="M 0 -82 L 15 -49 L 41 -23 L 28 7 L 16 48 L 0 67 L -16 48 L -28 7 L -41 -23 L -15 -49 Z" fill={dark} stroke={secondary} strokeWidth="2.2" strokeOpacity="0.84" />
+        <path d="M 0 -69 L 9 -43 L 31 -20 L 18 8 L 9 38 L 0 54 L -9 38 L -18 8 L -31 -20 L -9 -43 Z" fill={primary} />
+        <path d="M 0 -92 L 8 -66 L 0 -45 L -8 -66 Z" fill={highlight} />
+        <path d="M -63 -6 L -26 -12 L -17 9 L -53 34 Z" fill={dark} stroke={highlight} strokeWidth="1.55" strokeOpacity="0.72" />
+        <path d="M 63 -6 L 26 -12 L 17 9 L 53 34 Z" fill={dark} stroke={highlight} strokeWidth="1.55" strokeOpacity="0.72" />
+        {[-14,0,14].map((x) => <path key={x} d={`M ${x} 12 L ${x+5} 25 L ${x} 38 L ${x-5} 25 Z`} fill={highlight} fillOpacity="0.90" />)}<Reactor y={26} size={8} />
+      </g>;
+    }
+    if (family === "military") {
+      return <g>{arms((x, y) => [x < 0 ? -21 : 21, y < 0 ? -7 : 14], 9.6, 4.25, 21)}
+        <path d="M 0 -68 L 38 -43 L 70 -4 L 42 12 L 34 40 L 0 58 L -34 40 L -42 12 L -70 -4 L -38 -43 Z" fill={dark} stroke={secondary} strokeWidth="2.2" strokeOpacity="0.78" />
+        <path d="M 0 -56 L 28 -36 L 55 -3 L 31 8 L 24 30 L 0 44 L -24 30 L -31 8 L -55 -3 L -28 -36 Z" fill={primary} />
+        <path d="M -76 -15 L -38 -10 L -23 6 L -58 22 Z" fill={dark} stroke={highlight} strokeWidth="1.6" strokeOpacity="0.68" />
+        <path d="M 76 -15 L 38 -10 L 23 6 L 58 22 Z" fill={dark} stroke={highlight} strokeWidth="1.6" strokeOpacity="0.68" />
+        <path d="M 0 -51 L 12 -25 L 8 8 L 0 20 L -8 8 L -12 -25 Z" fill={secondary} />
+        {[-18,0,18].map((x) => <rect key={x} x={x-4} y="28" width="8" height="6" rx="2" fill={highlight} fillOpacity="0.92" />)}
+      </g>;
+    }
+    if (family === "dark-galactic") {
+      return <g>{arms((x, y) => [x < 0 ? -14 : 14, y < 0 ? -8 : 11], 9.2, 4.0, 21)}
+        <path d="M 0 -77 L 18 -44 L 53 -24 L 34 4 L 19 49 L 0 67 L -19 49 L -34 4 L -53 -24 L -18 -44 Z" fill={dark} stroke={secondary} strokeWidth="2.4" strokeOpacity="0.82" />
+        <path d="M 0 -61 L 10 -34 L 37 -20 L 20 5 L 10 36 L 0 52 L -10 36 L -20 5 L -37 -20 L -10 -34 Z" fill={primary} fillOpacity="0.84" />
+        <path d="M -89 -31 L -42 -32 L -27 -9 L -72 9 L -95 -7 Z" fill={dark} stroke={secondary} strokeWidth="2" strokeOpacity="0.76" />
+        <path d="M 89 -31 L 42 -32 L 27 -9 L 72 9 L 95 -7 Z" fill={dark} stroke={secondary} strokeWidth="2" strokeOpacity="0.76" />
+        <path d="M 0 -52 L 7 -21 L 5 14 L 0 29 L -5 14 L -7 -21 Z" fill={highlight} />
+      </g>;
+    }
+    if (family === "abyssal") {
+      return <g>{arms((x, y) => [x < 0 ? -17 : 17, y < 0 ? -3 : 16], 9.3, 4.25, 21)}
+        <path d="M 0 -72 L 22 -44 L 60 -23 L 73 1 L 42 19 L 22 49 L 0 62 L -22 49 L -42 19 L -73 1 L -60 -23 L -22 -44 Z" fill={dark} stroke={secondary} strokeWidth="2.15" strokeOpacity="0.82" />
+        <path d="M 0 -58 L 14 -37 L 47 -19 L 56 0 L 30 12 L 14 37 L 0 49 L -14 37 L -30 12 L -56 0 L -47 -19 L -14 -37 Z" fill={primary} />
+        <path d="M -76 8 L -31 -4 L -17 17 L -60 40 Z" fill={dark} stroke={secondary} strokeWidth="1.55" strokeOpacity="0.76" />
+        <path d="M 76 8 L 31 -4 L 17 17 L 60 40 Z" fill={dark} stroke={secondary} strokeWidth="1.55" strokeOpacity="0.76" />
+        <path d="M -33 -7 L 0 -25 L 33 -7" fill="none" stroke={highlight} strokeWidth="2.2" strokeOpacity="0.72" /><Reactor y={18} size={10} />
+      </g>;
+    }
+    if (family === "solar") {
+      return <g>{arms((x, y) => [x < 0 ? -15 : 15, y < 0 ? -10 : 13], 9.5, 4.4, 21)}
+        <path d="M 0 -88 L 13 -53 L 44 -25 L 28 4 L 17 45 L 0 69 L -17 45 L -28 4 L -44 -25 L -13 -53 Z" fill={dark} stroke={secondary} strokeWidth="2.1" strokeOpacity="0.84" />
+        <path d="M 0 -74 L 8 -47 L 32 -22 L 17 5 L 9 37 L 0 56 L -9 37 L -17 5 L -32 -22 L -8 -47 Z" fill={primary} />
+        <path d="M 0 -102 L 9 -78 L 0 -56 L -9 -78 Z" fill={highlight} />
+        <path d="M -66 -19 L -33 -13 L -47 10 L -77 4 Z" fill={dark} stroke={secondary} strokeWidth="1.6" strokeOpacity="0.78" />
+        <path d="M 66 -19 L 33 -13 L 47 10 L 77 4 Z" fill={dark} stroke={secondary} strokeWidth="1.6" strokeOpacity="0.78" />
+        <circle cx="0" cy="9" r="14" fill={highlight} fillOpacity="0.86" /><circle cx="0" cy="9" r="8" fill={secondary} />
+      </g>;
+    }
+    return <g>{arms((x, y) => [x < 0 ? -16 : 16, y < 0 ? -7 : 13], 9.6, 4.3, 21)}
+      <path d="M 0 -80 L 18 -48 L 49 -21 L 31 3 L 18 48 L 0 69 L -18 48 L -31 3 L -49 -21 L -18 -48 Z" fill={dark} stroke={secondary} strokeWidth="2.2" strokeOpacity="0.84" />
+      <path d="M 0 -67 L 11 -41 L 36 -18 L 20 5 L 10 39 L 0 56 L -10 39 L -20 5 L -36 -18 L -11 -41 Z" fill={primary} />
+      <path d="M -70 -31 L -25 -8 L -61 27" fill="none" stroke={highlight} strokeWidth="4.2" strokeLinecap="round" strokeOpacity="0.86" />
+      <path d="M 70 -31 L 25 -8 L 61 27" fill="none" stroke={highlight} strokeWidth="4.2" strokeLinecap="round" strokeOpacity="0.86" />
+      <path d="M 0 -55 L 8 -23 L 5 11 L 0 26 L -5 11 L -8 -23 Z" fill={secondary} /><path d="M -28 39 L 0 54 L 28 39" fill="none" stroke={highlight} strokeWidth="3.4" strokeOpacity="0.72" />
+    </g>;
+  }
+
+  if (role === "tank") {
+    if (family === "galactic") return <g>{arms((x,y)=>[x<0?-32:32,y<0?-18:22],15.4,6.8,26)}
+      <path d="M 0 -62 L 48 -43 L 69 -8 L 57 33 L 30 63 L 0 74 L -30 63 L -57 33 L -69 -8 L -48 -43 Z" fill={dark} stroke={secondary} strokeWidth="2.7" strokeOpacity="0.84" />
+      <path d="M 0 -52 L 39 -36 L 57 -7 L 46 26 L 23 52 L 0 62 L -23 52 L -46 26 L -57 -7 L -39 -36 Z" fill={primary} />
+      <path d="M -77 -16 L -41 -18 L -32 34 L -68 45 Z" fill={dark} stroke={secondary} strokeWidth="2" strokeOpacity="0.76" /><path d="M 77 -16 L 41 -18 L 32 34 L 68 45 Z" fill={dark} stroke={secondary} strokeWidth="2" strokeOpacity="0.76" />
+      <rect x="-33" y="-34" width="66" height="15" rx="7" fill={dark} stroke={highlight} strokeWidth="1.4" strokeOpacity="0.72" />{[-22,-7,7,22].map(x=><rect key={x} x={x-4} y="-29" width="8" height="5" rx="2" fill={highlight} fillOpacity="0.92" />)}<Reactor y={16} size={13} />
+    </g>;
+    if (family === "medieval") return <g>{arms((x,y)=>[x<0?-34:34,y<0?-17:22],15.8,7,27)}
+      <path d="M 0 -73 L 34 -59 L 61 -29 L 67 13 L 48 50 L 20 70 L -20 70 L -48 50 L -67 13 L -61 -29 L -34 -59 Z" fill={dark} stroke={secondary} strokeWidth="3" strokeOpacity="0.86" />
+      <path d="M 0 -59 L 26 -50 L 48 -25 L 54 11 L 38 40 L 15 57 L -15 57 L -38 40 L -54 11 L -48 -25 L -26 -50 Z" fill={primary} />
+      <path d="M 0 -50 L 18 -27 L 25 8 L 14 39 L 0 51 L -14 39 L -25 8 L -18 -27 Z" fill={dark} stroke={highlight} strokeWidth="2.1" strokeOpacity="0.78" />
+      <path d="M -58 -5 L -80 6 L -57 45 L -44 30 Z" fill={dark} stroke={highlight} strokeWidth="1.7" strokeOpacity="0.70" /><path d="M 58 -5 L 80 6 L 57 45 L 44 30 Z" fill={dark} stroke={highlight} strokeWidth="1.7" strokeOpacity="0.70" /><circle cx="0" cy="4" r="12" fill={secondary} fillOpacity="0.90" />
+    </g>;
+    if (family === "military") return <g>{arms((x,y)=>[x<0?-39:39,y<0?-16:21],16.6,7.2,27)}
+      <path d="M -75 -37 L -24 -56 L 24 -56 L 75 -37 L 82 10 L 56 49 L 23 64 L -23 64 L -56 49 L -82 10 Z" fill={dark} stroke={secondary} strokeWidth="2.6" strokeOpacity="0.84" />
+      <path d="M -61 -30 L -20 -45 L 20 -45 L 61 -30 L 66 7 L 43 36 L 18 50 L -18 50 L -43 36 L -66 7 Z" fill={primary} />
+      <rect x="-44" y="-29" width="88" height="19" rx="6" fill={dark} stroke={highlight} strokeWidth="1.6" strokeOpacity="0.76" />{[-29,-10,10,29].map(x=><rect key={x} x={x-5} y="-23" width="10" height="6" rx="2" fill={highlight} fillOpacity="0.95" />)}<Reactor y={20} size={12} />
+    </g>;
+    if (family === "dark-galactic") return <g>{arms((x,y)=>[x<0?-34:34,y<0?-18:21],15.6,6.7,26)}
+      <path d="M 0 -68 L 48 -46 L 77 -15 L 61 29 L 30 67 L 0 79 L -30 67 L -61 29 L -77 -15 L -48 -46 Z" fill={dark} stroke={secondary} strokeWidth="2.9" strokeOpacity="0.84" />
+      <path d="M 0 -54 L 36 -37 L 60 -12 L 46 24 L 21 54 L 0 65 L -21 54 L -46 24 L -60 -12 L -36 -37 Z" fill={primary} fillOpacity="0.78" />
+      <path d="M -90 -30 L -42 -36 L -25 2 L -69 28 L -94 5 Z" fill={dark} stroke={secondary} strokeWidth="2.2" strokeOpacity="0.75" /><path d="M 90 -30 L 42 -36 L 25 2 L 69 28 L 94 5 Z" fill={dark} stroke={secondary} strokeWidth="2.2" strokeOpacity="0.75" /><Reactor y={17} size={13} />
+    </g>;
+    if (family === "abyssal") return <g>{arms((x,y)=>[x<0?-36:36,y<0?-18:22],15.7,6.9,26)}
+      <path d="M 0 -65 L 51 -43 L 76 -8 L 66 28 L 42 58 L 0 73 L -42 58 L -66 28 L -76 -8 L -51 -43 Z" fill={dark} stroke={secondary} strokeWidth="2.8" strokeOpacity="0.82" />
+      <path d="M 0 -51 L 40 -34 L 60 -6 L 51 23 L 31 47 L 0 60 L -31 47 L -51 23 L -60 -6 L -40 -34 Z" fill={primary} />
+      <path d="M -72 -13 L -43 -9 L -31 36 L -69 46 Z" fill={dark} stroke={secondary} strokeWidth="1.9" strokeOpacity="0.76" /><path d="M 72 -13 L 43 -9 L 31 36 L 69 46 Z" fill={dark} stroke={secondary} strokeWidth="1.9" strokeOpacity="0.76" /><path d="M -35 -24 L 0 -44 L 35 -24" fill="none" stroke={highlight} strokeWidth="2.4" strokeOpacity="0.72" /><Reactor y={11} size={12} />
+    </g>;
+    if (family === "solar") return <g>{arms((x,y)=>[x<0?-35:35,y<0?-17:22],15.5,6.8,26)}
+      <path d="M 0 -72 L 43 -52 L 72 -16 L 63 23 L 35 61 L 0 76 L -35 61 L -63 23 L -72 -16 L -43 -52 Z" fill={dark} stroke={secondary} strokeWidth="2.8" strokeOpacity="0.84" />
+      <path d="M 0 -58 L 33 -43 L 56 -13 L 49 18 L 27 49 L 0 63 L -27 49 L -49 18 L -56 -13 L -33 -43 Z" fill={primary} />
+      <path d="M 0 -82 L 14 -57 L 0 -37 L -14 -57 Z" fill={highlight} /><circle cx="0" cy="6" r="16" fill={highlight} fillOpacity="0.86" /><circle cx="0" cy="6" r="9" fill={secondary} />
+    </g>;
+    return <g>{arms((x,y)=>[x<0?-37:37,y<0?-17:22],16,6.9,26)}
+      <path d="M 0 -74 L 44 -53 L 75 -19 L 66 24 L 39 62 L 0 77 L -39 62 L -66 24 L -75 -19 L -44 -53 Z" fill={dark} stroke={secondary} strokeWidth="2.9" strokeOpacity="0.86" />
+      <path d="M 0 -60 L 34 -44 L 59 -16 L 51 19 L 28 50 L 0 64 L -28 50 L -51 19 L -59 -16 L -34 -44 Z" fill={primary} />
+      <path d="M 0 -86 L 17 -61 L 0 -42 L -17 -61 Z" fill={highlight} /><path d="M -78 -20 L -45 -11 L -34 33 L -72 48 Z" fill={dark} stroke={highlight} strokeWidth="1.65" strokeOpacity="0.72" /><path d="M 78 -20 L 45 -11 L 34 33 L 72 48 Z" fill={dark} stroke={highlight} strokeWidth="1.65" strokeOpacity="0.72" /><Reactor y={17} size={13} />
+    </g>;
+  }
+
+  if (family === "galactic") return <g>{arms((x,y)=>[x<0?-22:22,y<0?-20:20],12.2,5.4,23)}
+    <path d="M 0 -70 L 43 -45 L 62 -3 L 48 39 L 20 67 L -20 67 L -48 39 L -62 -3 L -43 -45 Z" fill={dark} stroke={secondary} strokeWidth="2.5" strokeOpacity="0.84" /><path d="M 0 -58 L 34 -37 L 49 -2 L 37 29 L 15 53 L -15 53 L -37 29 L -49 -2 L -34 -37 Z" fill={primary} /><circle cx="0" cy="2" r="39" fill="none" stroke={highlight} strokeWidth="3.5" strokeOpacity="0.82" /><circle cx="0" cy="2" r="27" fill="none" stroke={secondary} strokeWidth="2" strokeOpacity="0.64" /><Reactor y={1} size={10} />
+  </g>;
+  if (family === "medieval") return <g>{arms((x,y)=>[x<0?-21:21,y<0?-21:20],12.8,5.6,24)}
+    <path d="M 0 -77 L 39 -52 L 62 -14 L 51 30 L 24 65 L -24 65 L -51 30 L -62 -14 L -39 -52 Z" fill={dark} stroke={secondary} strokeWidth="2.8" strokeOpacity="0.86" /><path d="M 0 -64 L 30 -44 L 49 -12 L 39 23 L 18 52 L -18 52 L -39 23 L -49 -12 L -30 -44 Z" fill={primary} /><path d="M 0 -51 L 18 -27 L 27 0 L 16 30 L 0 47 L -16 30 L -27 0 L -18 -27 Z" fill={dark} stroke={highlight} strokeWidth="2.2" strokeOpacity="0.82" /><Reactor y={0} size={10} />
+  </g>;
+  if (family === "military") return <g>{arms((x,y)=>[x<0?-23:23,y<0?-20:19],12.8,5.6,24)}
+    <path d="M -65 -45 L -16 -64 L 16 -64 L 65 -45 L 72 0 L 50 48 L 18 65 L -18 65 L -50 48 L -72 0 Z" fill={dark} stroke={secondary} strokeWidth="2.5" strokeOpacity="0.82" /><path d="M -51 -37 L -13 -51 L 13 -51 L 51 -37 L 57 0 L 38 36 L 14 51 L -14 51 L -38 36 L -57 0 Z" fill={primary} /><rect x="-56" y="-18" width="17" height="50" rx="6" fill={dark} stroke={highlight} strokeWidth="1.55" strokeOpacity="0.72" /><rect x="39" y="-18" width="17" height="50" rx="6" fill={dark} stroke={highlight} strokeWidth="1.55" strokeOpacity="0.72" /><Reactor y={2} size={10} />
+  </g>;
+  if (family === "dark-galactic") return <g>{arms((x,y)=>[x<0?-21:21,y<0?-20:20],12.4,5.5,23)}
+    <path d="M 0 -76 L 45 -49 L 68 -8 L 49 38 L 21 70 L -21 70 L -49 38 L -68 -8 L -45 -49 Z" fill={dark} stroke={secondary} strokeWidth="2.7" strokeOpacity="0.84" /><path d="M 0 -60 L 34 -40 L 54 -7 L 38 30 L 15 56 L -15 56 L -38 30 L -54 -7 L -34 -40 Z" fill={primary} fillOpacity="0.78" /><path d="M -82 -23 L -42 -20 L -29 12 L -68 32 Z" fill={dark} stroke={secondary} strokeWidth="1.9" strokeOpacity="0.76" /><path d="M 82 -23 L 42 -20 L 29 12 L 68 32 Z" fill={dark} stroke={secondary} strokeWidth="1.9" strokeOpacity="0.76" /><Reactor y={2} size={10} />
+  </g>;
+  if (family === "abyssal") return <g>{arms((x,y)=>[x<0?-22:22,y<0?-20:20],12.4,5.4,23)}
+    <path d="M 0 -72 L 46 -42 L 69 -1 L 50 40 L 20 67 L -20 67 L -50 40 L -69 -1 L -46 -42 Z" fill={dark} stroke={secondary} strokeWidth="2.7" strokeOpacity="0.84" /><path d="M 0 -59 L 36 -35 L 55 -1 L 39 31 L 15 54 L -15 54 L -39 31 L -55 -1 L -36 -35 Z" fill={primary} /><path d="M -54 -9 L -73 13 L -47 38" fill="none" stroke={highlight} strokeWidth="4" strokeLinecap="round" strokeOpacity="0.78" /><path d="M 54 -9 L 73 13 L 47 38" fill="none" stroke={highlight} strokeWidth="4" strokeLinecap="round" strokeOpacity="0.78" /><Reactor y={3} size={10} />
+  </g>;
+  if (family === "solar") return <g>{arms((x,y)=>[x<0?-22:22,y<0?-20:20],12.5,5.5,23)}
+    <path d="M 0 -80 L 43 -53 L 68 -12 L 52 34 L 21 70 L -21 70 L -52 34 L -68 -12 L -43 -53 Z" fill={dark} stroke={secondary} strokeWidth="2.8" strokeOpacity="0.84" /><path d="M 0 -66 L 33 -44 L 54 -10 L 40 27 L 16 57 L -16 57 L -40 27 L -54 -10 L -33 -44 Z" fill={primary} /><circle cx="0" cy="0" r="42" fill="none" stroke={highlight} strokeWidth="4" strokeOpacity="0.86" /><circle cx="0" cy="0" r="29" fill="none" stroke={secondary} strokeWidth="2.1" strokeOpacity="0.76" /><Reactor y={1} size={10} />
+  </g>;
+  return <g>{arms((x,y)=>[x<0?-22:22,y<0?-20:20],12.7,5.6,24)}
+    <path d="M 0 -78 L 44 -51 L 69 -9 L 53 38 L 21 69 L -21 69 L -53 38 L -69 -9 L -44 -51 Z" fill={dark} stroke={secondary} strokeWidth="2.8" strokeOpacity="0.86" /><path d="M 0 -65 L 34 -42 L 55 -8 L 41 30 L 16 56 L -16 56 L -41 30 L -55 -8 L -34 -42 Z" fill={primary} /><path d="M -62 -34 L 62 -34" fill="none" stroke={highlight} strokeWidth="5.5" strokeLinecap="round" strokeOpacity="0.86" /><path d="M -51 -34 L -51 27" fill="none" stroke={highlight} strokeWidth="4.2" strokeLinecap="round" strokeOpacity="0.80" /><path d="M 51 -34 L 51 27" fill="none" stroke={highlight} strokeWidth="4.2" strokeLinecap="round" strokeOpacity="0.80" /><Reactor y={3} size={9} />
+  </g>;
+}
+
+function StaticArenaDroneHull({ primary, secondary, dark, highlight }) {
+  const rotors = [[-59, -45], [59, -45], [-59, 45], [59, 45]];
+  return (
+    <g>
+      {rotors.map(([x, y]) => (
+        <StaticCtfArm
+          key={`${x}-${y}`}
+          x={x}
+          y={y}
+          fromX={x < 0 ? -21 : 21}
+          fromY={y < 0 ? -17 : 17}
+          width={12}
+          accentWidth={6.4}
+          primary={primary}
+          secondary={secondary}
+          dark={dark}
+          highlight={highlight}
+        />
+      ))}
+      <path d="M 0 -52 L 23 -39 L 34 -8 L 30 24 L 17 47 L 0 56 L -17 47 L -30 24 L -34 -8 L -23 -39 Z" fill={dark} />
+      <path d="M 0 -47 L 17 -34 L 25 -7 L 22 21 L 12 40 L 0 47 L -12 40 L -22 21 L -25 -7 L -17 -34 Z" fill={primary} />
+      <path d="M 0 -41 L 7 -26 L 9 12 L 4 34 L 0 39 L -4 34 L -9 12 L -7 -26 Z" fill={dark} fillOpacity="0.55" />
+      <path d="M 0 -42 L 12 -29 L 11 -10 L 0 -2 L -11 -10 L -12 -29 Z" fill={secondary} fillOpacity="0.56" />
+      <path d="M 0 -38 L 6 -29 L 5 -17 L 0 -13 L -5 -17 L -6 -29 Z" fill={highlight} fillOpacity="0.72" />
+      <rect x="-24" y="8" width="8" height="18" rx="3" fill={dark} fillOpacity="0.88" />
+      <rect x="16" y="8" width="8" height="18" rx="3" fill={dark} fillOpacity="0.88" />
+      <rect x="-22" y="10" width="4" height="12" rx="2" fill={secondary} fillOpacity="0.45" />
+      <rect x="18" y="10" width="4" height="12" rx="2" fill={secondary} fillOpacity="0.45" />
+      <rect x="-8" y="29" width="16" height="13" rx="5" fill={dark} />
+      <rect x="-5" y="32" width="10" height="7" rx="3" fill={highlight} fillOpacity="0.90" />
+      <path d="M 0 -47 L 17 -34 L 25 -7 L 22 21 L 12 40 L 0 47 L -12 40 L -22 21 L -25 -7 L -17 -34 Z" fill="none" stroke={highlight} strokeWidth="1.7" strokeOpacity="0.38" />
     </g>
   );
 }
@@ -512,65 +893,32 @@ function StaticCtfSignature({ role, family, primary, secondary, dark, highlight 
 function StaticDronePreview({ skin = BASIC_DRONE, drone, size = "large", compact = false, label = "" }) {
   const item = drone || skin || BASIC_DRONE;
   const [primary, secondary, dark, highlight] = getPreviewColors(item);
-  const role = getCtfRoleFromSkin(item);
-  const family = getCtfFamilyFromSkin(item);
-  const className = `static-drone-preview static-drone-preview-${size} ${compact ? "is-compact" : ""} ${role ? "is-ctf" : ""}`;
+  const meta = getCtfVisualMeta(item);
+  const className = `static-drone-preview static-drone-preview-${size} ${compact ? "is-compact" : ""} ${meta.isCtf ? "is-ctf" : ""}`;
   const title = item?.name || SKIN_NAMES[item?.id] || "Drone";
 
-  const compactRotor = size === "tiny";
   return (
     <div className={className} aria-label={`${title} static preview`} title={title}>
       <svg viewBox="-130 -130 260 260" role="img" aria-hidden="true">
         <circle cx="0" cy="0" r="105" fill="none" stroke={primary} strokeOpacity="0.22" strokeWidth="2" />
         <circle cx="0" cy="0" r="85" fill={dark} fillOpacity="0.20" stroke={secondary} strokeOpacity="0.23" strokeWidth="1.2" />
-        <g opacity="0.98">
-          {[
-            [-59, -45],
-            [59, -45],
-            [-59, 45],
-            [59, 45],
-          ].map(([x, y]) => {
-            const fromX = x < 0 ? -21 : 21;
-            const fromY = y < 0 ? -17 : 17;
-            return (
-              <g key={`${x}-${y}`}>
-                <line x1={fromX} y1={fromY} x2={x} y2={y} stroke={dark} strokeWidth="12" strokeLinecap="round" />
-                <line x1={fromX} y1={fromY} x2={x} y2={y} stroke={primary} strokeWidth="6.4" strokeLinecap="round" opacity="0.82" />
-                <line x1={fromX} y1={fromY} x2={x} y2={y} stroke={secondary} strokeWidth="1.35" strokeLinecap="round" opacity="0.85" />
-              </g>
-            );
-          })}
-          <StaticCtfSignature role={role} family={family} primary={primary} secondary={secondary} dark={dark} highlight={highlight} />
-          {[
-            [-59, -45],
-            [59, -45],
-            [-59, 45],
-            [59, 45],
-          ].map(([x, y]) => (
-            <StaticRotor
-              key={`rotor-${x}-${y}`}
-              x={x}
-              y={y}
+        {meta.isCtf ? (
+          meta.family === "starter" ? (
+            <StaticStarterCommandHull role={meta.role} primary={primary} secondary={secondary} dark={dark} highlight={highlight} />
+          ) : (
+            <StaticPremiumCtfHull
+              role={meta.role}
+              variant={meta.variant}
+              family={meta.family}
               primary={primary}
               secondary={secondary}
               dark={dark}
               highlight={highlight}
-              compact={compactRotor}
             />
-          ))}
-          <path d="M 0 -52 L 23 -39 L 34 -8 L 30 24 L 17 47 L 0 56 L -17 47 L -30 24 L -34 -8 L -23 -39 Z" fill={dark} />
-          <path d="M 0 -47 L 17 -34 L 25 -7 L 22 21 L 12 40 L 0 47 L -12 40 L -22 21 L -25 -7 L -17 -34 Z" fill={primary} />
-          <path d="M 0 -41 L 7 -26 L 9 12 L 4 34 L 0 39 L -4 34 L -9 12 L -7 -26 Z" fill={dark} fillOpacity="0.56" />
-          <path d="M 0 -42 L 12 -29 L 11 -10 L 0 -2 L -11 -10 L -12 -29 Z" fill={secondary} fillOpacity="0.62" />
-          <path d="M 0 -38 L 6 -29 L 5 -17 L 0 -13 L -5 -17 L -6 -29 Z" fill={highlight} fillOpacity="0.78" />
-          <rect x="-24" y="8" width="8" height="18" rx="3" fill={dark} />
-          <rect x="16" y="8" width="8" height="18" rx="3" fill={dark} />
-          <rect x="-22" y="10" width="4" height="12" rx="2" fill={secondary} fillOpacity="0.52" />
-          <rect x="18" y="10" width="4" height="12" rx="2" fill={secondary} fillOpacity="0.52" />
-          <rect x="-8" y="29" width="16" height="13" rx="5" fill={dark} />
-          <rect x="-5" y="32" width="10" height="7" rx="3" fill={highlight} fillOpacity="0.94" />
-          <path d="M 0 -47 L 17 -34 L 25 -7 L 22 21 L 12 40 L 0 47 L -12 40 L -22 21 L -25 -7 L -17 -34 Z" fill="none" stroke={highlight} strokeOpacity="0.42" strokeWidth="1.7" />
-        </g>
+          )
+        ) : (
+          <StaticArenaDroneHull primary={primary} secondary={secondary} dark={dark} highlight={highlight} />
+        )}
       </svg>
       {label ? <span className="static-drone-preview-label">{label}</span> : null}
     </div>

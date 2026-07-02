@@ -199,7 +199,33 @@ const CAPTURE_THE_FLAG_PACK_ROLE_VARIANTS: Record<string, Record<string, string>
     tank: "dark-voidfang",
     defense: "dark-voidfang",
   },
+  "ctf-pack-abyssal-phantom": {
+    "attack-alpha": "abyssal-razor",
+    "attack-bravo": "abyssal-razor",
+    tank: "abyssal-leviathan",
+    defense: "abyssal-ward",
+  },
+  "ctf-pack-solar-dynasty": {
+    "attack-alpha": "solar-lancer",
+    "attack-bravo": "solar-lancer",
+    tank: "solar-bastion",
+    defense: "solar-halo",
+  },
+  "ctf-pack-crimson-ronin": {
+    "attack-alpha": "ronin-blade",
+    "attack-bravo": "ronin-blade",
+    tank: "ronin-shogun",
+    defense: "ronin-gate",
+  },
 };
+
+// Every CTF AI pilot receives one random cosmetic pack when it is created.
+// The selected pack stays fixed for the whole match (including respawns),
+// while the exact hull is resolved from the bot's assigned class.
+const CAPTURE_THE_FLAG_BOT_PACK_IDS = Object.freeze(
+  Object.keys(CAPTURE_THE_FLAG_PACK_ROLE_VARIANTS),
+);
+
 
 // CTF role-combat tuning. These rules are isolated to Capture The Flag only.
 const CAPTURE_THE_FLAG_DEFENDER_SHIELD_DURATION_MS = 4000;
@@ -234,6 +260,9 @@ const CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS: Record<
       { key: "dark-kyberwraith", name: "KYBER WRAITH", family: "DARK GALACTIC", skin: "ctf-blue-attack-alpha-dark-kyberwraith" },
       { key: "dark-dreadwing", name: "DREADWING STRIKER", family: "DARK GALACTIC", skin: "ctf-blue-attack-alpha-dark-dreadwing" },
       { key: "dark-blacksun", name: "BLACK SUN LANCER", family: "DARK GALACTIC", skin: "ctf-blue-attack-alpha-dark-blacksun" },
+      { key: "abyssal-razor", name: "ABYSSAL RAZOR", family: "ABYSSAL PHANTOM", skin: "ctf-blue-attack-alpha-abyssal-razor" },
+      { key: "solar-lancer", name: "SOLAR LANCER", family: "SOLAR DYNASTY", skin: "ctf-blue-attack-alpha-solar-lancer" },
+      { key: "ronin-blade", name: "RONIN BLADE", family: "CRIMSON RONIN", skin: "ctf-blue-attack-alpha-ronin-blade" },
     ],
     "attack-bravo": [
       { key: "basic-wingman", name: "CADET WINGMAN", family: "STARTER", skin: "ctf-blue-attack-bravo-basic-wingman" },
@@ -247,6 +276,9 @@ const CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS: Record<
       { key: "dark-kyberwraith", name: "KYBER WRAITH", family: "DARK GALACTIC", skin: "ctf-blue-attack-bravo-dark-kyberwraith" },
       { key: "dark-dreadwing", name: "DREADWING PHANTOM", family: "DARK GALACTIC", skin: "ctf-blue-attack-bravo-dark-dreadwing" },
       { key: "dark-blacksun", name: "BLACK SUN RAZOR", family: "DARK GALACTIC", skin: "ctf-blue-attack-bravo-dark-blacksun" },
+      { key: "abyssal-razor", name: "ABYSSAL RAZOR", family: "ABYSSAL PHANTOM", skin: "ctf-blue-attack-bravo-abyssal-razor" },
+      { key: "solar-lancer", name: "SOLAR LANCER", family: "SOLAR DYNASTY", skin: "ctf-blue-attack-bravo-solar-lancer" },
+      { key: "ronin-blade", name: "RONIN BLADE", family: "CRIMSON RONIN", skin: "ctf-blue-attack-bravo-ronin-blade" },
     ],
     tank: [
       { key: "basic-bastion", name: "CADET BASTION", family: "STARTER", skin: "ctf-blue-tank-basic-bastion" },
@@ -260,6 +292,9 @@ const CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS: Record<
       { key: "dark-kyberwraith", name: "KYBER WRAITH CARRIER", family: "DARK GALACTIC", skin: "ctf-blue-tank-dark-kyberwraith" },
       { key: "dark-dreadwing", name: "DREADWING SIEGE", family: "DARK GALACTIC", skin: "ctf-blue-tank-dark-dreadwing" },
       { key: "dark-blacksun", name: "BLACK SUN FORTRESS", family: "DARK GALACTIC", skin: "ctf-blue-tank-dark-blacksun" },
+      { key: "abyssal-leviathan", name: "LEVIATHAN FRAME", family: "ABYSSAL PHANTOM", skin: "ctf-blue-tank-abyssal-leviathan" },
+      { key: "solar-bastion", name: "SOLAR BASTION", family: "SOLAR DYNASTY", skin: "ctf-blue-tank-solar-bastion" },
+      { key: "ronin-shogun", name: "SHOGUN FRAME", family: "CRIMSON RONIN", skin: "ctf-blue-tank-ronin-shogun" },
     ],
     defense: [
       { key: "basic-sentinel", name: "CADET SENTINEL", family: "STARTER", skin: "ctf-blue-defense-basic-sentinel" },
@@ -273,6 +308,9 @@ const CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS: Record<
       { key: "dark-kyberwraith", name: "KYBER WRAITH SENTINEL", family: "DARK GALACTIC", skin: "ctf-blue-defense-dark-kyberwraith" },
       { key: "dark-dreadwing", name: "DREADWING BASTILLE", family: "DARK GALACTIC", skin: "ctf-blue-defense-dark-dreadwing" },
       { key: "dark-blacksun", name: "BLACK SUN GUARDIAN", family: "DARK GALACTIC", skin: "ctf-blue-defense-dark-blacksun" },
+      { key: "abyssal-ward", name: "TIDAL WARD", family: "ABYSSAL PHANTOM", skin: "ctf-blue-defense-abyssal-ward" },
+      { key: "solar-halo", name: "SOLAR HALO", family: "SOLAR DYNASTY", skin: "ctf-blue-defense-solar-halo" },
+      { key: "ronin-gate", name: "TORII GUARD", family: "CRIMSON RONIN", skin: "ctf-blue-defense-ronin-gate" },
     ],
   },
   orange: {
@@ -7535,6 +7573,13 @@ export class GameGateway {
     };
   }
 
+  private getRandomCaptureTheFlagBotPackId() {
+    const packs = CAPTURE_THE_FLAG_BOT_PACK_IDS;
+    if (!packs.length) return "ctf-pack-starter-command";
+
+    return packs[randomInt(packs.length)] || "ctf-pack-starter-command";
+  }
+
   private createCaptureTheFlagPlayer({
     id,
     data = {},
@@ -7559,8 +7604,14 @@ export class GameGateway {
       skin,
       // Used only by Capture The Flag role assignment. Normal PvP and both
       // Battle Royale modes never read or mutate this field.
+      // Bots pick one pack once at spawn. Their role assignment below resolves
+      // the matching Attack / Tank / Defender hull from that same pack.
       ctfSelectedPackId: isBot
-        ? null
+        ? (
+          CAPTURE_THE_FLAG_PACK_ROLE_VARIANTS[String(data?.ctfSelectedPackId || "")]
+            ? this.normalizeCaptureTheFlagPackId(data?.ctfSelectedPackId)
+            : this.getRandomCaptureTheFlagBotPackId()
+        )
         : this.normalizeCaptureTheFlagPackId(data?.ctfSelectedPackId),
       team,
       x,
@@ -7715,12 +7766,32 @@ export class GameGateway {
   }
 
   private fillCaptureTheFlagBots(room: any) {
+    // Build a shuffled pack cycle for visual variety. The first bots added to
+    // a room receive different CTF packs whenever possible; only after every
+    // collection has been used can a pack repeat.
+    const existingBotPacks = new Set(
+      [...room.players.values()]
+        .filter((player: any) => player?.isBot)
+        .map((player: any) => String(player?.ctfSelectedPackId || ""))
+        .filter((packId: string) => Boolean(CAPTURE_THE_FLAG_PACK_ROLE_VARIANTS[packId])),
+    );
+    const shuffledAllPacks = this.shuffleCaptureTheFlagRoster([...CAPTURE_THE_FLAG_BOT_PACK_IDS]);
+    const unusedPacks = shuffledAllPacks.filter((packId: string) => !existingBotPacks.has(packId));
+    const packCycle = [
+      ...unusedPacks,
+      ...this.shuffleCaptureTheFlagRoster([...CAPTURE_THE_FLAG_BOT_PACK_IDS]),
+      ...this.shuffleCaptureTheFlagRoster([...CAPTURE_THE_FLAG_BOT_PACK_IDS]),
+    ];
+    let packCursor = 0;
+
     while (room.players.size < CAPTURE_THE_FLAG_ROOM_MAX_PLAYERS) {
       const provisionalTeam = this.assignCaptureTheFlagTeam(room);
       const provisionalSlot = this.getCaptureTheFlagTeamPlayers(room, provisionalTeam).length;
       const spawn = this.getCaptureTheFlagSpawn(room, provisionalTeam, provisionalSlot);
+      const botPackId = packCycle[packCursor++] || this.getRandomCaptureTheFlagBotPackId();
       const bot = this.createCaptureTheFlagPlayer({
         id: `ctf-bot-${crypto.randomUUID()}`,
+        data: { ctfSelectedPackId: botPackId },
         team: provisionalTeam,
         x: spawn.x,
         y: spawn.y,
@@ -7834,6 +7905,9 @@ export class GameGateway {
       "viper",
       "talon",
       "dark-voidfang",
+      "abyssal-razor",
+      "solar-lancer",
+      "ronin-blade",
     ]);
 
     return normalizedRole === "attack-bravo" && exactAttackPreviewVariants.has(variant)
@@ -7949,9 +8023,17 @@ export class GameGateway {
           String(player?.ctfSkinTeam || "") === team
             ? String(player?.ctfSkinVariantKey || "")
             : null;
-        const selectedPackVariant = player.isBot
-          ? this.getCaptureTheFlagSelectedPackVariant("ctf-pack-starter-command", role)
-          : this.getCaptureTheFlagSelectedPackVariant(player.ctfSelectedPackId, role);
+        // A bot keeps the random pack chosen when it joined the room. If this
+        // is an older in-memory bot without a pack (for example after hot
+        // reload), assign one once and preserve it from this point forward.
+        if (player.isBot && !CAPTURE_THE_FLAG_PACK_ROLE_VARIANTS[String(player.ctfSelectedPackId || "")]) {
+          player.ctfSelectedPackId = this.getRandomCaptureTheFlagBotPackId();
+        }
+
+        const selectedPackVariant = this.getCaptureTheFlagSelectedPackVariant(
+          player.ctfSelectedPackId,
+          role,
+        );
         const profile = this.getCaptureTheFlagRoleProfile(
           team,
           role,

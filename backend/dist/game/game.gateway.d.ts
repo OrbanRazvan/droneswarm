@@ -324,6 +324,7 @@ export declare class GameGateway {
     private findOrCreateCaptureTheFlagRoom;
     private createCaptureTheFlagOrb;
     private createCaptureTheFlagEnergyCell;
+    private getRandomCaptureTheFlagBotPackId;
     private createCaptureTheFlagPlayer;
     private getCaptureTheFlagRoomBySocket;
     private getCaptureTheFlagTeamPlayers;

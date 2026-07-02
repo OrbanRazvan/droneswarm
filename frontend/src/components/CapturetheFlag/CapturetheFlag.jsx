@@ -210,6 +210,22 @@ const DRONE_SKIN_THEMES = {
   "ctf-red-defense-warden": ["#ff6348", "#ffd0b5", "#461300", "#fff8f3", "rgba(255, 99, 72, 0.80)"],
   "ctf-red-defense-oracle": ["#a855f7", "#e5c0ff", "#310044", "#fff6ff", "rgba(168, 85, 247, 0.80)"],
   "ctf-red-defense-bulwark": ["#db2e57", "#ffb5c2", "#41000e", "#fff4f6", "rgba(219, 46, 87, 0.80)"],
+
+  // Premium CTF expansion packs. The canonical pack colors are shared by
+  // both teams; Blue/Red identity remains in HUD, bases, flags and bars.
+  "ctf-blue-attack-alpha-abyssal-razor": ["#0a6d8c", "#7df8ff", "#02131d", "#cffcff", "rgba(10, 109, 140, 0.84)"],
+  "ctf-blue-attack-bravo-abyssal-razor": ["#0a6d8c", "#7df8ff", "#02131d", "#cffcff", "rgba(10, 109, 140, 0.84)"],
+  "ctf-blue-tank-abyssal-leviathan": ["#075985", "#86f5ff", "#031721", "#e2fdff", "rgba(7, 89, 133, 0.84)"],
+  "ctf-blue-defense-abyssal-ward": ["#0f766e", "#8bfff2", "#03201f", "#eaffff", "rgba(15, 118, 110, 0.84)"],
+  "ctf-blue-attack-alpha-solar-lancer": ["#f59e0b", "#fff1a6", "#2b1600", "#ffffff", "rgba(245, 158, 11, 0.84)"],
+  "ctf-blue-attack-bravo-solar-lancer": ["#f59e0b", "#fff1a6", "#2b1600", "#ffffff", "rgba(245, 158, 11, 0.84)"],
+  "ctf-blue-tank-solar-bastion": ["#d97706", "#ffdfa0", "#2a1600", "#fffbeb", "rgba(217, 119, 6, 0.84)"],
+  "ctf-blue-defense-solar-halo": ["#fbbf24", "#fff3b0", "#302000", "#fffff3", "rgba(251, 191, 36, 0.84)"],
+  "ctf-blue-attack-alpha-ronin-blade": ["#e11d48", "#ffa8b8", "#23030d", "#fff4f6", "rgba(225, 29, 72, 0.84)"],
+  "ctf-blue-attack-bravo-ronin-blade": ["#e11d48", "#ffa8b8", "#23030d", "#fff4f6", "rgba(225, 29, 72, 0.84)"],
+  "ctf-blue-tank-ronin-shogun": ["#be123c", "#ff9daf", "#23020a", "#fff3f5", "rgba(190, 18, 60, 0.84)"],
+  "ctf-blue-defense-ronin-gate": ["#7c3aed", "#d9c5ff", "#18072f", "#f7f2ff", "rgba(124, 58, 237, 0.84)"],
+
 };
 
 function normalizeSkin(skin) {
@@ -1318,7 +1334,10 @@ function getCaptureTheFlagSkinFamilyLabel(family) {
   if (normalized === "MEDIEVAL") return "MEDIEVAL FORGE";
   if (normalized === "MILITARY") return "MILITARY PROTOTYPE";
   if (normalized === "DARK GALACTIC") return "DARK GALACTIC";
-  return "GALACTIC OPERA";
+  if (normalized === "ABYSSAL PHANTOM") return "ABYSSAL PHANTOM";
+  if (normalized === "SOLAR DYNASTY") return "SOLAR DYNASTY";
+  if (normalized === "CRIMSON RONIN") return "CRIMSON RONIN";
+  return "GALACTIC COMMAND";
 }
 
 function getBattleBeginFlashActive(data = {}) {

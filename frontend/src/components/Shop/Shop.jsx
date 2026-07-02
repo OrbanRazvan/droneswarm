@@ -181,19 +181,27 @@ function StoreDroneArtwork({ skin, role = "ARENA DRONE", compact = false }) {
   );
 }
 
-function DroneTile({ skin, role, selected = false, loadout = false }) {
+function DroneTile({ skin, role, selected = false, loadout = false, StaticDronePreview }) {
   const resolvedRole = getDroneRole(skin, 0, role);
 
   return (
     <article className={`store-drone-tile ${selected ? "is-selected" : ""} ${loadout ? "is-loadout" : ""}`}>
-      <StoreDroneArtwork skin={skin} role={resolvedRole} compact={loadout} />
+      {StaticDronePreview ? (
+        <StaticDronePreview
+          skin={skin}
+          size={loadout ? "tiny" : "tiny"}
+          compact={Boolean(loadout)}
+        />
+      ) : (
+        <StoreDroneArtwork skin={skin} role={resolvedRole} compact={loadout} />
+      )}
       <span>{resolvedRole}</span>
       <strong>{skin?.name || "Drone"}</strong>
     </article>
   );
 }
 
-function PackCard({ pack, type = "regular", selectedDrone, equippedCtfPackId, isGuest, onOpenPack }) {
+function PackCard({ pack, type = "regular", selectedDrone, equippedCtfPackId, isGuest, onOpenPack, StaticDronePreview }) {
   const isCtf = type === "ctf";
   const isStarter = Boolean(isCtf && pack?.starter);
   const isSelected = isCtf
@@ -209,6 +217,7 @@ function PackCard({ pack, type = "regular", selectedDrone, equippedCtfPackId, is
             skin={skin}
             role={isCtf ? skin.role : `SKIN ${index + 1}`}
             selected={!isCtf && selectedDrone === skin.id}
+            StaticDronePreview={StaticDronePreview}
           />
         ))}
       </div>
@@ -257,6 +266,7 @@ function Shop({
   selectedDrone,
   equippedCtfPackId,
   isGuest = false,
+  StaticDronePreview,
 }) {
   return (
     <section className="shop-page">
@@ -278,6 +288,7 @@ function Shop({
               equippedCtfPackId={equippedCtfPackId}
               isGuest={isGuest}
               onOpenPack={onOpenPack}
+              StaticDronePreview={StaticDronePreview}
             />
           ))}
         </div>
@@ -288,7 +299,7 @@ function Shop({
         <div>
           <small>MULTIPLAYER CLASS LOADOUTS</small>
           <strong>CAPTURE THE FLAG · 4V4</strong>
-          <p>Dedicated 4v4 loadouts begin here. Each pack is designed for objective play, coordinated pressure, and team identity.</p>
+          <p>Eight premium 4v4 collections begin here. Every pack delivers a role-specific Attack, Tank, and Defender formation built for objective pressure and team control.</p>
         </div>
         <span className="store-ctf-divider-line" />
       </div>
@@ -299,7 +310,7 @@ function Shop({
             <span>CTF CLASS PACKS</span>
             <h2>Attack · Tank · Defender</h2>
           </div>
-          <p>Each pack unlocks a matched Attack, Tank, and Defender trio from one visual family, purpose-built for Capture The Flag roles.</p>
+          <p>Every collection unlocks a matched Attack, Tank, and Defender trio with a distinct high-detail hull language, from stealth military frames to solar and ronin command rigs.</p>
         </header>
 
         <div className="store-pack-grid">
@@ -312,6 +323,7 @@ function Shop({
               equippedCtfPackId={equippedCtfPackId}
               isGuest={isGuest}
               onOpenPack={onOpenPack}
+              StaticDronePreview={StaticDronePreview}
             />
           ))}
         </div>

@@ -153,6 +153,36 @@ const SKIN_THEMES = {
   "ctf-red-defense-dark-kyberwraith": [0x72306d, 0xffb9f7, 0x12030f, 0xeb6dff],
   "ctf-red-defense-dark-dreadwing": [0x7a3875, 0xffbefc, 0x12030f, 0xf274ff],
   "ctf-red-defense-dark-blacksun": [0x82407d, 0xffc3ff, 0x12030f, 0xf97bff],
+
+  // Premium CTF expansion — three new high-detail role packs.
+  // The server uses the blue/canonical IDs for every player so cosmetics
+  // remain true to the equipped pack rather than being recolored by team.
+  "ctf-blue-attack-alpha-abyssal-razor": [0x0a6d8c, 0x7df8ff, 0x02131d, 0xcffcff],
+  "ctf-blue-attack-bravo-abyssal-razor": [0x0a6d8c, 0x7df8ff, 0x02131d, 0xcffcff],
+  "ctf-blue-tank-abyssal-leviathan": [0x075985, 0x86f5ff, 0x031721, 0xe2fdff],
+  "ctf-blue-defense-abyssal-ward": [0x0f766e, 0x8bfff2, 0x03201f, 0xeaffff],
+  "ctf-blue-attack-alpha-solar-lancer": [0xf59e0b, 0xfff1a6, 0x2b1600, 0xffffff],
+  "ctf-blue-attack-bravo-solar-lancer": [0xf59e0b, 0xfff1a6, 0x2b1600, 0xffffff],
+  "ctf-blue-tank-solar-bastion": [0xd97706, 0xffdfa0, 0x2a1600, 0xfffbeb],
+  "ctf-blue-defense-solar-halo": [0xfbbf24, 0xfff3b0, 0x302000, 0xfffff3],
+  "ctf-blue-attack-alpha-ronin-blade": [0xe11d48, 0xffa8b8, 0x23030d, 0xfff4f6],
+  "ctf-blue-attack-bravo-ronin-blade": [0xe11d48, 0xffa8b8, 0x23030d, 0xfff4f6],
+  "ctf-blue-tank-ronin-shogun": [0xbe123c, 0xff9daf, 0x23020a, 0xfff3f5],
+  "ctf-blue-defense-ronin-gate": [0x7c3aed, 0xd9c5ff, 0x18072f, 0xf7f2ff],
+
+  "ctf-red-attack-alpha-abyssal-razor": [0x0a6d8c, 0x7df8ff, 0x02131d, 0xcffcff],
+  "ctf-red-attack-bravo-abyssal-razor": [0x0a6d8c, 0x7df8ff, 0x02131d, 0xcffcff],
+  "ctf-red-tank-abyssal-leviathan": [0x075985, 0x86f5ff, 0x031721, 0xe2fdff],
+  "ctf-red-defense-abyssal-ward": [0x0f766e, 0x8bfff2, 0x03201f, 0xeaffff],
+  "ctf-red-attack-alpha-solar-lancer": [0xf59e0b, 0xfff1a6, 0x2b1600, 0xffffff],
+  "ctf-red-attack-bravo-solar-lancer": [0xf59e0b, 0xfff1a6, 0x2b1600, 0xffffff],
+  "ctf-red-tank-solar-bastion": [0xd97706, 0xffdfa0, 0x2a1600, 0xfffbeb],
+  "ctf-red-defense-solar-halo": [0xfbbf24, 0xfff3b0, 0x302000, 0xfffff3],
+  "ctf-red-attack-alpha-ronin-blade": [0xe11d48, 0xffa8b8, 0x23030d, 0xfff4f6],
+  "ctf-red-attack-bravo-ronin-blade": [0xe11d48, 0xffa8b8, 0x23030d, 0xfff4f6],
+  "ctf-red-tank-ronin-shogun": [0xbe123c, 0xff9daf, 0x23020a, 0xfff3f5],
+  "ctf-red-defense-ronin-gate": [0x7c3aed, 0xd9c5ff, 0x18072f, 0xf7f2ff],
+
 };
 
 const MAX_MINI_DRONES = 5;
@@ -639,7 +669,24 @@ const CTF_PREMIUM_VARIANT_FAMILIES = Object.freeze({
 });
 
 function getCtfPremiumFamily(variant = "") {
-  return CTF_PREMIUM_VARIANT_FAMILIES[String(variant || "").toLowerCase()] || "galactic";
+  const clean = String(variant || "").toLowerCase();
+  if (clean.startsWith("abyssal-")) return "abyssal";
+  if (clean.startsWith("solar-")) return "solar";
+  if (clean.startsWith("ronin-")) return "ronin";
+  return CTF_PREMIUM_VARIANT_FAMILIES[clean] || "galactic";
+}
+
+function getCtfRoleSkinMeta(skin = "") {
+  const direct = CTF_ROLE_SKIN_META[skin];
+  if (direct) return direct;
+
+  const match = String(skin || "").match(
+    /^ctf-(?:blue|red)-(attack-alpha|attack-bravo|tank|defense)-(.+)$/,
+  );
+
+  return match
+    ? { role: match[1], variant: match[2] }
+    : null;
 }
 
 function drawCtfFactionSignature(ctx, colors, role, variant) {
@@ -761,6 +808,37 @@ function createCtfPremiumAuraContext(colors, variant = "") {
       .stroke({ color: secondary, width: 1.8, alpha: 0.42 });
     ctx.circle(0, 0, 48).stroke({ color: primary, width: 1.2, alpha: 0.40 });
     [-1, 1].forEach((side) => ctx.circle(side * 48, 7, 5).fill({ color: highlight, alpha: 0.52 }));
+    return ctx;
+  }
+
+
+  if (family === "abyssal") {
+    ctx.poly([0, -91, 78, -38, 85, 9, 45, 61, 0, 83, -45, 61, -85, 9, -78, -38])
+      .stroke({ color: primary, width: 1.8, alpha: 0.42 });
+    ctx.poly([0, -66, 56, -27, 61, 8, 31, 43, 0, 61, -31, 43, -61, 8, -56, -27])
+      .stroke({ color: secondary, width: 1.2, alpha: 0.42 });
+    ctx.moveTo(-52, 17).lineTo(0, 49).lineTo(52, 17).stroke({ color: highlight, width: 1.4, alpha: 0.36 });
+    return ctx;
+  }
+
+  if (family === "solar") {
+    ctx.circle(0, 0, 75).stroke({ color: primary, width: 1.8, alpha: 0.44 });
+    ctx.circle(0, 0, 56).stroke({ color: secondary, width: 1.2, alpha: 0.46 });
+    for (let index = 0; index < 8; index += 1) {
+      const angle = (Math.PI * 2 * index) / 8;
+      ctx.moveTo(Math.cos(angle) * 81, Math.sin(angle) * 81)
+        .lineTo(Math.cos(angle) * 95, Math.sin(angle) * 95)
+        .stroke({ color: highlight, width: 2.0, alpha: 0.46 });
+    }
+    return ctx;
+  }
+
+  if (family === "ronin") {
+    ctx.poly([0, -91, 62, -52, 82, 0, 62, 52, 0, 91, -62, 52, -82, 0, -62, -52])
+      .stroke({ color: primary, width: 1.8, alpha: 0.44 });
+    ctx.moveTo(-73, -47).lineTo(73, -47).stroke({ color: highlight, width: 2.2, alpha: 0.42 });
+    ctx.moveTo(-59, -47).lineTo(-59, 40).stroke({ color: secondary, width: 1.5, alpha: 0.36 });
+    ctx.moveTo(59, -47).lineTo(59, 40).stroke({ color: secondary, width: 1.5, alpha: 0.36 });
     return ctx;
   }
 
@@ -1026,87 +1104,306 @@ function createCtfRoleDroneContext(colors, role, variant = "raptor") {
     [59, 45],
   ];
 
-  const drawArm = (x, y, fromX, fromY, width = 10.5, accentWidth = 4.8, rotorRadius = 23) => {
+  const drawArm = (x, y, fromX, fromY, width = 10, accent = 4.8, rotor = 22) => {
     ctx.moveTo(fromX, fromY).lineTo(x, y).stroke({ color: dark, width, alpha: 1 });
-    ctx.moveTo(fromX, fromY).lineTo(x, y).stroke({ color: primary, width: accentWidth, alpha: 0.88 });
-    ctx.moveTo(fromX, fromY).lineTo(x, y).stroke({ color: secondary, width: 1.25, alpha: 0.76 });
-    createRotorModule(ctx, x, y, rotorRadius, colors, false);
+    ctx.moveTo(fromX, fromY).lineTo(x, y).stroke({ color: primary, width: accent, alpha: 0.92 });
+    ctx.moveTo(fromX, fromY).lineTo(x, y).stroke({ color: secondary, width: 1.15, alpha: 0.80 });
+    createRotorModule(ctx, x, y, rotor, colors, false);
   };
 
-  if (role === "attack-alpha") {
-    rotors.forEach(([x, y]) => drawArm(x, y, x < 0 ? -12 : 12, y < 0 ? -7 : 10, 10, 4.6, 22));
-    // Sharp strike fighter: needle nose, swept wings, split engine blade.
-    ctx.poly([0, -70, 16, -39, 42, -16, 30, 2, 20, 42, 0, 58, -20, 42, -30, 2, -42, -16, -16, -39])
-      .fill({ color: dark, alpha: 1 });
-    ctx.poly([0, -63, 11, -35, 33, -14, 20, 3, 12, 35, 0, 48, -12, 35, -20, 3, -33, -14, -11, -35])
+  const arms = (fromFor, width, accent, rotor) => {
+    rotors.forEach(([x, y]) => {
+      const [fromX, fromY] = fromFor(x, y);
+      drawArm(x, y, fromX, fromY, width, accent, rotor);
+    });
+  };
+
+  const strokePlate = (points, width = 2.2, alpha = 0.78) => {
+    ctx.poly(points).stroke({ color: secondary, width, alpha });
+  };
+
+  const reactor = (y = 8, size = 11) => {
+    ctx.poly([0, y - size, size * 0.72, y - size * 0.20, size * 0.62, y + size * 0.68, 0, y + size, -size * 0.62, y + size * 0.68, -size * 0.72, y - size * 0.20])
+      .fill({ color: dark, alpha: 0.96 })
+      .stroke({ color: highlight, width: 1.75, alpha: 0.88 });
+    ctx.poly([0, y - size * 0.56, size * 0.34, y - size * 0.05, size * 0.30, y + size * 0.36, 0, y + size * 0.56, -size * 0.30, y + size * 0.36, -size * 0.34, y - size * 0.05])
+      .fill({ color: secondary, alpha: 0.98 });
+  };
+
+  // ATTACK — every family receives a narrow, high-speed silhouette. The role
+  // is intentionally pointed and winged: no round center-body language.
+  if (role === "attack-alpha" || role === "attack-bravo") {
+    if (family === "galactic") {
+      arms((x, y) => [x < 0 ? -13 : 13, y < 0 ? -12 : 12], 9.4, 4.3, 21);
+      ctx.poly([0, -76, 13, -45, 48, -18, 33, -1, 20, 43, 0, 65, -20, 43, -33, -1, -48, -18, -13, -45])
+        .fill({ color: dark, alpha: 1 });
+      ctx.poly([0, -67, 8, -41, 38, -16, 23, 1, 12, 36, 0, 53, -12, 36, -23, 1, -38, -16, -8, -41])
+        .fill({ color: primary, alpha: 1 });
+      ctx.poly([-67, -20, -29, -23, -19, -6, -57, 22]).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 1.8, alpha: 0.82 });
+      ctx.poly([67, -20, 29, -23, 19, -6, 57, 22]).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 1.8, alpha: 0.82 });
+      ctx.poly([-58, -15, -33, -17, -27, -5, -51, 12]).fill({ color: secondary, alpha: 0.72 });
+      ctx.poly([58, -15, 33, -17, 27, -5, 51, 12]).fill({ color: secondary, alpha: 0.72 });
+      ctx.poly([0, -60, 7, -33, 4, -2, 0, 15, -4, -2, -7, -33]).fill({ color: highlight, alpha: 0.98 });
+      reactor(35, 9);
+      return ctx;
+    }
+
+    if (family === "medieval") {
+      arms((x, y) => [x < 0 ? -16 : 16, y < 0 ? -9 : 10], 10.2, 4.5, 22);
+      ctx.poly([0, -82, 15, -49, 41, -23, 28, 7, 16, 48, 0, 67, -16, 48, -28, 7, -41, -23, -15, -49])
+        .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.2, alpha: 0.84 });
+      ctx.poly([0, -69, 9, -43, 31, -20, 18, 8, 9, 38, 0, 54, -9, 38, -18, 8, -31, -20, -9, -43])
+        .fill({ color: primary, alpha: 1 });
+      ctx.poly([0, -92, 8, -66, 0, -45, -8, -66]).fill({ color: highlight, alpha: 0.98 });
+      ctx.poly([-63, -6, -26, -12, -17, 9, -53, 34]).fill({ color: dark, alpha: 1 }).stroke({ color: highlight, width: 1.55, alpha: 0.72 });
+      ctx.poly([63, -6, 26, -12, 17, 9, 53, 34]).fill({ color: dark, alpha: 1 }).stroke({ color: highlight, width: 1.55, alpha: 0.72 });
+      [-14, 0, 14].forEach((x) => ctx.poly([x, 12, x + 5, 25, x, 38, x - 5, 25]).fill({ color: highlight, alpha: 0.90 }));
+      reactor(26, 8);
+      return ctx;
+    }
+
+    if (family === "military") {
+      arms((x, y) => [x < 0 ? -21 : 21, y < 0 ? -7 : 14], 9.6, 4.25, 21);
+      ctx.poly([0, -68, 38, -43, 70, -4, 42, 12, 34, 40, 0, 58, -34, 40, -42, 12, -70, -4, -38, -43])
+        .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.2, alpha: 0.78 });
+      ctx.poly([0, -56, 28, -36, 55, -3, 31, 8, 24, 30, 0, 44, -24, 30, -31, 8, -55, -3, -28, -36])
+        .fill({ color: primary, alpha: 1 });
+      ctx.poly([-76, -15, -38, -10, -23, 6, -58, 22]).fill({ color: dark, alpha: 1 }).stroke({ color: highlight, width: 1.6, alpha: 0.68 });
+      ctx.poly([76, -15, 38, -10, 23, 6, 58, 22]).fill({ color: dark, alpha: 1 }).stroke({ color: highlight, width: 1.6, alpha: 0.68 });
+      ctx.poly([0, -51, 12, -25, 8, 8, 0, 20, -8, 8, -12, -25]).fill({ color: secondary, alpha: 0.96 });
+      [-18, 0, 18].forEach((x) => ctx.roundRect(x - 4, 28, 8, 6, 2).fill({ color: highlight, alpha: 0.92 }));
+      return ctx;
+    }
+
+    if (family === "dark-galactic") {
+      arms((x, y) => [x < 0 ? -14 : 14, y < 0 ? -8 : 11], 9.2, 4.0, 21);
+      ctx.poly([0, -77, 18, -44, 53, -24, 34, 4, 19, 49, 0, 67, -19, 49, -34, 4, -53, -24, -18, -44])
+        .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.4, alpha: 0.82 });
+      ctx.poly([0, -61, 10, -34, 37, -20, 20, 5, 10, 36, 0, 52, -10, 36, -20, 5, -37, -20, -10, -34])
+        .fill({ color: primary, alpha: 0.84 });
+      ctx.poly([-89, -31, -42, -32, -27, -9, -72, 9, -95, -7]).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2, alpha: 0.76 });
+      ctx.poly([89, -31, 42, -32, 27, -9, 72, 9, 95, -7]).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2, alpha: 0.76 });
+      ctx.poly([0, -52, 7, -21, 5, 14, 0, 29, -5, 14, -7, -21]).fill({ color: highlight, alpha: 0.96 });
+      [-19, 0, 19].forEach((x) => ctx.poly([x - 4, 35, x + 4, 35, x + 2, 49, x - 2, 49]).fill({ color: secondary, alpha: 0.84 }));
+      return ctx;
+    }
+
+    if (family === "abyssal") {
+      arms((x, y) => [x < 0 ? -17 : 17, y < 0 ? -3 : 16], 9.3, 4.25, 21);
+      ctx.poly([0, -72, 22, -44, 60, -23, 73, 1, 42, 19, 22, 49, 0, 62, -22, 49, -42, 19, -73, 1, -60, -23, -22, -44])
+        .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.15, alpha: 0.82 });
+      ctx.poly([0, -58, 14, -37, 47, -19, 56, 0, 30, 12, 14, 37, 0, 49, -14, 37, -30, 12, -56, 0, -47, -19, -14, -37])
+        .fill({ color: primary, alpha: 0.98 });
+      ctx.poly([-76, 8, -31, -4, -17, 17, -60, 40]).fill({ color: dark, alpha: 0.98 }).stroke({ color: secondary, width: 1.55, alpha: 0.76 });
+      ctx.poly([76, 8, 31, -4, 17, 17, 60, 40]).fill({ color: dark, alpha: 0.98 }).stroke({ color: secondary, width: 1.55, alpha: 0.76 });
+      ctx.moveTo(-33, -7).lineTo(0, -25).lineTo(33, -7).stroke({ color: highlight, width: 2.2, alpha: 0.72 });
+      reactor(18, 10);
+      return ctx;
+    }
+
+    if (family === "solar") {
+      arms((x, y) => [x < 0 ? -15 : 15, y < 0 ? -10 : 13], 9.5, 4.4, 21);
+      ctx.poly([0, -88, 13, -53, 44, -25, 28, 4, 17, 45, 0, 69, -17, 45, -28, 4, -44, -25, -13, -53])
+        .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.1, alpha: 0.84 });
+      ctx.poly([0, -74, 8, -47, 32, -22, 17, 5, 9, 37, 0, 56, -9, 37, -17, 5, -32, -22, -8, -47])
+        .fill({ color: primary, alpha: 1 });
+      ctx.poly([0, -102, 9, -78, 0, -56, -9, -78]).fill({ color: highlight, alpha: 1 });
+      [-1, 1].forEach((side) => ctx.poly([side * 66, -19, side * 33, -13, side * 47, 10, side * 77, 4]).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 1.6, alpha: 0.78 }));
+      ctx.circle(0, 9, 14).fill({ color: highlight, alpha: 0.86 });
+      ctx.circle(0, 9, 8).fill({ color: secondary, alpha: 0.96 });
+      return ctx;
+    }
+
+    // Ronin — sharp blade nose, katana winglets and a split engine cowl.
+    arms((x, y) => [x < 0 ? -16 : 16, y < 0 ? -7 : 13], 9.6, 4.3, 21);
+    ctx.poly([0, -80, 18, -48, 49, -21, 31, 3, 18, 48, 0, 69, -18, 48, -31, 3, -49, -21, -18, -48])
+      .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.2, alpha: 0.84 });
+    ctx.poly([0, -67, 11, -41, 36, -18, 20, 5, 10, 39, 0, 56, -10, 39, -20, 5, -36, -18, -11, -41])
       .fill({ color: primary, alpha: 1 });
-    ctx.poly([0, -58, 7, -30, 6, -3, 0, 12, -6, -3, -7, -30]).fill({ color: highlight, alpha: 0.98 });
-    ctx.poly([-51, -8, -25, -6, -19, 9, -58, 25]).fill({ color: dark, alpha: 0.96 }).stroke({ color: secondary, width: 1.7, alpha: 0.76 });
-    ctx.poly([51, -8, 25, -6, 19, 9, 58, 25]).fill({ color: dark, alpha: 0.96 }).stroke({ color: secondary, width: 1.7, alpha: 0.76 });
-    ctx.poly([-46, -4, -28, -2, -25, 7, -50, 18]).fill({ color: secondary, alpha: 0.68 });
-    ctx.poly([46, -4, 28, -2, 25, 7, 50, 18]).fill({ color: secondary, alpha: 0.68 });
-    ctx.poly([-13, 36, 0, 52, 13, 36, 7, 31, -7, 31]).fill({ color: dark, alpha: 0.96 });
-    drawCtfVariantPremiumDetails(ctx, colors, role, variant);
+    ctx.moveTo(-70, -31).lineTo(-25, -8).lineTo(-61, 27).stroke({ color: highlight, width: 4.2, alpha: 0.86 });
+    ctx.moveTo(70, -31).lineTo(25, -8).lineTo(61, 27).stroke({ color: highlight, width: 4.2, alpha: 0.86 });
+    ctx.poly([0, -55, 8, -23, 5, 11, 0, 26, -5, 11, -8, -23]).fill({ color: secondary, alpha: 0.96 });
+    ctx.moveTo(-28, 39).lineTo(0, 54).lineTo(28, 39).stroke({ color: highlight, width: 3.4, alpha: 0.72 });
     return ctx;
   }
 
-  if (role === "attack-bravo") {
-    rotors.forEach(([x, y], index) => drawArm(x, y, x < 0 ? -18 : 18, y < 0 ? -13 : 15, 10.2, 4.55, index < 2 ? 21 : 23));
-    // Stealth interceptor: broad delta hull, segmented side rails and rear claws.
-    ctx.poly([0, -61, 39, -29, 50, 2, 27, 43, 0, 59, -27, 43, -50, 2, -39, -29])
-      .fill({ color: dark, alpha: 1 });
-    ctx.poly([0, -54, 31, -26, 40, 3, 20, 35, 0, 49, -20, 35, -40, 3, -31, -26])
-      .fill({ color: primary, alpha: 1 });
-    ctx.poly([0, -47, 16, -21, 14, 4, 0, 20, -14, 4, -16, -21]).fill({ color: secondary, alpha: 0.76 });
-    ctx.poly([-54, 9, -27, 14, -36, 41, -67, 27]).fill({ color: dark, alpha: 0.98 }).stroke({ color: secondary, width: 1.5, alpha: 0.68 });
-    ctx.poly([54, 9, 27, 14, 36, 41, 67, 27]).fill({ color: dark, alpha: 0.98 }).stroke({ color: secondary, width: 1.5, alpha: 0.68 });
-    ctx.poly([-45, 13, -29, 18, -35, 31, -54, 23]).fill({ color: primary, alpha: 0.72 });
-    ctx.poly([45, 13, 29, 18, 35, 31, 54, 23]).fill({ color: primary, alpha: 0.72 });
-    ctx.poly([-7, 34, 0, 49, 7, 34, 3, 28, -3, 28]).fill({ color: highlight, alpha: 0.90 });
-    drawCtfVariantPremiumDetails(ctx, colors, role, variant);
-    return ctx;
-  }
-
+  // TANK — wide only where armor is needed. All hulls are faceted or slabbed;
+  // there is no balloon / orb silhouette.
   if (role === "tank") {
-    rotors.forEach(([x, y]) => drawArm(x, y, x < 0 ? -29 : 29, y < 0 ? -13 : 19, 15, 7.2, 27));
-    // Armored dreadnought: faceted armor instead of rounded cabin geometry.
-    ctx.poly([0, -59, 32, -41, 51, -9, 45, 28, 25, 56, 0, 68, -25, 56, -45, 28, -51, -9, -32, -41])
-      .fill({ color: dark, alpha: 1 });
-    ctx.poly([0, -52, 25, -36, 40, -8, 35, 23, 19, 47, 0, 57, -19, 47, -35, 23, -40, -8, -25, -36])
-      .fill({ color: primary, alpha: 1 });
-    ctx.poly([0, -46, 15, -28, 21, 4, 0, 30, -21, 4, -15, -28]).fill({ color: dark, alpha: 0.72 });
-    ctx.poly([0, -40, 8, -25, 10, 4, 0, 16, -10, 4, -8, -25]).fill({ color: highlight, alpha: 0.96 });
-    ctx.poly([-52, -8, -35, -2, -42, 35, -61, 27]).fill({ color: dark, alpha: 0.98 }).stroke({ color: secondary, width: 2, alpha: 0.72 });
-    ctx.poly([52, -8, 35, -2, 42, 35, 61, 27]).fill({ color: dark, alpha: 0.98 }).stroke({ color: secondary, width: 2, alpha: 0.72 });
-    ctx.poly([-48, 0, -39, 4, -44, 26, -53, 21]).fill({ color: secondary, alpha: 0.72 });
-    ctx.poly([48, 0, 39, 4, 44, 26, 53, 21]).fill({ color: secondary, alpha: 0.72 });
-    ctx.poly([-24, 38, 0, 56, 24, 38, 16, 32, -16, 32]).fill({ color: dark, alpha: 0.96 }).stroke({ color: highlight, width: 1.6, alpha: 0.54 });
-    drawCtfVariantPremiumDetails(ctx, colors, role, variant);
-    return ctx;
-  }
-
-  if (role === "defense") {
-    rotors.forEach(([x, y]) => drawArm(x, y, x < 0 ? -20 : 20, y < 0 ? -18 : 18, 12.8, 5.7, 24.5));
-    // Angular fortress sentinel: shield plates surround a diamond reactor.
-    ctx.poly([0, -63, 37, -38, 53, 0, 36, 42, 0, 65, -36, 42, -53, 0, -37, -38])
-      .fill({ color: dark, alpha: 1 });
-    ctx.poly([0, -55, 29, -33, 42, 0, 28, 34, 0, 55, -28, 34, -42, 0, -29, -33])
+    if (family === "galactic") {
+      arms((x, y) => [x < 0 ? -32 : 32, y < 0 ? -18 : 22], 15.4, 6.8, 26);
+      ctx.poly([0, -62, 48, -43, 69, -8, 57, 33, 30, 63, 0, 74, -30, 63, -57, 33, -69, -8, -48, -43])
+        .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.7, alpha: 0.84 });
+      ctx.poly([0, -52, 39, -36, 57, -7, 46, 26, 23, 52, 0, 62, -23, 52, -46, 26, -57, -7, -39, -36])
+        .fill({ color: primary, alpha: 0.96 });
+      ctx.poly([-77, -16, -41, -18, -32, 34, -68, 45]).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2, alpha: 0.76 });
+      ctx.poly([77, -16, 41, -18, 32, 34, 68, 45]).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2, alpha: 0.76 });
+      ctx.roundRect(-33, -34, 66, 15, 7).fill({ color: dark, alpha: 0.95 }).stroke({ color: highlight, width: 1.4, alpha: 0.72 });
+      [-22, -7, 7, 22].forEach((x) => ctx.roundRect(x - 4, -29, 8, 5, 2).fill({ color: highlight, alpha: 0.92 }));
+      reactor(16, 13);
+      return ctx;
+    }
+    if (family === "medieval") {
+      arms((x, y) => [x < 0 ? -34 : 34, y < 0 ? -17 : 22], 15.8, 7.0, 27);
+      ctx.poly([0, -73, 34, -59, 61, -29, 67, 13, 48, 50, 20, 70, -20, 70, -48, 50, -67, 13, -61, -29, -34, -59])
+        .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 3.0, alpha: 0.86 });
+      ctx.poly([0, -59, 26, -50, 48, -25, 54, 11, 38, 40, 15, 57, -15, 57, -38, 40, -54, 11, -48, -25, -26, -50])
+        .fill({ color: primary, alpha: 0.96 });
+      ctx.poly([0, -50, 18, -27, 25, 8, 14, 39, 0, 51, -14, 39, -25, 8, -18, -27])
+        .fill({ color: dark, alpha: 0.88 }).stroke({ color: highlight, width: 2.1, alpha: 0.78 });
+      [-1, 1].forEach((side) => ctx.poly([side * 58, -5, side * 80, 6, side * 57, 45, side * 44, 30]).fill({ color: dark, alpha: 1 }).stroke({ color: highlight, width: 1.7, alpha: 0.70 }));
+      ctx.circle(0, 4, 12).fill({ color: secondary, alpha: 0.90 });
+      return ctx;
+    }
+    if (family === "military") {
+      arms((x, y) => [x < 0 ? -39 : 39, y < 0 ? -16 : 21], 16.6, 7.2, 27);
+      ctx.poly([-75, -37, -24, -56, 24, -56, 75, -37, 82, 10, 56, 49, 23, 64, -23, 64, -56, 49, -82, 10])
+        .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.6, alpha: 0.84 });
+      ctx.poly([-61, -30, -20, -45, 20, -45, 61, -30, 66, 7, 43, 36, 18, 50, -18, 50, -43, 36, -66, 7])
+        .fill({ color: primary, alpha: 0.98 });
+      ctx.roundRect(-44, -29, 88, 19, 6).fill({ color: dark, alpha: 0.96 }).stroke({ color: highlight, width: 1.6, alpha: 0.76 });
+      [-29, -10, 10, 29].forEach((x) => ctx.roundRect(x - 5, -23, 10, 6, 2).fill({ color: highlight, alpha: 0.95 }));
+      ctx.poly([-72, 3, -47, 11, -58, 42, -83, 33]).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 1.9, alpha: 0.76 });
+      ctx.poly([72, 3, 47, 11, 58, 42, 83, 33]).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 1.9, alpha: 0.76 });
+      reactor(20, 12);
+      return ctx;
+    }
+    if (family === "dark-galactic") {
+      arms((x, y) => [x < 0 ? -34 : 34, y < 0 ? -18 : 21], 15.6, 6.7, 26);
+      ctx.poly([0, -68, 48, -46, 77, -15, 61, 29, 30, 67, 0, 79, -30, 67, -61, 29, -77, -15, -48, -46])
+        .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.9, alpha: 0.84 });
+      ctx.poly([0, -54, 36, -37, 60, -12, 46, 24, 21, 54, 0, 65, -21, 54, -46, 24, -60, -12, -36, -37])
+        .fill({ color: primary, alpha: 0.78 });
+      ctx.poly([-90, -30, -42, -36, -25, 2, -69, 28, -94, 5]).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.2, alpha: 0.75 });
+      ctx.poly([90, -30, 42, -36, 25, 2, 69, 28, 94, 5]).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.2, alpha: 0.75 });
+      ctx.roundRect(-35, -23, 70, 16, 6).fill({ color: dark, alpha: 0.98 }).stroke({ color: highlight, width: 1.5, alpha: 0.66 });
+      reactor(17, 13);
+      return ctx;
+    }
+    if (family === "abyssal") {
+      arms((x, y) => [x < 0 ? -36 : 36, y < 0 ? -18 : 22], 15.7, 6.9, 26);
+      ctx.poly([0, -65, 51, -43, 76, -8, 66, 28, 42, 58, 0, 73, -42, 58, -66, 28, -76, -8, -51, -43])
+        .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.8, alpha: 0.82 });
+      ctx.poly([0, -51, 40, -34, 60, -6, 51, 23, 31, 47, 0, 60, -31, 47, -51, 23, -60, -6, -40, -34])
+        .fill({ color: primary, alpha: 0.96 });
+      [-1, 1].forEach((side) => ctx.poly([side * 72, -13, side * 43, -9, side * 31, 36, side * 69, 46]).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 1.9, alpha: 0.76 }));
+      ctx.moveTo(-35, -24).lineTo(0, -44).lineTo(35, -24).stroke({ color: highlight, width: 2.4, alpha: 0.72 });
+      ctx.moveTo(-29, 39).lineTo(0, 57).lineTo(29, 39).stroke({ color: secondary, width: 3.2, alpha: 0.86 });
+      reactor(11, 12);
+      return ctx;
+    }
+    if (family === "solar") {
+      arms((x, y) => [x < 0 ? -35 : 35, y < 0 ? -17 : 22], 15.5, 6.8, 26);
+      ctx.poly([0, -72, 43, -52, 72, -16, 63, 23, 35, 61, 0, 76, -35, 61, -63, 23, -72, -16, -43, -52])
+        .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.8, alpha: 0.84 });
+      ctx.poly([0, -58, 33, -43, 56, -13, 49, 18, 27, 49, 0, 63, -27, 49, -49, 18, -56, -13, -33, -43])
+        .fill({ color: primary, alpha: 1 });
+      ctx.poly([0, -82, 14, -57, 0, -37, -14, -57]).fill({ color: highlight, alpha: 1 });
+      [-1, 1].forEach((side) => ctx.poly([side * 75, -15, side * 46, -7, side * 52, 34, side * 82, 22]).fill({ color: dark, alpha: 1 }).stroke({ color: highlight, width: 1.7, alpha: 0.74 }));
+      ctx.circle(0, 6, 16).fill({ color: highlight, alpha: 0.86 });
+      ctx.circle(0, 6, 9).fill({ color: secondary, alpha: 0.98 });
+      return ctx;
+    }
+    // Ronin Shogun — slab armor, kabuto crown, asymmetric guard plates.
+    arms((x, y) => [x < 0 ? -37 : 37, y < 0 ? -17 : 22], 16.0, 6.9, 26);
+    ctx.poly([0, -74, 44, -53, 75, -19, 66, 24, 39, 62, 0, 77, -39, 62, -66, 24, -75, -19, -44, -53])
+      .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.9, alpha: 0.86 });
+    ctx.poly([0, -60, 34, -44, 59, -16, 51, 19, 28, 50, 0, 64, -28, 50, -51, 19, -59, -16, -34, -44])
       .fill({ color: primary, alpha: 0.98 });
-    ctx.poly([0, -42, 17, -20, 25, 0, 16, 22, 0, 39, -16, 22, -25, 0, -17, -20])
-      .fill({ color: dark, alpha: 0.86 }).stroke({ color: secondary, width: 2.6, alpha: 0.88 });
-    ctx.poly([0, -30, 9, -10, 12, 6, 0, 21, -12, 6, -9, -10]).fill({ color: highlight, alpha: 0.96 });
-    ctx.poly([-62, -21, -38, -16, -31, 5, -56, 25, -70, 7]).fill({ color: dark, alpha: 0.98 }).stroke({ color: secondary, width: 1.8, alpha: 0.76 });
-    ctx.poly([62, -21, 38, -16, 31, 5, 56, 25, 70, 7]).fill({ color: dark, alpha: 0.98 }).stroke({ color: secondary, width: 1.8, alpha: 0.76 });
-    ctx.poly([-51, -14, -37, -11, -34, 2, -54, 17]).fill({ color: secondary, alpha: 0.70 });
-    ctx.poly([51, -14, 37, -11, 34, 2, 54, 17]).fill({ color: secondary, alpha: 0.70 });
-    ctx.poly([-30, 34, 0, 59, 30, 34, 20, 30, -20, 30]).stroke({ color: highlight, width: 3.4, alpha: 0.72 });
-    drawCtfVariantPremiumDetails(ctx, colors, role, variant);
+    ctx.poly([0, -86, 17, -61, 0, -42, -17, -61]).fill({ color: highlight, alpha: 0.96 });
+    ctx.poly([-78, -20, -45, -11, -34, 33, -72, 48]).fill({ color: dark, alpha: 1 }).stroke({ color: highlight, width: 1.65, alpha: 0.72 });
+    ctx.poly([78, -20, 45, -11, 34, 33, 72, 48]).fill({ color: dark, alpha: 1 }).stroke({ color: highlight, width: 1.65, alpha: 0.72 });
+    ctx.roundRect(-34, -27, 68, 15, 6).fill({ color: dark, alpha: 0.97 }).stroke({ color: secondary, width: 1.7, alpha: 0.78 });
+    reactor(17, 13);
     return ctx;
   }
 
-  return createDroneContext(colors);
+  // DEFENDER — shield hardware, pylon geometry and perimeter control.
+  if (family === "galactic") {
+    arms((x, y) => [x < 0 ? -22 : 22, y < 0 ? -20 : 20], 12.2, 5.4, 23);
+    ctx.poly([0, -70, 43, -45, 62, -3, 48, 39, 20, 67, -20, 67, -48, 39, -62, -3, -43, -45])
+      .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.5, alpha: 0.84 });
+    ctx.poly([0, -58, 34, -37, 49, -2, 37, 29, 15, 53, -15, 53, -37, 29, -49, -2, -34, -37])
+      .fill({ color: primary, alpha: 0.96 });
+    ctx.circle(0, 2, 39).stroke({ color: highlight, width: 3.5, alpha: 0.82 });
+    ctx.circle(0, 2, 27).stroke({ color: secondary, width: 2, alpha: 0.64 });
+    [-1, 1].forEach((side) => ctx.poly([side * 55, -16, side * 73, 7, side * 49, 31]).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 1.7, alpha: 0.76 }));
+    reactor(1, 10);
+    return ctx;
+  }
+  if (family === "medieval") {
+    arms((x, y) => [x < 0 ? -21 : 21, y < 0 ? -21 : 20], 12.8, 5.6, 24);
+    ctx.poly([0, -77, 39, -52, 62, -14, 51, 30, 24, 65, 0, 75, -24, 65, -51, 30, -62, -14, -39, -52])
+      .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.8, alpha: 0.86 });
+    ctx.poly([0, -64, 30, -44, 49, -12, 39, 23, 18, 52, 0, 61, -18, 52, -39, 23, -49, -12, -30, -44])
+      .fill({ color: primary, alpha: 0.98 });
+    ctx.poly([0, -51, 18, -27, 27, 0, 16, 30, 0, 47, -16, 30, -27, 0, -18, -27])
+      .fill({ color: dark, alpha: 0.90 }).stroke({ color: highlight, width: 2.2, alpha: 0.82 });
+    [-1, 1].forEach((side) => ctx.roundRect(side * 50 - (side > 0 ? 8 : 0), -33, 15, 64, 6).fill({ color: dark, alpha: 1 }).stroke({ color: highlight, width: 1.6, alpha: 0.74 }));
+    reactor(0, 10);
+    return ctx;
+  }
+  if (family === "military") {
+    arms((x, y) => [x < 0 ? -23 : 23, y < 0 ? -20 : 19], 12.8, 5.6, 24);
+    ctx.poly([-65, -45, -16, -64, 16, -64, 65, -45, 72, 0, 50, 48, 18, 65, -18, 65, -50, 48, -72, 0])
+      .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.5, alpha: 0.82 });
+    ctx.poly([-51, -37, -13, -51, 13, -51, 51, -37, 57, 0, 38, 36, 14, 51, -14, 51, -38, 36, -57, 0])
+      .fill({ color: primary, alpha: 0.98 });
+    ctx.roundRect(-56, -18, 17, 50, 6).fill({ color: dark, alpha: 1 }).stroke({ color: highlight, width: 1.55, alpha: 0.72 });
+    ctx.roundRect(39, -18, 17, 50, 6).fill({ color: dark, alpha: 1 }).stroke({ color: highlight, width: 1.55, alpha: 0.72 });
+    ctx.poly([0, -42, 13, -17, 10, 11, 0, 29, -10, 11, -13, -17]).fill({ color: dark, alpha: 0.88 }).stroke({ color: secondary, width: 2, alpha: 0.76 });
+    [-15, 0, 15].forEach((x) => ctx.roundRect(x - 4, 34, 8, 5, 2).fill({ color: highlight, alpha: 0.92 }));
+    return ctx;
+  }
+  if (family === "dark-galactic") {
+    arms((x, y) => [x < 0 ? -21 : 21, y < 0 ? -20 : 20], 12.4, 5.5, 23);
+    ctx.poly([0, -76, 45, -49, 68, -8, 49, 38, 21, 70, 0, 79, -21, 70, -49, 38, -68, -8, -45, -49])
+      .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.7, alpha: 0.84 });
+    ctx.poly([0, -60, 34, -40, 54, -7, 38, 30, 15, 56, 0, 65, -15, 56, -38, 30, -54, -7, -34, -40])
+      .fill({ color: primary, alpha: 0.78 });
+    ctx.poly([-82, -23, -42, -20, -29, 12, -68, 32]).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 1.9, alpha: 0.76 });
+    ctx.poly([82, -23, 42, -20, 29, 12, 68, 32]).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 1.9, alpha: 0.76 });
+    ctx.poly([0, -48, 16, -22, 19, 6, 0, 38, -19, 6, -16, -22]).fill({ color: dark, alpha: 0.90 }).stroke({ color: highlight, width: 2.0, alpha: 0.82 });
+    reactor(2, 10);
+    return ctx;
+  }
+  if (family === "abyssal") {
+    arms((x, y) => [x < 0 ? -22 : 22, y < 0 ? -20 : 20], 12.4, 5.4, 23);
+    ctx.poly([0, -72, 46, -42, 69, -1, 50, 40, 20, 67, 0, 75, -20, 67, -50, 40, -69, -1, -46, -42])
+      .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.7, alpha: 0.84 });
+    ctx.poly([0, -59, 36, -35, 55, -1, 39, 31, 15, 54, 0, 63, -15, 54, -39, 31, -55, -1, -36, -35])
+      .fill({ color: primary, alpha: 0.98 });
+    ctx.moveTo(-54, -9).lineTo(-73, 13).lineTo(-47, 38).stroke({ color: highlight, width: 4.0, alpha: 0.78 });
+    ctx.moveTo(54, -9).lineTo(73, 13).lineTo(47, 38).stroke({ color: highlight, width: 4.0, alpha: 0.78 });
+    ctx.poly([0, -44, 15, -19, 19, 7, 0, 39, -19, 7, -15, -19]).fill({ color: dark, alpha: 0.90 }).stroke({ color: secondary, width: 2.1, alpha: 0.80 });
+    reactor(3, 10);
+    return ctx;
+  }
+  if (family === "solar") {
+    arms((x, y) => [x < 0 ? -22 : 22, y < 0 ? -20 : 20], 12.5, 5.5, 23);
+    ctx.poly([0, -80, 43, -53, 68, -12, 52, 34, 21, 70, 0, 80, -21, 70, -52, 34, -68, -12, -43, -53])
+      .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.8, alpha: 0.84 });
+    ctx.poly([0, -66, 33, -44, 54, -10, 40, 27, 16, 57, 0, 68, -16, 57, -40, 27, -54, -10, -33, -44])
+      .fill({ color: primary, alpha: 1 });
+    ctx.circle(0, 0, 42).stroke({ color: highlight, width: 4.0, alpha: 0.86 });
+    ctx.circle(0, 0, 29).stroke({ color: secondary, width: 2.1, alpha: 0.76 });
+    [-1, 1].forEach((side) => ctx.poly([side * 65, -22, side * 84, 2, side * 56, 32]).fill({ color: dark, alpha: 1 }).stroke({ color: highlight, width: 1.6, alpha: 0.74 }));
+    reactor(1, 10);
+    return ctx;
+  }
+  // Ronin Gate — angular guard core with torii-like pylon silhouette.
+  arms((x, y) => [x < 0 ? -22 : 22, y < 0 ? -20 : 20], 12.7, 5.6, 24);
+  ctx.poly([0, -78, 44, -51, 69, -9, 53, 38, 21, 69, 0, 78, -21, 69, -53, 38, -69, -9, -44, -51])
+    .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.8, alpha: 0.86 });
+  ctx.poly([0, -65, 34, -42, 55, -8, 41, 30, 16, 56, 0, 66, -16, 56, -41, 30, -55, -8, -34, -42])
+    .fill({ color: primary, alpha: 0.98 });
+  ctx.moveTo(-62, -34).lineTo(62, -34).stroke({ color: highlight, width: 5.5, alpha: 0.86 });
+  ctx.moveTo(-51, -34).lineTo(-51, 27).stroke({ color: highlight, width: 4.2, alpha: 0.80 });
+  ctx.moveTo(51, -34).lineTo(51, 27).stroke({ color: highlight, width: 4.2, alpha: 0.80 });
+  ctx.poly([0, -45, 14, -17, 12, 11, 0, 30, -12, 11, -14, -17]).fill({ color: dark, alpha: 0.90 }).stroke({ color: secondary, width: 2, alpha: 0.80 });
+  reactor(3, 9);
+  return ctx;
 }
-
 function createCtfRoleLiteDroneContext(colors, role, variant = "default") {
   const [primary, secondary, dark, highlight] = colors;
   const ctx = new PIXI.GraphicsContext();
@@ -2731,7 +3028,7 @@ function createResources(coreTypes = []) {
     shieldPulseContexts[skin] = createShieldPulseContext(colors);
 
     simpleContexts[skin] = createLiteDroneContext(colors);
-    const ctfSkinMeta = CTF_ROLE_SKIN_META[skin];
+    const ctfSkinMeta = getCtfRoleSkinMeta(skin);
     if (ctfSkinMeta) {
       ctfRoleDroneContexts[skin] = createCtfRoleDroneContext(colors, ctfSkinMeta.role, ctfSkinMeta.variant);
       ctfRoleSimpleContexts[skin] = createCtfRoleLiteDroneContext(colors, ctfSkinMeta.role, ctfSkinMeta.variant);
