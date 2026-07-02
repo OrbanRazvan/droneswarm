@@ -7814,7 +7814,10 @@ export class GameGateway {
       const botPackId = useReplacementSeat
         ? seatToReplace.packId
         : (packCycle[packCursor++] || this.getRandomCaptureTheFlagBotPackId());
-      const bot = this.createCaptureTheFlagPlayer({
+      // CTF seats carry extra runtime metadata (role label, visual variant,
+      // pack family and replacement marker) that is intentionally added after
+      // creation. Keep this runtime player extensible for the CTF-only fields.
+      const bot: any = this.createCaptureTheFlagPlayer({
         id: `ctf-bot-${crypto.randomUUID()}`,
         data: { ctfSelectedPackId: botPackId },
         team: provisionalTeam,
