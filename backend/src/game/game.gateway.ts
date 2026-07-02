@@ -7,6 +7,7 @@ import {
 } from "@nestjs/websockets";
 import { Server, Socket } from "socket.io";
 import { PrismaClient } from "@prisma/client";
+import { randomInt } from "crypto";
 
 const WORLD_WIDTH = 15000;
 const WORLD_HEIGHT = 15000;
@@ -111,106 +112,180 @@ const ZONE_PVP_BOT_SKINS = [
 const ZONE_PVP_BOT_OPENING_ORB_FARM_MS = ZONE_PVP_BATTLE_PREPARE_DURATION;
 
 
-// CAPTURE THE FLAG — compact objective mode built on the same authoritative Zone PvP
-// transport, prediction and reconnect lane. Two teams steal a core from a vault
-// and channel it into their own extractor. One real browser player opens the
-// lobby; after the short admission window the room is filled with bots up to 8.
-// This is intentionally enabled for solo development/testing.
-const CORE_HEIST_MODE = "core-heist";
-const CORE_HEIST_ROOM_MAX_PLAYERS = 8;
-const CORE_HEIST_ROOM_MIN_PLAYERS = 1;
-const CORE_HEIST_START_COUNTDOWN_MS = 5000;
-const CORE_HEIST_ROLE_REVEAL_DURATION = 5000;
-const CORE_HEIST_BATTLE_PREPARE_DURATION = 20000;
-const CORE_HEIST_MATCH_DURATION_MS = 10 * 60 * 1000;
-const CORE_HEIST_TARGET_SCORE = 3;
-const CORE_HEIST_RESPAWN_MS = 3500;
-const CORE_HEIST_FLAG_PICKUP_DISTANCE = 300;
-const CORE_HEIST_BASE_CAPTURE_RADIUS = 520;
-// Dropped flags stay exactly where the carrier died until a drone physically
-// recovers them. There is no automatic teleport back to base in Core Heist.
-const CORE_HEIST_FLAG_RETURN_MS = 0;
-const CORE_HEIST_CARRIER_SPEED_MULTIPLIER = 0.80;
-const CORE_HEIST_BOT_TARGET_TOTAL = CORE_HEIST_ROOM_MAX_PLAYERS;
-// Core Heist is a compact testing lane inside the shared 15k world. Other
-// modes keep their map dimensions; only the two CTF bases are moved closer.
-const CORE_HEIST_BASE_X_OFFSET = 4700;
-const CORE_HEIST_BASE_Y_OFFSET = 0;
-const CORE_HEIST_BASE_RADIUS = 520;
-const CORE_HEIST_BASE_PERIMETER_RADIUS = 860;
-// A drone has two lives: after its first death it redeploys; after its second
-// death it becomes a same-team spectator for the rest of the round.
-const CORE_HEIST_MAX_DEATHS = 2;
-// Core Heist is an eight-player objective mode. It can safely have a denser
-// opening economy than the 60-seat modes without producing heavy packets.
-const CORE_HEIST_OPENING_ORBS_PER_BASE = 32;
-const CORE_HEIST_MIDFIELD_ORB_COUNT = 320;
-const CORE_HEIST_OPENING_ENERGY_PER_BASE = 12;
-const CORE_HEIST_MIDFIELD_ENERGY_COUNT = 70;
-// Guaranteed dense resources directly in and around every home base. The rest
-// of the economy remains random across the full world, so both opening farm
-// and long routes are rewarding.
-const CORE_HEIST_BASE_CLOSE_ORBS_PER_BASE = 14;
-const CORE_HEIST_BASE_CLOSE_ENERGY_PER_BASE = 6;
-// Culoar central - banda densa de orb-uri care forteaza conflictul in mijloc
-const CORE_HEIST_CORRIDOR_ORB_COUNT = 110;
-const CORE_HEIST_CORRIDOR_ENERGY_COUNT = 28;
-// Core Heist is only 4v4, so it can sustain a denser world economy. Clients
-// still receive only their nearby, server-authoritative subset.
-const CORE_HEIST_ORB_TARGET = 520;
-const CORE_HEIST_ENERGY_TARGET = 130;
-const CORE_HEIST_ORB_COLLECT_DISTANCE = 235;
-const CORE_HEIST_ENERGY_COLLECT_DISTANCE = 210;
-const CORE_HEIST_BOT_HOME_THREAT_RADIUS = 2700;
-const CORE_HEIST_BOT_HOME_FARM_RADIUS = 2300;
-const CORE_HEIST_BOT_PREPARE_ENERGY_TARGET = 88;
-const CORE_HEIST_BOT_LOW_ENERGY = 62;
-const CORE_HEIST_BOT_TANK_MIN_DRONES = 4;
-const CORE_HEIST_BOT_ATTACKER_MIN_DRONES = 2;
-const CORE_HEIST_BOT_DEFENDER_MIN_DRONES = 5;
-const CORE_HEIST_BOT_DEFENDER_ENERGY_TARGET = 86;
-const CORE_HEIST_BOT_DEFENDER_PATROL_RADIUS = 720;
-const CORE_HEIST_BOT_DEFENDER_PATROL_ARRIVAL_RADIUS = 155;
-// Objective events are sent reliably to every client and retained briefly in
-// state as a reconnect fallback for the center-screen announcement HUD.
-const CORE_HEIST_EVENT_LOG_LIMIT = 12;
-const CORE_HEIST_EVENT_TTL_MS = 6500;
-// Core Heist has only eight total drones, so it can safely receive a compact
-// authoritative HUD/objective state much more often than 60-seat Zone PvP.
-// Motion still uses the separate 50 Hz transform lane below.
-const CORE_HEIST_STATE_INTERVAL_MS = 500; // same slow HUD/static lane as Zone PvP; movement stays in the 50 Hz hot lane.
-// Core Heist uses a stable split simulation/network cadence. Rendering remains
-// smooth through the transform lane and client interpolation, while item/HUD
-// packets cannot build a Socket.IO backlog during a long bot match.
-const CORE_HEIST_TRANSFORM_INTERVAL_MS = 20; // same 50 Hz latest-wins transform lane as Zone PvP.
-const CORE_HEIST_HEARTBEAT_INTERVAL_MS = 1000; // tiny independent session-health lane.
-const CORE_HEIST_LOOT_TICK_INTERVAL_MS = 50; // responsive pickup checks without a per-frame item rebuild.
-const CORE_HEIST_ITEM_MAINTENANCE_INTERVAL_MS = 1000; // bounded maintenance; never competes with movement.
-const CORE_HEIST_BOT_REPLAN_MIN_MS = 560;
-const CORE_HEIST_BOT_REPLAN_MAX_MS = 820;
-const CORE_HEIST_BOT_RESOURCE_LOCK_MS = 6200;
-// Deliberately low steering blends prevent AI from looking like rapid WASD taps.
-const CORE_HEIST_BOT_STEER_BLEND = 0.062;
-const CORE_HEIST_BOT_EMERGENCY_STEER_BLEND = 0.135;
-const CORE_HEIST_BOT_ARRIVAL_RADIUS = 112;
-const CORE_HEIST_TANK_HP = 200;
-const CORE_HEIST_PROJECTILE_DAMAGE = 10;
-const CORE_HEIST_ROLE_DAMAGE_WITH_ESCORT = 20;
-const CORE_HEIST_ROLE_DAMAGE_WITHOUT_ESCORT = 30;
-const CORE_HEIST_TANK_DAMAGE_WITHOUT_ESCORT = 20;
-const CORE_HEIST_TANK_DAMAGE_AFTER_TWO_IMPACTS = 10;
-const CORE_HEIST_TANK_IMPACTS_PER_ESCORT_LOSS = 2;
-// Dense enough to farm, but nowhere near the old full-screen loot flood.
-const CORE_HEIST_VIEWPORT_ITEM_STATE_INTERVAL_MS = 1000; // loot is static; keep Socket.IO state packets compact.
-const CORE_HEIST_VIEWPORT_ORB_LIMIT = 84;
-const CORE_HEIST_VIEWPORT_ENERGY_LIMIT = 24;
-// Other Core Heist roles move at the normal Zone speed. Attackers receive an
-// actual +2 world-units-per-frame advantage after the shared base multiplier.
-const CORE_HEIST_ATTACKER_MOVE_SPEED_BONUS = 2;
-const CORE_HEIST_DEFENDER_MAX_INTERCEPT_RATIO = 0.48;
-const CORE_HEIST_DEFENDER_HP_REGEN_PER_SECOND = 9;
-const CORE_HEIST_DEFENDER_ENERGY_REGEN_PER_SECOND = 16;
-const CORE_HEIST_DEFENDER_GUARD_RADIUS_BONUS = 160;
+// ---------------------------------------------------------------------------
+// CAPTURE THE FLAG 4v4 — an isolated objective session. It has its own room
+// map/socket registry, lifecycle and event namespace; Normal/Zone/BR stay
+// untouched. The renderer and combat primitives are shared only as utilities.
+// ---------------------------------------------------------------------------
+const CAPTURE_THE_FLAG_ROOM_MAX_PLAYERS = 8;
+const CAPTURE_THE_FLAG_ROOM_MIN_PLAYERS = 1;
+const CAPTURE_THE_FLAG_START_COUNTDOWN_MS = 10000; // 10 seconds for real pilots to fill all 8 seats before AI backfill.
+const CAPTURE_THE_FLAG_WORLD_WIDTH = 9000;
+const CAPTURE_THE_FLAG_WORLD_HEIGHT = 6000;
+const CAPTURE_THE_FLAG_BASE_X_OFFSET = 2100;
+const CAPTURE_THE_FLAG_BASE_RADIUS = 480;
+const CAPTURE_THE_FLAG_BASE_PERIMETER_RADIUS = 740;
+const CAPTURE_THE_FLAG_FLAG_PICKUP_DISTANCE = 230;
+const CAPTURE_THE_FLAG_TARGET_SCORE = 3;
+const CAPTURE_THE_FLAG_RESPAWN_MS = 5000;
+const CAPTURE_THE_FLAG_ORB_TARGET = 720;
+const CAPTURE_THE_FLAG_ENERGY_TARGET = 52;
+const CAPTURE_THE_FLAG_STATE_INTERVAL_MS = 110;
+const CAPTURE_THE_FLAG_MOVEMENT_INTERVAL_MS = 33;
+const CAPTURE_THE_FLAG_ITEM_MAINTENANCE_INTERVAL_MS = 700;
+const CAPTURE_THE_FLAG_BOT_REPLAN_MIN_MS = 180;
+const CAPTURE_THE_FLAG_BOT_REPLAN_MAX_MS = 310;
+const CAPTURE_THE_FLAG_BOT_ATTACK_RANGE = 1950;
+const CAPTURE_THE_FLAG_BOT_LOW_ENERGY = 38;
+const CAPTURE_THE_FLAG_BOT_GUARD_RADIUS = 920;
+const CAPTURE_THE_FLAG_BOT_GUARD_INTERCEPT_RADIUS = 2350;
+const CAPTURE_THE_FLAG_BOT_ESCORT_DISTANCE = 260;
+const CAPTURE_THE_FLAG_BOT_ESCORT_THREAT_RADIUS = 1450;
+const CAPTURE_THE_FLAG_BOT_FORMATION_SIDE = 280;
+const CAPTURE_THE_FLAG_CARRIER_SPEED_MULTIPLIER = 0.84;
+const CAPTURE_THE_FLAG_EVENT_TTL_MS = 6000;
+const CAPTURE_THE_FLAG_BATTLE_PREPARE_DURATION = 30000;
+const CAPTURE_THE_FLAG_MATCH_DURATION_MS = 600000;
+const CAPTURE_THE_FLAG_BOT_PERSONAL_SPACE = 360;
+const CAPTURE_THE_FLAG_BOT_COMBAT_STANDOFF = 860;
+const CAPTURE_THE_FLAG_BOT_RETREAT_STANDOFF = 1220;
+const CAPTURE_THE_FLAG_BOT_PREPARE_FARM_RADIUS = 1900;
+// Flag interaction is the primary CTF action. These values make the assigned
+// runner commit through the final approach instead of orbiting at combat range.
+const CAPTURE_THE_FLAG_BOT_FLAG_COMMIT_RANGE = 12000;
+const CAPTURE_THE_FLAG_BOT_FLAG_PICKUP_ASSIST_DISTANCE = 340;
+// CTF bots never route into the physical map border. The inner margin leaves
+// room for tactical flanks, formation spacing and collision recovery.
+const CAPTURE_THE_FLAG_BOT_WORLD_MARGIN = 520;
+const CAPTURE_THE_FLAG_BOT_EDGE_RECOVERY_DISTANCE = 340;
+const CAPTURE_THE_FLAG_BOT_EDGE_RECOVERY_PUSH = 610;
+
+// CTF class system: every 4-player team has two fast Attack Drones, one Tank
+// which commits onto the enemy flag, and one Defence drone which holds home.
+const CAPTURE_THE_FLAG_ROLE_REVEAL_DURATION_MS = 7000;
+const CAPTURE_THE_FLAG_ROLE_ORDER = ["attack-alpha", "attack-bravo", "tank", "defense"] as const;
+
+// CTF role-combat tuning. These rules are isolated to Capture The Flag only.
+const CAPTURE_THE_FLAG_DEFENDER_SHIELD_DURATION_MS = 4000;
+const CAPTURE_THE_FLAG_DEFENDER_AEGIS_PULSE_INTERVAL_MS = 700;
+const CAPTURE_THE_FLAG_DEFENDER_AEGIS_RADIUS = 760;
+const CAPTURE_THE_FLAG_DEFENDER_AEGIS_PUSH = 24;
+const CAPTURE_THE_FLAG_DEFENDER_AEGIS_ENERGY_DRAIN = 9;
+const CAPTURE_THE_FLAG_DEFENDER_AEGIS_ENERGY_RETURN_PER_TARGET = 4;
+const CAPTURE_THE_FLAG_DEFENDER_AEGIS_SLOW_DURATION_MS = 850;
+const CAPTURE_THE_FLAG_TANK_ORBITAL_HITS_REQUIRED = 2;
+const CAPTURE_THE_FLAG_TANK_ORBITAL_HIT_WINDOW_MS = 3800;
+const CAPTURE_THE_FLAG_TANK_ORBITAL_HP_DAMAGE = 15;
+const CAPTURE_THE_FLAG_TANK_NO_ORBITAL_HIT_DAMAGE = 20;
+
+
+// Five CTF-exclusive premium hull variants are available for every class. These are
+// randomized once per player per round and remain stable across respawns/re-syncs.
+const CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS: Record<
+  string,
+  Record<string, Array<{ key: string; name: string; family: string; skin: string }>>
+> = {
+  cyan: {
+    "attack-alpha": [
+      { key: "raptor", name: "NOVA SABRE", family: "GALACTIC", skin: "ctf-blue-attack-alpha-raptor" },
+      { key: "comet", name: "ION FALCON", family: "GALACTIC", skin: "ctf-blue-attack-alpha-comet" },
+      { key: "viper", name: "DRAGON LANCE", family: "MEDIEVAL", skin: "ctf-blue-attack-alpha-viper" },
+      { key: "valkyrie", name: "VALKYRIE CREST", family: "MEDIEVAL", skin: "ctf-blue-attack-alpha-valkyrie" },
+      { key: "talon", name: "MARAUDER X-9", family: "MILITARY", skin: "ctf-blue-attack-alpha-talon" },
+      { key: "dark-voidfang", name: "VOIDFANG INTERCEPTOR", family: "DARK GALACTIC", skin: "ctf-blue-attack-alpha-dark-voidfang" },
+      { key: "dark-nightreaper", name: "NIGHT REAPER", family: "DARK GALACTIC", skin: "ctf-blue-attack-alpha-dark-nightreaper" },
+      { key: "dark-kyberwraith", name: "KYBER WRAITH", family: "DARK GALACTIC", skin: "ctf-blue-attack-alpha-dark-kyberwraith" },
+      { key: "dark-dreadwing", name: "DREADWING STRIKER", family: "DARK GALACTIC", skin: "ctf-blue-attack-alpha-dark-dreadwing" },
+      { key: "dark-blacksun", name: "BLACK SUN LANCER", family: "DARK GALACTIC", skin: "ctf-blue-attack-alpha-dark-blacksun" },
+    ],
+    "attack-bravo": [
+      { key: "phantom", name: "VOID WRAITH", family: "GALACTIC", skin: "ctf-blue-attack-bravo-phantom" },
+      { key: "specter", name: "STARFALL GHOST", family: "GALACTIC", skin: "ctf-blue-attack-bravo-specter" },
+      { key: "scythe", name: "RUNEBLADE ARC", family: "MEDIEVAL", skin: "ctf-blue-attack-bravo-scythe" },
+      { key: "helix", name: "TEMPLAR HELIX", family: "MEDIEVAL", skin: "ctf-blue-attack-bravo-helix" },
+      { key: "eclipse", name: "BLACKSITE ECLIPSE", family: "MILITARY", skin: "ctf-blue-attack-bravo-eclipse" },
+      { key: "dark-voidfang", name: "VOIDFANG HUNTER", family: "DARK GALACTIC", skin: "ctf-blue-attack-bravo-dark-voidfang" },
+      { key: "dark-nightreaper", name: "NIGHT REAPER SHADE", family: "DARK GALACTIC", skin: "ctf-blue-attack-bravo-dark-nightreaper" },
+      { key: "dark-kyberwraith", name: "KYBER WRAITH", family: "DARK GALACTIC", skin: "ctf-blue-attack-bravo-dark-kyberwraith" },
+      { key: "dark-dreadwing", name: "DREADWING PHANTOM", family: "DARK GALACTIC", skin: "ctf-blue-attack-bravo-dark-dreadwing" },
+      { key: "dark-blacksun", name: "BLACK SUN RAZOR", family: "DARK GALACTIC", skin: "ctf-blue-attack-bravo-dark-blacksun" },
+    ],
+    tank: [
+      { key: "bastion", name: "ORBITAL DREADNOUGHT", family: "GALACTIC", skin: "ctf-blue-tank-bastion" },
+      { key: "titan", name: "SOLAR TITAN", family: "GALACTIC", skin: "ctf-blue-tank-titan" },
+      { key: "juggernaut", name: "IRON JUGGERNAUT", family: "MEDIEVAL", skin: "ctf-blue-tank-juggernaut" },
+      { key: "citadel", name: "CITADEL CROWN", family: "MEDIEVAL", skin: "ctf-blue-tank-citadel" },
+      { key: "atlas", name: "ATLAS SIEGE-RIG", family: "MILITARY", skin: "ctf-blue-tank-atlas" },
+      { key: "dark-voidfang", name: "VOIDFANG DREADNOUGHT", family: "DARK GALACTIC", skin: "ctf-blue-tank-dark-voidfang" },
+      { key: "dark-nightreaper", name: "NIGHT REAPER BULWARK", family: "DARK GALACTIC", skin: "ctf-blue-tank-dark-nightreaper" },
+      { key: "dark-kyberwraith", name: "KYBER WRAITH CARRIER", family: "DARK GALACTIC", skin: "ctf-blue-tank-dark-kyberwraith" },
+      { key: "dark-dreadwing", name: "DREADWING SIEGE", family: "DARK GALACTIC", skin: "ctf-blue-tank-dark-dreadwing" },
+      { key: "dark-blacksun", name: "BLACK SUN FORTRESS", family: "DARK GALACTIC", skin: "ctf-blue-tank-dark-blacksun" },
+    ],
+    defense: [
+      { key: "aegis", name: "AURORA AEGIS", family: "GALACTIC", skin: "ctf-blue-defense-aegis" },
+      { key: "sentinel", name: "SENTINEL ORBIT", family: "GALACTIC", skin: "ctf-blue-defense-sentinel" },
+      { key: "warden", name: "RUNE WARDEN", family: "MEDIEVAL", skin: "ctf-blue-defense-warden" },
+      { key: "oracle", name: "ORACLE BASTILLE", family: "MEDIEVAL", skin: "ctf-blue-defense-oracle" },
+      { key: "bulwark", name: "BULWARK GRID", family: "MILITARY", skin: "ctf-blue-defense-bulwark" },
+      { key: "dark-voidfang", name: "VOIDFANG AEGIS", family: "DARK GALACTIC", skin: "ctf-blue-defense-dark-voidfang" },
+      { key: "dark-nightreaper", name: "NIGHT REAPER WARD", family: "DARK GALACTIC", skin: "ctf-blue-defense-dark-nightreaper" },
+      { key: "dark-kyberwraith", name: "KYBER WRAITH SENTINEL", family: "DARK GALACTIC", skin: "ctf-blue-defense-dark-kyberwraith" },
+      { key: "dark-dreadwing", name: "DREADWING BASTILLE", family: "DARK GALACTIC", skin: "ctf-blue-defense-dark-dreadwing" },
+      { key: "dark-blacksun", name: "BLACK SUN GUARDIAN", family: "DARK GALACTIC", skin: "ctf-blue-defense-dark-blacksun" },
+    ],
+  },
+  orange: {
+    "attack-alpha": [
+      { key: "raptor", name: "NOVA SABRE", family: "GALACTIC", skin: "ctf-red-attack-alpha-raptor" },
+      { key: "comet", name: "ION FALCON", family: "GALACTIC", skin: "ctf-red-attack-alpha-comet" },
+      { key: "viper", name: "DRAGON LANCE", family: "MEDIEVAL", skin: "ctf-red-attack-alpha-viper" },
+      { key: "valkyrie", name: "VALKYRIE CREST", family: "MEDIEVAL", skin: "ctf-red-attack-alpha-valkyrie" },
+      { key: "talon", name: "MARAUDER X-9", family: "MILITARY", skin: "ctf-red-attack-alpha-talon" },
+      { key: "dark-voidfang", name: "VOIDFANG INTERCEPTOR", family: "DARK GALACTIC", skin: "ctf-red-attack-alpha-dark-voidfang" },
+      { key: "dark-nightreaper", name: "NIGHT REAPER", family: "DARK GALACTIC", skin: "ctf-red-attack-alpha-dark-nightreaper" },
+      { key: "dark-kyberwraith", name: "KYBER WRAITH", family: "DARK GALACTIC", skin: "ctf-red-attack-alpha-dark-kyberwraith" },
+      { key: "dark-dreadwing", name: "DREADWING STRIKER", family: "DARK GALACTIC", skin: "ctf-red-attack-alpha-dark-dreadwing" },
+      { key: "dark-blacksun", name: "BLACK SUN LANCER", family: "DARK GALACTIC", skin: "ctf-red-attack-alpha-dark-blacksun" },
+    ],
+    "attack-bravo": [
+      { key: "phantom", name: "VOID WRAITH", family: "GALACTIC", skin: "ctf-red-attack-bravo-phantom" },
+      { key: "specter", name: "STARFALL GHOST", family: "GALACTIC", skin: "ctf-red-attack-bravo-specter" },
+      { key: "scythe", name: "RUNEBLADE ARC", family: "MEDIEVAL", skin: "ctf-red-attack-bravo-scythe" },
+      { key: "helix", name: "TEMPLAR HELIX", family: "MEDIEVAL", skin: "ctf-red-attack-bravo-helix" },
+      { key: "eclipse", name: "BLACKSITE ECLIPSE", family: "MILITARY", skin: "ctf-red-attack-bravo-eclipse" },
+      { key: "dark-voidfang", name: "VOIDFANG HUNTER", family: "DARK GALACTIC", skin: "ctf-red-attack-bravo-dark-voidfang" },
+      { key: "dark-nightreaper", name: "NIGHT REAPER SHADE", family: "DARK GALACTIC", skin: "ctf-red-attack-bravo-dark-nightreaper" },
+      { key: "dark-kyberwraith", name: "KYBER WRAITH", family: "DARK GALACTIC", skin: "ctf-red-attack-bravo-dark-kyberwraith" },
+      { key: "dark-dreadwing", name: "DREADWING PHANTOM", family: "DARK GALACTIC", skin: "ctf-red-attack-bravo-dark-dreadwing" },
+      { key: "dark-blacksun", name: "BLACK SUN RAZOR", family: "DARK GALACTIC", skin: "ctf-red-attack-bravo-dark-blacksun" },
+    ],
+    tank: [
+      { key: "bastion", name: "ORBITAL DREADNOUGHT", family: "GALACTIC", skin: "ctf-red-tank-bastion" },
+      { key: "titan", name: "SOLAR TITAN", family: "GALACTIC", skin: "ctf-red-tank-titan" },
+      { key: "juggernaut", name: "IRON JUGGERNAUT", family: "MEDIEVAL", skin: "ctf-red-tank-juggernaut" },
+      { key: "citadel", name: "CITADEL CROWN", family: "MEDIEVAL", skin: "ctf-red-tank-citadel" },
+      { key: "atlas", name: "ATLAS SIEGE-RIG", family: "MILITARY", skin: "ctf-red-tank-atlas" },
+      { key: "dark-voidfang", name: "VOIDFANG DREADNOUGHT", family: "DARK GALACTIC", skin: "ctf-red-tank-dark-voidfang" },
+      { key: "dark-nightreaper", name: "NIGHT REAPER BULWARK", family: "DARK GALACTIC", skin: "ctf-red-tank-dark-nightreaper" },
+      { key: "dark-kyberwraith", name: "KYBER WRAITH CARRIER", family: "DARK GALACTIC", skin: "ctf-red-tank-dark-kyberwraith" },
+      { key: "dark-dreadwing", name: "DREADWING SIEGE", family: "DARK GALACTIC", skin: "ctf-red-tank-dark-dreadwing" },
+      { key: "dark-blacksun", name: "BLACK SUN FORTRESS", family: "DARK GALACTIC", skin: "ctf-red-tank-dark-blacksun" },
+    ],
+    defense: [
+      { key: "aegis", name: "AURORA AEGIS", family: "GALACTIC", skin: "ctf-red-defense-aegis" },
+      { key: "sentinel", name: "SENTINEL ORBIT", family: "GALACTIC", skin: "ctf-red-defense-sentinel" },
+      { key: "warden", name: "RUNE WARDEN", family: "MEDIEVAL", skin: "ctf-red-defense-warden" },
+      { key: "oracle", name: "ORACLE BASTILLE", family: "MEDIEVAL", skin: "ctf-red-defense-oracle" },
+      { key: "bulwark", name: "BULWARK GRID", family: "MILITARY", skin: "ctf-red-defense-bulwark" },
+      { key: "dark-voidfang", name: "VOIDFANG AEGIS", family: "DARK GALACTIC", skin: "ctf-red-defense-dark-voidfang" },
+      { key: "dark-nightreaper", name: "NIGHT REAPER WARD", family: "DARK GALACTIC", skin: "ctf-red-defense-dark-nightreaper" },
+      { key: "dark-kyberwraith", name: "KYBER WRAITH SENTINEL", family: "DARK GALACTIC", skin: "ctf-red-defense-dark-kyberwraith" },
+      { key: "dark-dreadwing", name: "DREADWING BASTILLE", family: "DARK GALACTIC", skin: "ctf-red-defense-dark-dreadwing" },
+      { key: "dark-blacksun", name: "BLACK SUN GUARDIAN", family: "DARK GALACTIC", skin: "ctf-red-defense-dark-blacksun" },
+    ],
+  },
+};
 
 // AI plans are staggered but intentionally responsive. The held vector is
 // applied every simulation tick; only target selection/replanning is sampled.
@@ -265,7 +340,7 @@ const ZONE_TRANSFORM_PLAYER_LIMIT = 60;
 const ZONE_TRANSFORM_PROJECTILE_LIMIT = 36;
 const ZONE_TRANSFORM_RANGE_PADDING = 820;
 const ZONE_WORLD_DELTA_INTERVAL_MS = 250;
-const ZONE_LOOT_TICK_INTERVAL_MS = 34;
+const ZONE_LOOT_TICK_INTERVAL_MS = 50;
 const ZONE_COLLISION_TICK_INTERVAL_MS = 34;
 const ZONE_ITEM_MAINTENANCE_INTERVAL_MS = 260;
 // Kept only for backwards-compatible type references. Zone no longer depends on
@@ -274,7 +349,7 @@ const ZONE_TRANSFORM_PROTOCOL_VERSION = 1;
 const ZONE_TRANSFORM_PLAYER_BYTES = 32;
 const ZONE_TRANSFORM_PROJECTILE_BYTES = 28;
 const STATIC_STATE_INTERVAL_MS = 1400; // minimap + leaderboard
-const VIEWPORT_ITEM_STATE_INTERVAL_MS = 320; // nearby loot refreshes quickly; transforms remain on a separate hot lane
+const VIEWPORT_ITEM_STATE_INTERVAL_MS = 550; // static nearby loot, per player
 const PVP_CROWDED_STATE_THRESHOLD = 12;
 const PVP_HEAVY_STATE_THRESHOLD = 28;
 const ITEM_SPATIAL_CELL_SIZE = 1000;
@@ -378,11 +453,6 @@ const BODY_COLLISION_PUSH_MIN = 0.04;
 // Small authoritative separation prevents two networked drones from staying overlapped
 // until the next tick. The decaying impulse then creates the Battle Royale-style bounce.
 const BODY_COLLISION_SEPARATION = 18;
-// These depend on the shared movement/body constants declared directly above.
-const CORE_HEIST_ATTACKER_MOVE_SPEED_MULTIPLIER =
-  (PLAYER_SPEED * NORMAL_BASE_MOVE_SPEED_MULTIPLIER + CORE_HEIST_ATTACKER_MOVE_SPEED_BONUS) /
-  (PLAYER_SPEED * NORMAL_BASE_MOVE_SPEED_MULTIPLIER);
-const CORE_HEIST_TEAMMATE_SOLID_DISTANCE = PLAYER_RADIUS * 1.88;
 const CORE_TYPES = [
   "nano",
   "rotor",
@@ -453,12 +523,13 @@ export class GameGateway {
   private zonePvpSocketRoom = new Map<string, string>();
   private zonePvpResumeSeats = new Map<string, { roomId: string; playerId: string }>();
   private zonePvpSocketResumeToken = new Map<string, string>();
+  private captureTheFlagRooms = new Map<string, any>();
+  private captureTheFlagSocketRoom = new Map<string, string>();
   // Stats are independent from the simulation loop. Prisma opens a connection
   // only when a record/leaderboard operation is requested.
   private readonly prisma = new PrismaClient();
   private loop: NodeJS.Timeout | null = null;
   private lastLoopAt = Date.now();
-  private lastLoopErrorLogAt = 0;
 
   constructor() {}
 
@@ -940,7 +1011,7 @@ export class GameGateway {
   // Normal PvP and Zone PvP share the same combat progression rules:
   // shield-break, escort-drone loss, kill speed rewards and Pixi combat text.
   private usesProgressionPvpCombat(room: any) {
-    return Boolean(room?.normalMode || room?.zonePvpMode);
+    return Boolean(room?.normalMode || room?.zonePvpMode || room?.captureTheFlagMode);
   }
 
 
@@ -1001,13 +1072,6 @@ export class GameGateway {
       ...this.serializePlayer(player),
       netId: this.ensureZonePvpNetId(room, player?.id),
       isBot: Boolean(player?.isBot),
-      team: room?.coreHeistMode ? String(player?.team || "cyan") : null,
-      carryingHeistFlag: Boolean(room?.coreHeistMode && player?.heistFlagId),
-      heistFlagId: room?.coreHeistMode ? String(player?.heistFlagId || "") || null : null,
-      heistDeaths: room?.coreHeistMode ? Number(player?.heistDeaths || 0) : 0,
-      heistPermanentElimination: Boolean(room?.coreHeistMode && player?.heistPermanentElimination),
-      heistRole: room?.coreHeistMode ? String(player?.heistRole || "attacker") : null,
-      respawnAt: room?.coreHeistMode ? Number(player?.respawnAt || 0) : 0,
     };
   }
 
@@ -1263,8 +1327,6 @@ export class GameGateway {
   private getZoneBotIncomingProjectileThreat(room: any, bot: any) {
     let nearestDistance = Infinity;
     let severity = 0;
-    let nearestVx = 0;
-    let nearestVy = 0;
 
     for (const projectile of room?.projectiles || []) {
       if (!projectile || String(projectile.ownerId || "") === String(bot.id)) continue;
@@ -1279,11 +1341,7 @@ export class GameGateway {
         (velocityLength * distance);
 
       if (approaching <= 0.22) continue;
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearestVx = Number(projectile.vx || 0);
-        nearestVy = Number(projectile.vy || 0);
-      }
+      nearestDistance = Math.min(nearestDistance, distance);
       severity = Math.max(
         severity,
         (1 - distance / ZONE_PVP_BOT_PROJECTILE_WARNING_RANGE) * approaching,
@@ -1294,8 +1352,6 @@ export class GameGateway {
       incoming: Number.isFinite(nearestDistance),
       distance: nearestDistance,
       severity,
-      vx: nearestVx,
-      vy: nearestVy,
     };
   }
 
@@ -1311,6 +1367,9 @@ export class GameGateway {
       (this.usesProgressionPvpCombat(room)
         ? NORMAL_BASE_ATTACK_DRONE_SPEED_MULTIPLIER *
           Math.max(1, Number(bot?.attackDroneSpeedMultiplier || 1))
+        : 1) *
+      (room?.captureTheFlagMode
+        ? Math.max(0.75, Number(bot?.ctfRoleAttackDroneSpeedMultiplier || 1))
         : 1) *
       60;
 
@@ -1509,34 +1568,13 @@ export class GameGateway {
   }
 
   private fillZonePvpBots(room: any, zoneRadius: number) {
-    const target = room?.coreHeistMode
-      ? CORE_HEIST_ROOM_MAX_PLAYERS
-      : Math.max(0, Math.min(ZONE_PVP_BOT_TARGET_TOTAL, ZONE_PVP_ROOM_MAX_PLAYERS));
+    const target = Math.max(0, Math.min(ZONE_PVP_BOT_TARGET_TOTAL, ZONE_PVP_ROOM_MAX_PLAYERS));
     let nextIndex = this.getZoneBotCount(room);
 
     while (room.players.size < target) {
-      const bot: any = this.createZonePvpBot(room, nextIndex, zoneRadius);
-
-      if (room?.coreHeistMode) {
-        bot.team = this.assignCoreHeistTeam(room);
-        bot.heistFlagId = null;
-        bot.heistDeaths = 0;
-        bot.heistPermanentElimination = false;
-        bot.heistSpawnIndex = this.getCoreHeistTeamPlayers(room, bot.team).length;
-        const spawn = this.getCoreHeistSpawn(room, bot.team, bot.heistSpawnIndex);
-        bot.x = spawn.x;
-        bot.y = spawn.y;
-        bot.prevX = spawn.x;
-        bot.prevY = spawn.y;
-        bot.heistPlanUntil = 0;
-      }
-
+      const bot = this.createZonePvpBot(room, nextIndex, zoneRadius);
       room.players.set(bot.id, bot);
       nextIndex += 1;
-    }
-
-    if (room?.coreHeistMode) {
-      this.assignCoreHeistTeamRoles(room);
     }
   }
 
@@ -2019,12 +2057,9 @@ export class GameGateway {
   private emitZonePvpJoined(client: Socket, room: any, player: any, reusedRoom = false) {
     const now = Date.now();
     const zoneRadius = this.getZonePvpZoneRadius(room);
-    const countdownDuration = room?.coreHeistMode
-      ? CORE_HEIST_START_COUNTDOWN_MS
-      : ZONE_PVP_START_COUNTDOWN_MS;
     const countdown =
       room.status === "countdown" && room.countdownStartedAt
-        ? Math.max(1, Math.ceil((countdownDuration - (now - room.countdownStartedAt)) / 1000))
+        ? Math.max(1, Math.ceil((ZONE_PVP_START_COUNTDOWN_MS - (now - room.countdownStartedAt)) / 1000))
         : null;
 
     client.emit("zone-pvp:joined", {
@@ -2034,19 +2069,14 @@ export class GameGateway {
       phaseVersion: Number(room.phaseVersion || 0),
       status: room.status,
       countdown,
-      countdownEndsAt: room.status === "countdown" && room.countdownStartedAt
-        ? Number(room.countdownStartedAt) + countdownDuration
-        : null,
       playerId: client.id,
       worldWidth: WORLD_WIDTH,
       worldHeight: WORLD_HEIGHT,
       safeZoneRadius: zoneRadius,
-      zoneShrinkDuration: room?.coreHeistMode ? 0 : ZONE_PVP_ZONE_SHRINK_DURATION,
+      zoneShrinkDuration: ZONE_PVP_ZONE_SHRINK_DURATION,
       matchStartedAt: room.matchStartedAt,
       battlePrepareUntil: room.battlePrepareUntil || null,
       battlePrepareRemainingMs: room.battlePrepareUntil ? Math.max(0, room.battlePrepareUntil - now) : 0,
-      heistRoleRevealUntil: room?.coreHeistMode ? (room.heistRoleRevealUntil || null) : null,
-      heistRoleRevealRemainingMs: room?.coreHeistMode && room.heistRoleRevealUntil ? Math.max(0, room.heistRoleRevealUntil - now) : 0,
       battleBeginFlashUntil: room.battleBeginFlashUntil || null,
       playerCount: this.getAlivePlayers(room).length,
       realPlayerCount: this.getZoneHumanPlayerCount(room),
@@ -2055,10 +2085,8 @@ export class GameGateway {
           ? this.getZoneConnectedHumanPlayerCount(room)
           : this.getZoneHumanPlayerCount(room),
       botCount: this.getZoneBotCount(room),
-      minPlayers: room?.coreHeistMode ? CORE_HEIST_ROOM_MIN_PLAYERS : ZONE_PVP_ROOM_MIN_PLAYERS,
-      maxPlayers: room?.coreHeistMode ? CORE_HEIST_ROOM_MAX_PLAYERS : ZONE_PVP_ROOM_MAX_PLAYERS,
-      mode: room?.coreHeistMode ? CORE_HEIST_MODE : "zone-pvp",
-      heist: this.serializeCoreHeist(room, player, now),
+      minPlayers: ZONE_PVP_ROOM_MIN_PLAYERS,
+      maxPlayers: ZONE_PVP_ROOM_MAX_PLAYERS,
       you: this.serializeZonePvpStatePlayer(room, player),
       // A reliable join always includes nearby metadata once. Subsequent motion
       // comes from the compact binary lane, not from this JSON payload.
@@ -2383,9 +2411,11 @@ export class GameGateway {
     // one-socket event as the multiplayer equivalent.
     const privateEventName = room?.normalMode
       ? "normal-pvp:combat"
-      : room?.zonePvpMode
-        ? "zone-pvp:combat"
-        : null;
+      : room?.captureTheFlagMode
+        ? "capture-the-flag:combat"
+        : room?.zonePvpMode
+          ? "zone-pvp:combat"
+          : null;
     if (privateEventName) {
       // Every Socket.IO socket automatically owns a room with its own socket id.
       // Using server.to(socketId) is more robust than looking into the adapter's
@@ -2429,6 +2459,10 @@ export class GameGateway {
       this.removeZonePvpPlayer(client.id, { explicit: true });
     } else {
       this.zonePvpSocketResumeToken.delete(client.id);
+    }
+
+    if (this.captureTheFlagSocketRoom.has(client.id)) {
+      this.removeCaptureTheFlagPlayer(client.id, "disconnect");
     }
   }
   @SubscribeMessage("pvp:join")
@@ -2474,9 +2508,6 @@ export class GameGateway {
       knockbackY: 0,
     };
     room.players.set(client.id, player);
-    // Core Heist uses the dedicated zone-pvp:join session path below, where
-    // team and role are assigned before the player is inserted. The generic
-    // pvp:join path intentionally remains role-agnostic.
     this.markRoomOccupied(room);
     this.socketRoom.set(client.id, room.id);
     client.join(room.id);
@@ -2910,7 +2941,6 @@ export class GameGateway {
     const applicantUserId = data?.isGuest ? null : String(data?.userId || "").trim() || null;
     const departedRoomId = String(data?.departedRoomId || "").trim();
     const departedResumeToken = this.normalizeZonePvpResumeToken(data?.departedResumeToken);
-    const requestedCoreHeist = String(data?.mode || "").trim().toLowerCase() === CORE_HEIST_MODE;
 
     // The browser persists this marker before EXIT TO MENU. Apply it before any
     // matchmaking selection, so a leave packet lost during a network drop can
@@ -3004,20 +3034,9 @@ export class GameGateway {
     this.removeBattleRoyaleOnlinePlayer(client.id);
     this.removeZonePvpPlayer(client.id);
 
-    const room = this.findOrCreateZonePvpRoom(participantId, applicantUserId, requestedCoreHeist);
+    const room = this.findOrCreateZonePvpRoom(participantId, applicantUserId);
     const zoneRadius = this.getZonePvpZoneRadius(room);
-    const replacedCoreBot = requestedCoreHeist && room?.coreHeistMode && room?.status === "playing"
-      ? this.releaseCoreHeistBotSeat(room, now)
-      : null;
-    const assignedTeam = room?.coreHeistMode
-      ? (replacedCoreBot?.team || this.assignCoreHeistTeam(room))
-      : null;
-    const assignedHeistRole = room?.coreHeistMode
-      ? (replacedCoreBot?.role || "attacker")
-      : null;
-    const spawn = room?.coreHeistMode
-      ? this.getCoreHeistSpawn(room, assignedTeam || "cyan", room.players.size)
-      : this.getSafeSpawn(room, zoneRadius);
+    const spawn = this.getSafeSpawn(room, zoneRadius);
 
     const player = {
       id: client.id,
@@ -3092,14 +3111,6 @@ export class GameGateway {
       eliminationReason: null,
       collectionSeq: 0,
       disconnectedAt: 0,
-      team: assignedTeam,
-      heistFlagId: null,
-      heistDeaths: 0,
-      heistPermanentElimination: false,
-      respawnAt: 0,
-      heistRespawnCount: 0,
-      heistRole: room?.coreHeistMode ? (assignedHeistRole || "attacker") : null,
-      heistPlanUntil: 0,
     };
 
     room.players.set(client.id, player);
@@ -3111,15 +3122,13 @@ export class GameGateway {
     // Only real people decide admission. Once the fifth-second window opens it
     // remains open for additional humans; bots are added strictly at start.
     if (
-      this.getZoneConnectedHumanPlayerCount(room) >= (
-        room?.coreHeistMode ? CORE_HEIST_ROOM_MIN_PLAYERS : ZONE_PVP_ROOM_MIN_PLAYERS
-      ) &&
+      this.getZoneConnectedHumanPlayerCount(room) >= ZONE_PVP_ROOM_MIN_PLAYERS &&
       room.status === "waiting"
     ) {
       room.status = "countdown";
       room.countdownStartedAt = now;
       room.locked = false;
-      room.roundId = `${room?.coreHeistMode ? "heist-round" : "zone-round"}-${crypto.randomUUID()}`;
+      room.roundId = `zone-round-${crypto.randomUUID()}`;
       room.phaseVersion = Number(room.phaseVersion || 0) + 1;
     }
 
@@ -3240,19 +3249,18 @@ export class GameGateway {
     if (safeSeq > 0 && safeSeq <= (player.lastReceivedInputSeq || 0)) return;
 
     const now = Date.now();
-    const roleRevealLocked = this.isCoreHeistRoleRevealLocked(room, now);
     player.input = {
       seq: safeSeq,
       dt: Math.max(1, Math.min(50, Number(input?.dt || 16))),
       clientSentAt: Number(input?.clientSentAt || 0),
       serverReceivedAt: now,
-      w: !roleRevealLocked && Boolean(input?.w),
-      a: !roleRevealLocked && Boolean(input?.a),
-      s: !roleRevealLocked && Boolean(input?.s),
-      d: !roleRevealLocked && Boolean(input?.d),
-      moveX: roleRevealLocked ? 0 : this.clamp(Number(input?.moveX || 0), -1, 1),
-      moveY: roleRevealLocked ? 0 : this.clamp(Number(input?.moveY || 0), -1, 1),
-      mobileMove: !roleRevealLocked && Boolean(input?.mobileMove),
+      w: Boolean(input?.w),
+      a: Boolean(input?.a),
+      s: Boolean(input?.s),
+      d: Boolean(input?.d),
+      moveX: this.clamp(Number(input?.moveX || 0), -1, 1),
+      moveY: this.clamp(Number(input?.moveY || 0), -1, 1),
+      mobileMove: Boolean(input?.mobileMove),
       attacking: Boolean(input?.attacking),
       shield: Boolean(input?.shield),
       mouseX: this.sanitizeCoordinate(
@@ -3304,10 +3312,6 @@ export class GameGateway {
       );
       this.lastLoopAt = now;
 
-      // The server has one authoritative tick for every arena mode. Never let
-      // a malformed room from Normal/BR/Zone escape this callback and stop the
-      // timer, transforms and bot simulation for every other active session.
-      try {
       for (const room of this.rooms.values()) {
         this.updateRoomStatus(room, now);
         if (room.status === "playing") {
@@ -3402,98 +3406,64 @@ export class GameGateway {
 
           if (room.status === "playing") {
             const zoneRadius = this.getZonePvpZoneRadius(room);
+            // Core movement/projectiles remain 60 Hz.  Expensive collision, loot
+            // and respawn work is sampled at a lower fixed cadence; this removes
+            // Node event-loop spikes without changing how a drone visually moves.
+            this.updateZonePvpBots(room, now, zoneRadius);
+            this.updatePlayers(room, now, zoneRadius, deltaFrames);
+            this.applyZonePvpZoneDamage(room, now, zoneRadius);
+            this.updateProjectiles(room, deltaFrames, now);
 
-            if (room?.coreHeistMode) {
-              // Same room/session heartbeat as Zone PvP. Core Heist owns only
-              // its rules; transform and state replication remain shared.
-              this.tickCoreHeistRoom(room, now, deltaFrames, zoneRadius);
-            } else {
-              // Core movement/projectiles remain 60 Hz.  Expensive collision, loot
-              // and respawn work is sampled at a lower fixed cadence; this removes
-              // Node event-loop spikes without changing how a drone visually moves.
-              this.updateZonePvpBots(room, now, zoneRadius);
-              this.updatePlayers(room, now, zoneRadius, deltaFrames);
-              this.applyZonePvpZoneDamage(room, now, zoneRadius);
-              this.updateProjectiles(room, deltaFrames, now);
-
-              if (!room.lastZoneCollisionAt || now - room.lastZoneCollisionAt >= ZONE_COLLISION_TICK_INTERVAL_MS) {
-                room.lastZoneCollisionAt = now;
-                this.handleBodyCollisions(room, now, zoneRadius);
-              }
-
-              if (!room.lastZoneLootAt || now - room.lastZoneLootAt >= ZONE_LOOT_TICK_INTERVAL_MS) {
-                room.lastZoneLootAt = now;
-                this.collectOrbs(room, zoneRadius);
-                this.collectEnergy(room, zoneRadius);
-                this.collectCores(room, zoneRadius);
-              }
-
-              if (!room.lastZoneItemMaintenanceAt || now - room.lastZoneItemMaintenanceAt >= ZONE_ITEM_MAINTENANCE_INTERVAL_MS) {
-                room.lastZoneItemMaintenanceAt = now;
-                this.maintainWorldItems(room, zoneRadius, now);
-                this.cleanupCombatEvents(room, now);
-              }
-
-              this.updateZonePvpWinCondition(room, now);
+            if (!room.lastZoneCollisionAt || now - room.lastZoneCollisionAt >= ZONE_COLLISION_TICK_INTERVAL_MS) {
+              room.lastZoneCollisionAt = now;
+              this.handleBodyCollisions(room, now, zoneRadius);
             }
-          }
 
-          if (room?.coreHeistMode && room.status === "playing" && (
-            !room.lastCoreHeistHeartbeatAt ||
-            now - room.lastCoreHeistHeartbeatAt >= CORE_HEIST_HEARTBEAT_INTERVAL_MS
-          )) {
-            room.lastCoreHeistHeartbeatAt = now;
-            try {
-              this.emitCoreHeistHeartbeat(room, now);
-            } catch (error) {
-              this.reportCoreHeistStepError(room, "heartbeat", error, now);
+            if (!room.lastZoneLootAt || now - room.lastZoneLootAt >= ZONE_LOOT_TICK_INTERVAL_MS) {
+              room.lastZoneLootAt = now;
+              this.collectOrbs(room, zoneRadius);
+              this.collectEnergy(room, zoneRadius);
+              this.collectCores(room, zoneRadius);
             }
-          }
 
-          // Hot motion lane always goes first. It is the exact same latest-wins
-          // channel used by Zone PvP, so a state/HUD error cannot freeze drones.
-          if (room.status === "playing" && (
-            !room.lastTransformBroadcastAt ||
-            now - room.lastTransformBroadcastAt >= (room?.coreHeistMode
-              ? CORE_HEIST_TRANSFORM_INTERVAL_MS
-              : ZONE_TRANSFORM_INTERVAL_MS)
-          )) {
-            room.lastTransformBroadcastAt = now;
-            try {
-              this.broadcastZonePvpTransforms(room, now);
-            } catch (error) {
-              this.reportCoreHeistStepError(room, "transform-broadcast", error, now);
+            if (!room.lastZoneItemMaintenanceAt || now - room.lastZoneItemMaintenanceAt >= ZONE_ITEM_MAINTENANCE_INTERVAL_MS) {
+              room.lastZoneItemMaintenanceAt = now;
+              this.maintainWorldItems(room, zoneRadius, now);
+              this.cleanupCombatEvents(room, now);
             }
+
+            this.updateZonePvpWinCondition(room, now);
           }
 
           const broadcastInterval =
-            room?.coreHeistMode
-              ? CORE_HEIST_STATE_INTERVAL_MS
-              : room.players.size >= PVP_HEAVY_STATE_THRESHOLD
-                ? ZONE_STATE_INTERVAL_HEAVY_MS
-                : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
-                  ? ZONE_STATE_INTERVAL_CROWDED_MS
-                  : ZONE_STATE_INTERVAL_MS;
+            room.players.size >= PVP_HEAVY_STATE_THRESHOLD
+              ? ZONE_STATE_INTERVAL_HEAVY_MS
+              : room.players.size >= PVP_CROWDED_STATE_THRESHOLD
+                ? ZONE_STATE_INTERVAL_CROWDED_MS
+                : ZONE_STATE_INTERVAL_MS;
 
-          if (!room.lastBroadcastAt || now - room.lastBroadcastAt >= broadcastInterval) {
+          if (
+            !room.lastBroadcastAt ||
+            now - room.lastBroadcastAt >= broadcastInterval
+          ) {
             room.lastBroadcastAt = now;
-            try {
-              this.broadcastZonePvpRoomState(room, now);
-            } catch (error) {
-              this.reportCoreHeistStepError(room, "state-broadcast", error, now);
+            this.broadcastZonePvpRoomState(room, now);
+          }
+
+          // Transforms have their own compact latest-wins tuple lane. Never let HUD/loot
+          // payloads queue in front of remote drone or attack-drone positions.
+          if (room.status === "playing") {
+            if (
+              !room.lastTransformBroadcastAt ||
+              now - room.lastTransformBroadcastAt >= ZONE_TRANSFORM_INTERVAL_MS
+            ) {
+              room.lastTransformBroadcastAt = now;
+              this.broadcastZonePvpTransforms(room, now);
             }
           }
 
-          try {
-            this.flushZonePvpWorldDelta(room, now);
-          } catch (error) {
-            this.reportCoreHeistStepError(room, "world-delta", error, now);
-          }
-          try {
-            this.cleanupZonePvpRoom(room, now);
-          } catch (error) {
-            this.reportCoreHeistStepError(room, "room-cleanup", error, now);
-          }
+          this.flushZonePvpWorldDelta(room, now);
+          this.cleanupZonePvpRoom(room, now);
         } catch (error) {
           room.zoneLoopErrorCount = Number(room.zoneLoopErrorCount || 0) + 1;
           room.lastZoneLoopErrorAt = now;
@@ -3507,11 +3477,55 @@ export class GameGateway {
           }
         }
       }
-      } catch (error) {
-        if (!this.lastLoopErrorLogAt || now - this.lastLoopErrorLogAt >= 5000) {
-          this.lastLoopErrorLogAt = now;
-          // eslint-disable-next-line no-console
-          console.error("[Arena] recovered outer simulation tick error", error);
+
+      for (const room of this.captureTheFlagRooms.values()) {
+        try {
+          this.updateCaptureTheFlagRoomStatus(room, now);
+
+          if (room.status === "playing") {
+            this.updateCaptureTheFlagMatchTimer(room, now);
+          }
+
+          if (room.status === "playing") {
+            const playRadius = Math.max(CAPTURE_THE_FLAG_WORLD_WIDTH, CAPTURE_THE_FLAG_WORLD_HEIGHT);
+            this.updateCaptureTheFlagBots(room, now);
+            this.updatePlayers(room, now, playRadius, deltaFrames);
+            this.updateCaptureTheFlagDefenderAegis(room, now);
+            this.updateProjectiles(room, deltaFrames, now);
+
+            if (!room.lastCtfCollisionAt || now - room.lastCtfCollisionAt >= ZONE_COLLISION_TICK_INTERVAL_MS) {
+              room.lastCtfCollisionAt = now;
+              this.handleBodyCollisions(room, now, playRadius);
+            }
+
+            if (!room.lastCtfLootAt || now - room.lastCtfLootAt >= ZONE_LOOT_TICK_INTERVAL_MS) {
+              room.lastCtfLootAt = now;
+              this.collectOrbs(room, playRadius);
+              this.collectEnergy(room, playRadius);
+            }
+
+            this.updateCaptureTheFlagObjectives(room, now);
+            this.updateCaptureTheFlagRespawns(room, now);
+
+            if (!room.lastCtfItemMaintenanceAt || now - room.lastCtfItemMaintenanceAt >= CAPTURE_THE_FLAG_ITEM_MAINTENANCE_INTERVAL_MS) {
+              room.lastCtfItemMaintenanceAt = now;
+              this.maintainCaptureTheFlagItems(room, now);
+              this.cleanupCombatEvents(room, now);
+            }
+          }
+
+          if (!room.lastBroadcastAt || now - room.lastBroadcastAt >= CAPTURE_THE_FLAG_STATE_INTERVAL_MS) {
+            room.lastBroadcastAt = now;
+            this.broadcastCaptureTheFlagState(room, now);
+          }
+          if (room.status === "playing" && (!room.lastTransformBroadcastAt || now - room.lastTransformBroadcastAt >= CAPTURE_THE_FLAG_MOVEMENT_INTERVAL_MS)) {
+            room.lastTransformBroadcastAt = now;
+            this.broadcastCaptureTheFlagMovement(room, now);
+          }
+
+          this.cleanupCaptureTheFlagRoom(room, now);
+        } catch (error) {
+          console.error(`[Capture The Flag] recovered room tick error for ${room.id}`, error);
         }
       }
     }, 1000 / 60);
@@ -3547,1350 +3561,14 @@ export class GameGateway {
       }
     }
   }
-
-  private getCoreHeistTeamLabel(team: any) {
-    return String(team || "cyan") === "orange" ? "RED" : "BLUE";
-  }
-
-  private getCoreHeistTeamPlayers(room: any, team: string, aliveOnly = false) {
-    return [...(room?.players?.values?.() || [])].filter(
-      (player: any) =>
-        String(player?.team || "cyan") === team &&
-        (!aliveOnly || player?.alive !== false),
-    );
-  }
-
-  private assignCoreHeistTeam(room: any) {
-    const cyan = this.getCoreHeistTeamPlayers(room, "cyan").length;
-    const orange = this.getCoreHeistTeamPlayers(room, "orange").length;
-    return cyan <= orange ? "cyan" : "orange";
-  }
-
-  private getCoreHeistBase(room: any, team: string) {
-    return (room?.heist?.bases || []).find((base: any) => String(base?.team) === String(team)) || null;
-  }
-
-  private getCoreHeistFlag(room: any, teamOrId: string) {
-    const source = String(teamOrId || "");
-    return (room?.heist?.flags || []).find(
-      (flag: any) => String(flag?.team) === source || String(flag?.id) === source,
-    ) || null;
-  }
-
-  private getCoreHeistSpawn(room: any, team: string, salt = 0) {
-    const normalizedTeam = String(team || "cyan") === "orange" ? "orange" : "cyan";
-    const base = this.getCoreHeistBase(room, normalizedTeam);
-    const centerX = Number(base?.x || (normalizedTeam === "orange"
-      ? WORLD_WIDTH - CORE_HEIST_BASE_X_OFFSET
-      : CORE_HEIST_BASE_X_OFFSET));
-    const centerY = Number(base?.y || WORLD_HEIGHT * 0.5);
-
-    // Fixed, well-separated launch pads keep each 4-person squad inside its
-    // own perimeter. Older code used Math.random here, which could put every
-    // teammate in the same tiny area and made the opening look broken.
-    const pads = [
-      { x: -250, y: -245 },
-      { x: -85, y: 250 },
-      { x: 190, y: -145 },
-      { x: 300, y: 175 },
-      { x: -315, y: 70 },
-      { x: 80, y: -315 },
-    ];
-    const pad = pads[Math.abs(Math.floor(Number(salt || 0))) % pads.length];
-    // Mirror X on the red side so both squads face the map centre.
-    const side = normalizedTeam === "orange" ? -1 : 1;
-
-    return {
-      x: this.clamp(centerX + pad.x * side, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS),
-      y: this.clamp(centerY + pad.y, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS),
-    };
-  }
-
-  private normalizeCoreHeistRole(role: any) {
-    const value = String(role || "attacker").trim().toLowerCase();
-    return value === "defender" || value === "tank" ? value : "attacker";
-  }
-
-  private getCoreHeistRolePlan(count: number) {
-    if (count <= 0) return [];
-    const plan = ["attacker", "attacker"];
-    if (count >= 3) plan.push("defender");
-    if (count >= 4) plan.push("tank");
-    while (plan.length < count) plan.push("attacker");
-    return plan.slice(0, count);
-  }
-
-  private getCoreHeistRoleSkin(team: string, role: string) {
-    const normalizedTeam = String(team || "cyan") === "orange" ? "orange" : "cyan";
-    const normalizedRole = this.normalizeCoreHeistRole(role);
-    return `heist-${normalizedRole}-${normalizedTeam}`;
-  }
-
-  private applyCoreHeistRoleLoadout(player: any, room: any, role: string) {
-    if (!room?.coreHeistMode || !player) return;
-    const normalizedRole = this.normalizeCoreHeistRole(role);
-    player.heistRole = normalizedRole;
-    player.skin = this.getCoreHeistRoleSkin(String(player?.team || "cyan"), normalizedRole);
-    player.moveSpeedMultiplier = normalizedRole === "attacker"
-      ? CORE_HEIST_ATTACKER_MOVE_SPEED_MULTIPLIER
-      : 1;
-
-    const nextMaxHp = normalizedRole === "tank" ? CORE_HEIST_TANK_HP : START_HP;
-    player.maxHp = nextMaxHp;
-    player.hp = nextMaxHp;
-  }
-
-  private assignCoreHeistTeamRoles(room: any) {
-    if (!room?.coreHeistMode) return;
-
-    for (const team of ["cyan", "orange"]) {
-      const teamPlayers = this.getCoreHeistTeamPlayers(room, team)
-        .sort((a: any, b: any) => String(a?.id || "").localeCompare(String(b?.id || "")));
-      if (!teamPlayers.length) continue;
-
-      const shuffled = [...teamPlayers];
-      for (let index = shuffled.length - 1; index > 0; index -= 1) {
-        const swapIndex = Math.floor(Math.random() * (index + 1));
-        const temp = shuffled[index];
-        shuffled[index] = shuffled[swapIndex];
-        shuffled[swapIndex] = temp;
-      }
-
-      const rolePlan = this.getCoreHeistRolePlan(shuffled.length);
-      shuffled.forEach((player: any, index: number) => {
-        this.applyCoreHeistRoleLoadout(player, room, rolePlan[index] || "attacker");
-      });
-    }
-  }
-
-  private createCoreHeistState(now = Date.now()) {
-    const bases = [
-      {
-        id: "cyan-base",
-        team: "cyan",
-        label: "BLUE BASE",
-        x: CORE_HEIST_BASE_X_OFFSET,
-        y: WORLD_HEIGHT * 0.5 + CORE_HEIST_BASE_Y_OFFSET,
-        radius: CORE_HEIST_BASE_RADIUS,
-        perimeterRadius: CORE_HEIST_BASE_PERIMETER_RADIUS,
-      },
-      {
-        id: "orange-base",
-        team: "orange",
-        label: "RED BASE",
-        x: WORLD_WIDTH - CORE_HEIST_BASE_X_OFFSET,
-        y: WORLD_HEIGHT * 0.5 + CORE_HEIST_BASE_Y_OFFSET,
-        radius: CORE_HEIST_BASE_RADIUS,
-        perimeterRadius: CORE_HEIST_BASE_PERIMETER_RADIUS,
-      },
-    ];
-
-    const flags = bases.map((base: any) => ({
-      id: `${base.team}-flag`,
-      team: base.team,
-      homeX: base.x,
-      homeY: base.y,
-      x: base.x,
-      y: base.y,
-      status: "home",
-      carrierId: null,
-      // Kept after a pickup/drop/capture so every client can show the actual
-      // player's name even after the flag has been reset to its home base.
-      lastCarrierId: null,
-      lastCarrierName: null,
-      lastCarrierTeam: null,
-      droppedAt: 0,
-      returnAt: 0,
-    }));
-
-    return {
-      mode: "capture-the-flag",
-      targetScore: CORE_HEIST_TARGET_SCORE,
-      score: { cyan: 0, orange: 0 },
-      matchEndsAt: 0,
-      bases,
-      flags,
-      lastScoreAt: now,
-      eventSequence: 0,
-      latestEvent: null,
-      events: [],
-    };
-  }
-
-  private seedCoreHeistOpeningResources(room: any) {
-    const bases = room?.heist?.bases || [];
-    const seededOrbs: any[] = [];
-    const seededEnergy: any[] = [];
-
-    const randomBasePoint = (base: any, minRadius: number, maxRadius: number, margin: number) => {
-      const angle = Math.random() * Math.PI * 2;
-      const radius = minRadius + Math.sqrt(Math.random()) * Math.max(1, maxRadius - minRadius);
-      return {
-        x: this.clamp(Number(base?.x || WORLD_WIDTH * 0.5) + Math.cos(angle) * radius, margin, WORLD_WIDTH - margin),
-        y: this.clamp(Number(base?.y || WORLD_HEIGHT * 0.5) + Math.sin(angle) * radius, margin, WORLD_HEIGHT - margin),
-      };
-    };
-
-    // Stratified map-wide placement: one point per logical cell, jittered
-    // inside the cell. It looks random but prevents huge empty sectors.
-    const distributedWorldPoint = (index: number, total: number, margin: number) => {
-      const safeTotal = Math.max(1, Math.floor(total || 1));
-      const columns = Math.max(1, Math.ceil(Math.sqrt(safeTotal * (WORLD_WIDTH / WORLD_HEIGHT))));
-      const rows = Math.max(1, Math.ceil(safeTotal / columns));
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-      const cellWidth = Math.max(1, (WORLD_WIDTH - margin * 2) / columns);
-      const cellHeight = Math.max(1, (WORLD_HEIGHT - margin * 2) / rows);
-      return {
-        x: this.clamp(margin + (column + 0.16 + Math.random() * 0.68) * cellWidth, margin, WORLD_WIDTH - margin),
-        y: this.clamp(margin + (row + 0.16 + Math.random() * 0.68) * cellHeight, margin, WORLD_HEIGHT - margin),
-      };
-    };
-
-    // Each base has a generous, randomized local economy. It is deliberately
-    // scattered instead of ring-shaped so routes look natural and players can
-    // always replenish inside and just outside their own perimeter.
-    for (const base of bases) {
-      for (let index = 0; index < CORE_HEIST_OPENING_ORBS_PER_BASE; index += 1) {
-        const point = randomBasePoint(base, 240, 2100, 220);
-        seededOrbs.push({
-          id: crypto.randomUUID(),
-          x: point.x,
-          y: point.y,
-          color: COLORS[Math.floor(Math.random() * COLORS.length)],
-        });
-      }
-
-      for (let index = 0; index < CORE_HEIST_OPENING_ENERGY_PER_BASE; index += 1) {
-        const point = randomBasePoint(base, 360, 2350, 240);
-        seededEnergy.push({
-          id: crypto.randomUUID(),
-          x: point.x,
-          y: point.y,
-        });
-      }
-    }
-
-    // A close, randomized pocket is always visible at each base. It prevents
-    // the opening area from looking empty while still avoiding a rigid ring.
-    for (const base of bases) {
-      for (let index = 0; index < CORE_HEIST_BASE_CLOSE_ORBS_PER_BASE; index += 1) {
-        const point = randomBasePoint(base, 105, 820, 180);
-        seededOrbs.push({
-          id: crypto.randomUUID(),
-          x: point.x,
-          y: point.y,
-          color: COLORS[Math.floor(Math.random() * COLORS.length)],
-        });
-      }
-
-      for (let index = 0; index < CORE_HEIST_BASE_CLOSE_ENERGY_PER_BASE; index += 1) {
-        const point = randomBasePoint(base, 130, 920, 190);
-        seededEnergy.push({
-          id: crypto.randomUUID(),
-          x: point.x,
-          y: point.y,
-        });
-      }
-    }
-
-    // Most loot is spread evenly over the entire map. Jitter keeps routes
-    // organic; stratification makes all sectors consistently playable.
-    for (let index = 0; index < CORE_HEIST_MIDFIELD_ORB_COUNT; index += 1) {
-      const point = distributedWorldPoint(index, CORE_HEIST_MIDFIELD_ORB_COUNT, 260);
-      seededOrbs.push({
-        id: crypto.randomUUID(),
-        x: point.x,
-        y: point.y,
-        color: COLORS[Math.floor(Math.random() * COLORS.length)],
-      });
-    }
-
-    for (let index = 0; index < CORE_HEIST_MIDFIELD_ENERGY_COUNT; index += 1) {
-      const point = distributedWorldPoint(index, CORE_HEIST_MIDFIELD_ENERGY_COUNT, 310);
-      seededEnergy.push({
-        id: crypto.randomUUID(),
-        x: point.x,
-        y: point.y,
-      });
-    }
-
-    // CORRIDOR: banda densa de orb-uri pe culoarul central intre cele doua baze.
-    // Forteaza toate dronele (umane si AI) sa treaca prin zona de mijloc,
-    // creand conflicte naturale si prevenind strategia de stat in baza.
-    const cyanBase  = bases.find((b: any) => String(b?.team || "") === "cyan")  || { x: CORE_HEIST_BASE_X_OFFSET, y: WORLD_HEIGHT * 0.5 };
-    const orangeBase = bases.find((b: any) => String(b?.team || "") === "orange") || { x: WORLD_WIDTH - CORE_HEIST_BASE_X_OFFSET, y: WORLD_HEIGHT * 0.5 };
-    const midX  = (Number(cyanBase.x || 0) + Number(orangeBase.x || 0)) / 2;
-    const midY  = (Number(cyanBase.y || 0) + Number(orangeBase.y || 0)) / 2;
-    const corridorHalfW = Math.abs(Number(orangeBase.x || 0) - Number(cyanBase.x || 0)) * 0.42;
-    const corridorHalfH = 2800;
-    for (let ci = 0; ci < CORE_HEIST_CORRIDOR_ORB_COUNT; ci++) {
-      const t   = (ci + 0.5) / CORE_HEIST_CORRIDOR_ORB_COUNT;
-      const rx  = (Math.random() - 0.5) * 2 * corridorHalfW;
-      const ry  = (Math.random() - 0.5) * 2 * corridorHalfH;
-      seededOrbs.push({
-        id: crypto.randomUUID(),
-        x: this.clamp(midX + rx, 200, WORLD_WIDTH - 200),
-        y: this.clamp(midY + ry, 200, WORLD_HEIGHT - 200),
-        color: COLORS[Math.floor(Math.random() * COLORS.length)],
-      });
-    }
-    for (let ci = 0; ci < CORE_HEIST_CORRIDOR_ENERGY_COUNT; ci++) {
-      const rx = (Math.random() - 0.5) * 2 * corridorHalfW;
-      const ry = (Math.random() - 0.5) * 2 * corridorHalfH * 0.7;
-      seededEnergy.push({
-        id: crypto.randomUUID(),
-        x: this.clamp(midX + rx, 200, WORLD_WIDTH - 200),
-        y: this.clamp(midY + ry, 200, WORLD_HEIGHT - 200),
-      });
-    }
-
-    room.orbs = seededOrbs;
-    room.energyCells = seededEnergy;
-    room.itemSpatialDirty = true;
-  }
-
-  private createCoreHeistDistributedItem(room: any, kind: "orb" | "energy") {
-    const target = kind === "orb" ? CORE_HEIST_ORB_TARGET : CORE_HEIST_ENERGY_TARGET;
-    const cursorKey = kind === "orb" ? "coreHeistOrbSpawnCursor" : "coreHeistEnergySpawnCursor";
-    const cursor = Math.max(0, Number(room?.[cursorKey] || 0));
-    const aspect = WORLD_WIDTH / Math.max(1, WORLD_HEIGHT);
-    const columns = Math.max(4, Math.ceil(Math.sqrt(target * aspect)));
-    const rows = Math.max(4, Math.ceil(target / columns));
-    const cell = cursor % (columns * rows);
-    const col = cell % columns;
-    const row = Math.floor(cell / columns);
-    room[cursorKey] = cursor + 1;
-
-    const margin = kind === "orb" ? 260 : 320;
-    const cellWidth = (WORLD_WIDTH - margin * 2) / columns;
-    const cellHeight = (WORLD_HEIGHT - margin * 2) / rows;
-    const jitterX = 0.18 + Math.random() * 0.64;
-    const jitterY = 0.18 + Math.random() * 0.64;
-    const x = this.clamp(margin + (col + jitterX) * cellWidth, margin, WORLD_WIDTH - margin);
-    const y = this.clamp(margin + (row + jitterY) * cellHeight, margin, WORLD_HEIGHT - margin);
-
-    return kind === "orb"
-      ? {
-          id: crypto.randomUUID(),
-          x,
-          y,
-          color: COLORS[Math.floor(Math.random() * COLORS.length)],
-        }
-      : { id: crypto.randomUUID(), x, y };
-  }
-
-  private ensureCoreHeistResources(room: any, _zoneRadius: number) {
-    if (!room?.coreHeistMode) return;
-    room.orbs = Array.isArray(room.orbs) ? room.orbs : [];
-    room.energyCells = Array.isArray(room.energyCells) ? room.energyCells : [];
-
-    let changed = false;
-    // One bounded, world-distributed economy. Do not create player-centred
-    // emergency piles: those were the cause of both visual clutter and large
-    // Socket.IO payloads after a few minutes.
-    while (room.orbs.length < CORE_HEIST_ORB_TARGET) {
-      room.orbs.push(this.createCoreHeistDistributedItem(room, "orb"));
-      changed = true;
-    }
-    while (room.energyCells.length < CORE_HEIST_ENERGY_TARGET) {
-      room.energyCells.push(this.createCoreHeistDistributedItem(room, "energy"));
-      changed = true;
-    }
-
-    // Collected items are replenished one-for-one. There is intentionally no
-    // over-target burst, so the world cannot grow without bound in a long round.
-    if (room.orbs.length > CORE_HEIST_ORB_TARGET) {
-      room.orbs = room.orbs.slice(-CORE_HEIST_ORB_TARGET);
-      changed = true;
-    }
-    if (room.energyCells.length > CORE_HEIST_ENERGY_TARGET) {
-      room.energyCells = room.energyCells.slice(-CORE_HEIST_ENERGY_TARGET);
-      changed = true;
-    }
-
-    if (changed) room.itemSpatialDirty = true;
-  }
-
-  private initializeCoreHeistRoom(room: any, now = Date.now()) {
-    room.heist = this.createCoreHeistState(now);
-    room.heist.matchEndsAt = now + CORE_HEIST_MATCH_DURATION_MS;
-    this.seedCoreHeistOpeningResources(room);
-    this.ensureCoreHeistResources(room, this.getZonePvpZoneRadius(room));
-    room.cores = [];
-    room.pendingCores = [];
-    room.nextCoreWaveAt = null;
-    room.lastCoreWaveAt = now;
-    room.itemSpatialDirty = true;
-    // Base orbs must be queryable during the very first prepare tick.
-    // Rebuild once here instead of waiting for the periodic maintenance pass.
-    this.refreshRoomSpatialIndexes(room, now, true);
-    room.matchStartedAt = now;
-  }
-
-  private serializeCoreHeist(room: any, viewer: any = null, now = Date.now()) {
-    const heist = room?.heist;
-    if (!heist) return null;
-
-    const activeEvents = Array.isArray(heist.events)
-      ? heist.events
-          .filter((event: any) => now < Number(event?.expiresAt || 0))
-          .slice(-CORE_HEIST_EVENT_LOG_LIMIT)
-      : [];
-    const latestEvent = activeEvents.length
-      ? activeEvents[activeEvents.length - 1]
-      : null;
-
-    return {
-      mode: "capture-the-flag",
-      targetScore: Number(heist.targetScore || CORE_HEIST_TARGET_SCORE),
-      score: {
-        cyan: Number(heist.score?.cyan || 0),
-        orange: Number(heist.score?.orange || 0),
-      },
-      matchEndsAt: Number(heist.matchEndsAt || 0),
-      remainingMs: Math.max(0, Number(heist.matchEndsAt || 0) - now),
-      team: viewer?.team || null,
-      // The direct socket event is the fast path. These retained events make
-      // the HUD recover cleanly after packet loss or a short mobile reconnect.
-      latestEvent,
-      events: activeEvents,
-      bases: (heist.bases || []).map((base: any) => ({
-        id: base.id,
-        team: base.team,
-        label: base.label,
-        x: Number(base.x || 0),
-        y: Number(base.y || 0),
-        radius: Number(base.radius || CORE_HEIST_BASE_RADIUS),
-        perimeterRadius: Number(base.perimeterRadius || CORE_HEIST_BASE_PERIMETER_RADIUS),
-      })),
-      flags: (heist.flags || []).map((flag: any) => {
-        const carrier = flag.carrierId ? room?.players?.get(flag.carrierId) : null;
-        return {
-          id: flag.id,
-          team: flag.team,
-          homeX: Number(flag.homeX || 0),
-          homeY: Number(flag.homeY || 0),
-          x: Number(carrier?.x ?? flag.x ?? 0),
-          y: Number(carrier?.y ?? flag.y ?? 0),
-          status: flag.status,
-          carrierId: flag.carrierId || null,
-          carrierName: carrier
-            ? this.getCoreHeistPlayerName(carrier)
-            : flag.lastCarrierName || null,
-          carrierTeam: carrier?.team || flag.lastCarrierTeam || null,
-          lastCarrierId: flag.lastCarrierId || null,
-          lastCarrierName: flag.lastCarrierName || null,
-          lastCarrierTeam: flag.lastCarrierTeam || null,
-          returnAt: Number(flag.returnAt || 0),
-        };
-      }),
-    };
-  }
-
-  private getCoreHeistPlayerName(player: any, fallback = "A PLAYER") {
-    const username = String(
-      player?.username ||
-      player?.firstName ||
-      player?.email?.split?.("@")?.[0] ||
-      fallback,
-    ).trim();
-
-    return (username || fallback).slice(0, 22);
-  }
-
-  private pushCoreHeistEvent(room: any, input: any, now = Date.now()) {
-    const heist = room?.heist;
-    if (!room?.coreHeistMode || !heist) return null;
-
-    const actor = input?.actor || null;
-    const flag = input?.flag || null;
-    const type = ["taken", "dropped", "returned", "captured"].includes(String(input?.type || ""))
-      ? String(input.type)
-      : "returned";
-    const actorTeam = String(actor?.team || input?.actorTeam || "") === "orange" ? "orange" : "cyan";
-    const flagTeam = String(flag?.team || input?.flagTeam || "") === "orange" ? "orange" : "cyan";
-    const scoreTeam = String(input?.scoreTeam || actorTeam) === "orange" ? "orange" : "cyan";
-    const sequence = Number(heist.eventSequence || 0) + 1;
-    heist.eventSequence = sequence;
-
-    const event = {
-      id: `heist-${sequence}-${crypto.randomUUID()}`,
-      type,
-      team: type === "captured" ? scoreTeam : actor ? actorTeam : flagTeam,
-      actorId: actor?.id || null,
-      actorName: String(input?.actorName || this.getCoreHeistPlayerName(actor, "SYSTEM")),
-      actorTeam: actor ? actorTeam : null,
-      flagId: flag?.id || input?.flagId || null,
-      flagTeam,
-      scoreTeam: type === "captured" ? scoreTeam : null,
-      score: {
-        cyan: Number(heist.score?.cyan || 0),
-        orange: Number(heist.score?.orange || 0),
-      },
-      targetScore: Number(heist.targetScore || CORE_HEIST_TARGET_SCORE),
-      createdAt: now,
-      expiresAt: now + CORE_HEIST_EVENT_TTL_MS,
-    };
-
-    const previous = Array.isArray(heist.events) ? heist.events : [];
-    heist.events = [...previous, event]
-      .filter((item: any) => now < Number(item?.expiresAt || 0))
-      .slice(-CORE_HEIST_EVENT_LOG_LIMIT);
-    heist.latestEvent = event;
-
-    // Objective announcements are global, unlike combat text which is private
-    // to the involved player. This reaches every teammate, enemy and spectator
-    // immediately; serialization above is the reconnect fallback.
-    this.server?.to(String(room.id)).emit("zone-pvp:heist-event", event);
-    return event;
-  }
-
-  private resetCoreHeistFlag(flag: any) {
-    if (!flag) return;
-    flag.x = Number(flag.homeX || 0);
-    flag.y = Number(flag.homeY || 0);
-    flag.status = "home";
-    flag.carrierId = null;
-    flag.droppedAt = 0;
-    flag.returnAt = 0;
-  }
-
-  private dropCoreHeistFlag(room: any, player: any, now = Date.now()) {
-    const flag = this.getCoreHeistFlag(room, String(player?.heistFlagId || ""));
-    if (!flag || String(flag.carrierId || "") !== String(player?.id || "")) return;
-    flag.status = "dropped";
-    flag.carrierId = null;
-    flag.lastCarrierId = player?.id || null;
-    flag.lastCarrierName = this.getCoreHeistPlayerName(player);
-    flag.lastCarrierTeam = player?.team || null;
-    flag.x = Number(player?.x || flag.x || flag.homeX || 0);
-    flag.y = Number(player?.y || flag.y || flag.homeY || 0);
-    flag.droppedAt = now;
-    flag.returnAt = 0;
-    player.heistFlagId = null;
-    this.pushCombatEvent(room, player, "FLAG DROPPED", "damage", now);
-    this.pushCoreHeistEvent(room, {
-      type: "dropped",
-      actor: player,
-      flag,
-    }, now);
-  }
-
-  private respawnCoreHeistPlayer(room: any, player: any, now = Date.now()) {
-    const spawn = this.getCoreHeistSpawn(room, String(player?.team || "cyan"), Number(player?.heistRespawnCount || 0));
-    player.heistRespawnCount = Number(player?.heistRespawnCount || 0) + 1;
-    player.x = spawn.x;
-    player.y = spawn.y;
-    player.prevX = spawn.x;
-    player.prevY = spawn.y;
-    this.applyCoreHeistRoleLoadout(player, room, String(player?.heistRole || "attacker"));
-    player.hp = Number(player?.maxHp || START_HP);
-    player.energy = START_ENERGY;
-    player.drones = 0;
-    player.progress = 0;
-    player.nextDroneAt = this.getNextDroneAt(0);
-    player.alive = true;
-    player.respawnAt = 0;
-    player.heistFlagId = null;
-    player.input = {};
-    player.isMoving = false;
-    player.moveX = 0;
-    player.moveY = 0;
-    player.velocityX = 0;
-    player.velocityY = 0;
-    player.knockbackX = 0;
-    player.knockbackY = 0;
-    player.shieldActive = false;
-    player.shieldUntil = 0;
-    player.lastSeenAt = now;
-    player.lastInputReceivedAt = now;
-    this.pushCombatEvent(room, player, "REDEPLOYED", "heal", now);
-  }
-
-  private reviveCoreHeistPlayers(room: any, now = Date.now()) {
-    for (const player of room?.players?.values?.() || []) {
-      if (player?.alive !== false || player?.heistPermanentElimination) continue;
-      if (!player?.respawnAt || now < Number(player.respawnAt)) continue;
-      this.respawnCoreHeistPlayer(room, player, now);
-    }
-  }
-
-  private getCoreHeistEnemyTeam(team: string) {
-    return String(team || "cyan") === "orange" ? "cyan" : "orange";
-  }
-
-  private applyCoreHeistRolePassives(room: any, now: number, deltaFrames = 1) {
-    const heist = room?.heist;
-    if (!heist || room.status !== "playing") return;
-
-    const deltaSeconds = Math.max(0, Number(deltaFrames || 1)) / 60;
-    if (!deltaSeconds) return;
-
-    for (const player of room?.players?.values?.() || []) {
-      if (!player || player.alive === false || player.heistPermanentElimination) continue;
-      const role = this.normalizeCoreHeistRole(player?.heistRole || "attacker");
-      if (role !== "defender") continue;
-
-      const ownBase = this.getCoreHeistBase(room, String(player?.team || "cyan"));
-      if (!ownBase) continue;
-
-      const dx = Number(player?.x || 0) - Number(ownBase?.x || 0);
-      const dy = Number(player?.y || 0) - Number(ownBase?.y || 0);
-      const guardRadius = Number(ownBase?.perimeterRadius || CORE_HEIST_BASE_PERIMETER_RADIUS) + CORE_HEIST_DEFENDER_GUARD_RADIUS_BONUS;
-      if (dx * dx + dy * dy > guardRadius * guardRadius) continue;
-
-      player.hp = Math.min(
-        Number(player?.maxHp || START_HP),
-        Number(player?.hp || 0) + CORE_HEIST_DEFENDER_HP_REGEN_PER_SECOND * deltaSeconds,
-      );
-      player.energy = Math.min(
-        START_ENERGY,
-        Number(player?.energy || 0) + CORE_HEIST_DEFENDER_ENERGY_REGEN_PER_SECOND * deltaSeconds,
-      );
-    }
-  }
-
-  private reportCoreHeistStepError(room: any, stage: string, error: any, now = Date.now()) {
-    room.coreHeistStepErrorCount = Number(room.coreHeistStepErrorCount || 0) + 1;
-    room.lastCoreHeistStepErrorAt = now;
-    const lastLogAt = Number(room.lastCoreHeistStepErrorLogAt || 0);
-    if (now - lastLogAt < 5000) return;
-    room.lastCoreHeistStepErrorLogAt = now;
-    // eslint-disable-next-line no-console
-    console.error(`[Core Heist] recovered ${stage} step in room ${room.id}`, error);
-  }
-
-  /**
-   * Runtime sanitiser for the small 4v4 CTF room. It prevents one bad value
-   * from a bot, a projectile or an interrupted reconnect from poisoning the
-   * shared simulation tick with NaN/undefined values.
-   */
-  private hardenCoreHeistRuntime(room: any, now = Date.now()) {
-    if (!room?.coreHeistMode) return;
-
-    room.players = room.players instanceof Map ? room.players : new Map();
-    room.orbs = Array.isArray(room.orbs) ? room.orbs : [];
-    room.energyCells = Array.isArray(room.energyCells) ? room.energyCells : [];
-    room.projectiles = Array.isArray(room.projectiles) ? room.projectiles : [];
-    room.collisionCooldowns = room.collisionCooldowns instanceof Map
-      ? room.collisionCooldowns
-      : new Map();
-
-    if (!room.heist || !Array.isArray(room.heist.bases) || !Array.isArray(room.heist.flags)) {
-      const preservedScore = room?.heist?.score || {};
-      const fresh = this.createCoreHeistState(now);
-      fresh.score.cyan = Math.max(0, Number(preservedScore?.cyan || 0));
-      fresh.score.orange = Math.max(0, Number(preservedScore?.orange || 0));
-      fresh.matchEndsAt = Number(room?.heist?.matchEndsAt || 0) || now + CORE_HEIST_MATCH_DURATION_MS;
-      room.heist = fresh;
-    }
-
-    const isFiniteNumber = (value: any) => Number.isFinite(Number(value));
-    for (const player of room.players.values()) {
-      if (!player) continue;
-      const team = String(player?.team || "cyan") === "orange" ? "orange" : "cyan";
-      const role = this.normalizeCoreHeistRole(player?.heistRole || "attacker");
-      const spawn = this.getCoreHeistSpawn(room, team, Number(player?.heistSpawnIndex || 0));
-
-      if (!isFiniteNumber(player.x) || !isFiniteNumber(player.y)) {
-        player.x = spawn.x;
-        player.y = spawn.y;
-        player.prevX = spawn.x;
-        player.prevY = spawn.y;
-        player.velocityX = 0;
-        player.velocityY = 0;
-        player.knockbackX = 0;
-        player.knockbackY = 0;
-      }
-      if (!isFiniteNumber(player.prevX)) player.prevX = Number(player.x);
-      if (!isFiniteNumber(player.prevY)) player.prevY = Number(player.y);
-      if (!isFiniteNumber(player.velocityX)) player.velocityX = 0;
-      if (!isFiniteNumber(player.velocityY)) player.velocityY = 0;
-      if (!isFiniteNumber(player.knockbackX)) player.knockbackX = 0;
-      if (!isFiniteNumber(player.knockbackY)) player.knockbackY = 0;
-
-      const expectedMaxHp = role === "tank" ? CORE_HEIST_TANK_HP : START_HP;
-      if (!isFiniteNumber(player.maxHp) || Number(player.maxHp) <= 0) player.maxHp = expectedMaxHp;
-      if (!isFiniteNumber(player.hp)) player.hp = Number(player.maxHp);
-      player.hp = this.clamp(Number(player.hp), 0, Number(player.maxHp));
-      if (!isFiniteNumber(player.energy)) player.energy = START_ENERGY;
-      player.energy = this.clamp(Number(player.energy), 0, START_ENERGY);
-      if (!isFiniteNumber(player.drones)) player.drones = 0;
-      player.drones = this.clamp(Math.floor(Number(player.drones)), 0, MAX_DRONES);
-      if (!isFiniteNumber(player.progress)) player.progress = 0;
-      if (!isFiniteNumber(player.nextDroneAt) || Number(player.nextDroneAt) <= 0) {
-        player.nextDroneAt = this.getNextDroneAt(Number(player.drones));
-      }
-      player.team = team;
-      player.heistRole = role;
-      player.input = player.input && typeof player.input === "object" ? player.input : {};
-      if (player.alive !== false) player.alive = player.hp > 0;
-    }
-
-    room.projectiles = room.projectiles.filter((projectile: any) => {
-      if (!projectile) return false;
-      return isFiniteNumber(projectile.x) && isFiniteNumber(projectile.y) &&
-        isFiniteNumber(projectile.vx) && isFiniteNumber(projectile.vy);
-    });
-  }
-
-  /** A tiny health packet is independent from loot/HUD serialization. */
-  private emitCoreHeistHeartbeat(room: any, now = Date.now()) {
-    if (!room?.coreHeistMode || room.status !== "playing") return;
-    const heist = room.heist;
-    const packet = {
-      serverNow: now,
-      roomId: room.id,
-      roundId: room.roundId || null,
-      phaseVersion: Number(room.phaseVersion || 0),
-      status: room.status,
-      matchEndsAt: Number(heist?.matchEndsAt || 0),
-      remainingMs: Math.max(0, Number(heist?.matchEndsAt || 0) - now),
-    };
-    for (const player of room.players.values()) {
-      if (player?.isBot) continue;
-      const socket = this.server?.sockets?.sockets?.get(String(player.id));
-      if (socket?.connected) socket.volatile.compress(false).emit("zone-pvp:heartbeat", packet);
-    }
-  }
-
-  /**
-   * One authoritative impact rule for both launched-drone hits and body rams.
-   * Attackers/Defenders lose one escort + 20 HP, or 30 HP with no escort.
-   * Tank armor consumes two impacts per escort loss; that resolved loss costs
-   * one escort + 10 HP. A Tank without escorts takes 20 HP per impact.
-   */
-  private applyCoreHeistImpactDamage(room: any, target: any, now = Date.now(), source = "impact") {
-    const role = this.normalizeCoreHeistRole(target?.heistRole || "attacker");
-    const hasEscort = Number(target?.drones || 0) > 0;
-    let hpDamage = 0;
-    let droneLoss = 0;
-    let armorCharge = 0;
-
-    if (role === "tank") {
-      if (hasEscort) {
-        armorCharge = Math.max(0, Number(target.heistTankImpactCharge || 0)) + 1;
-        if (armorCharge >= CORE_HEIST_TANK_IMPACTS_PER_ESCORT_LOSS) {
-          armorCharge = 0;
-          droneLoss = 1;
-          hpDamage = CORE_HEIST_TANK_DAMAGE_AFTER_TWO_IMPACTS;
-        }
-        target.heistTankImpactCharge = armorCharge;
-      } else {
-        target.heistTankImpactCharge = 0;
-        hpDamage = CORE_HEIST_TANK_DAMAGE_WITHOUT_ESCORT;
-      }
-    } else if (hasEscort) {
-      droneLoss = 1;
-      hpDamage = CORE_HEIST_ROLE_DAMAGE_WITH_ESCORT;
-    } else {
-      hpDamage = CORE_HEIST_ROLE_DAMAGE_WITHOUT_ESCORT;
-    }
-
-    const hpBefore = Math.max(0, Number(target?.hp || 0));
-    if (droneLoss > 0) {
-      target.drones = Math.max(0, Number(target?.drones || 0) - droneLoss);
-      this.resetDroneProgress(target);
-    }
-    target.hp = Math.max(0, hpBefore - hpDamage);
-    target.alive = target.hp > 0;
-
-    if (hpDamage > 0) {
-      this.pushCombatEvent(room, target, `-${hpDamage} HP`, "damage", now);
-    }
-    if (droneLoss > 0) {
-      this.pushCombatEvent(room, target, "-1 DRONE", "drone-loss", now);
-    } else if (role === "tank" && hasEscort && armorCharge > 0) {
-      this.pushCombatEvent(
-        room,
-        target,
-        `TANK ARMOR ${armorCharge}/${CORE_HEIST_TANK_IMPACTS_PER_ESCORT_LOSS}`,
-        "shield",
-        now,
-      );
-    }
-
-    if (!target.alive) {
-      target.killStreak = 0;
-      target.rapidFireUntil = 0;
-      target.attackCooldownMultiplier = 1;
-      target.input = {};
-      target.shieldActive = false;
-      target.shieldUntil = 0;
-    }
-
-    return {
-      hpDamage,
-      droneLoss,
-      armorCharge,
-      source,
-    };
-  }
-
-  private updateCoreHeistBots(room: any, now: number) {
-    const heist = room?.heist;
-    if (!room?.coreHeistMode || !heist || room.status !== "playing") return;
-
-    const units = [...room.players.values()].filter(
-      (unit: any) => unit?.alive !== false && !unit?.heistPermanentElimination,
-    );
-    const bots = units.filter((unit: any) => Boolean(unit?.isBot));
-    if (!bots.length) return;
-
-    const combatReady = !this.isBattlePrepareLocked(room, now);
-    const openingFarmUntil = Number(room.matchStartedAt || now) +
-      CORE_HEIST_ROLE_REVEAL_DURATION + CORE_HEIST_BATTLE_PREPARE_DURATION;
-    const openingFarm = now < openingFarmUntil;
-    const orbClaims = new Set<string>();
-    const energyClaims = new Set<string>();
-
-    const distanceSq = (a: any, b: any) => {
-      const dx = Number(a?.x || 0) - Number(b?.x || 0);
-      const dy = Number(a?.y || 0) - Number(b?.y || 0);
-      return dx * dx + dy * dy;
-    };
-    const distance = (a: any, b: any) => Math.sqrt(distanceSq(a, b));
-    const normalize = (x: number, y: number) => {
-      const length = Math.hypot(x, y);
-      return length > 0.0001 ? { x: x / length, y: y / length } : { x: 0, y: 0 };
-    };
-    const clampWorld = (x: number, y: number) => ({
-      x: this.clamp(x, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS),
-      y: this.clamp(y, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS),
-    });
-    const pointToward = (from: any, to: any, maxDistance: number) => {
-      const dx = Number(to?.x || 0) - Number(from?.x || 0);
-      const dy = Number(to?.y || 0) - Number(from?.y || 0);
-      const d = Math.hypot(dx, dy) || 1;
-      const scale = Math.min(1, maxDistance / d);
-      return clampWorld(Number(from?.x || 0) + dx * scale, Number(from?.y || 0) + dy * scale);
-    };
-
-    const pickResource = (
-      bot: any,
-      type: "orb" | "energy",
-      items: any[],
-      claims: Set<string>,
-      options: { anchor?: any; maxDistance?: number; anchorRadius?: number } = {},
-    ) => {
-      const locks = bot.heistResourceLocks || (bot.heistResourceLocks = {});
-      const lock = locks[type];
-      const maxDistance = Number(options.maxDistance || 2800);
-      const valid = (item: any) => {
-        if (!item?.id) return false;
-        if (distanceSq(bot, item) > maxDistance * maxDistance) return false;
-        if (options.anchor && options.anchorRadius && distanceSq(options.anchor, item) > options.anchorRadius * options.anchorRadius) return false;
-        return true;
-      };
-
-      if (lock && now < Number(lock.until || 0)) {
-        const retained = items.find((item: any) => String(item?.id || "") === String(lock.id));
-        if (retained && valid(retained) && !claims.has(String(retained.id))) {
-          claims.add(String(retained.id));
-          return retained;
-        }
-      }
-
-      let best: any = null;
-      let bestScore = Infinity;
-      for (const item of items || []) {
-        const id = String(item?.id || "");
-        if (!id || claims.has(id) || !valid(item)) continue;
-        let score = distanceSq(bot, item);
-        if (options.anchor) score += distanceSq(options.anchor, item) * 0.12;
-        if (score < bestScore) {
-          bestScore = score;
-          best = item;
-        }
-      }
-      if (best?.id) {
-        claims.add(String(best.id));
-        locks[type] = { id: String(best.id), until: now + CORE_HEIST_BOT_RESOURCE_LOCK_MS };
-      }
-      return best;
-    };
-
-    const chooseThreat = (bot: any, enemies: any[], ownFlagId: string, range: number) => {
-      let best: any = null;
-      let bestScore = -Infinity;
-      for (const enemy of enemies) {
-        const d = distance(bot, enemy);
-        if (d > range) continue;
-        const role = this.normalizeCoreHeistRole(enemy?.heistRole || "attacker");
-        const carriesOwnFlag = String(enemy?.heistFlagId || "") === ownFlagId;
-        const hpRatio = Number(enemy?.hp || 0) / Math.max(1, Number(enemy?.maxHp || START_HP));
-        const score =
-          (carriesOwnFlag ? 10000 : 0) +
-          (role === "tank" ? 420 : role === "attacker" ? 280 : 130) +
-          (1 - hpRatio) * 220 +
-          Math.max(0, range - d) * 0.11;
-        if (score > bestScore) {
-          bestScore = score;
-          best = enemy;
-        }
-      }
-      return best;
-    };
-
-    const separation = (bot: any, friendlies: any[]) => {
-      let x = 0;
-      let y = 0;
-      for (const other of friendlies) {
-        if (!other || String(other.id) === String(bot.id)) continue;
-        const dx = Number(bot.x || 0) - Number(other.x || 0);
-        const dy = Number(bot.y || 0) - Number(other.y || 0);
-        const d = Math.hypot(dx, dy) || 1;
-        if (d >= 330) continue;
-        const weight = ((330 - d) / 330) ** 2;
-        x += (dx / d) * weight;
-        y += (dy / d) * weight;
-      }
-      return { x, y };
-    };
-
-    const squadByTeam: Record<string, any> = {};
-    for (const team of ["cyan", "orange"]) {
-      const members = units.filter((unit: any) => String(unit?.team || "cyan") === team);
-      const enemies = units.filter((unit: any) => String(unit?.team || "cyan") !== team);
-      const attackers = members
-        .filter((unit: any) => this.normalizeCoreHeistRole(unit?.heistRole || "attacker") === "attacker")
-        .sort((a: any, b: any) => String(a?.id || "").localeCompare(String(b?.id || "")));
-      const ownBase = this.getCoreHeistBase(room, team);
-      const enemyTeam = this.getCoreHeistEnemyTeam(team);
-      squadByTeam[team] = {
-        team,
-        members,
-        enemies,
-        ownBase,
-        enemyBase: this.getCoreHeistBase(room, enemyTeam),
-        ownFlag: this.getCoreHeistFlag(room, team),
-        enemyFlag: this.getCoreHeistFlag(room, enemyTeam),
-        defender: members.find((unit: any) => this.normalizeCoreHeistRole(unit?.heistRole || "attacker") === "defender") || null,
-        tank: members.find((unit: any) => this.normalizeCoreHeistRole(unit?.heistRole || "attacker") === "tank") || null,
-        homeGuard: attackers[0] || null,
-        tankGuard: attackers[1] || attackers[0] || null,
-      };
-    }
-
-    for (const bot of bots) {
-      if (now < Number(bot.heistPlanUntil || 0)) continue;
-      const stagger = Math.abs(String(bot.id || "").split("").reduce((sum: number, char: string) => sum + char.charCodeAt(0), 0)) % 90;
-      bot.heistPlanUntil = now + 360 + stagger;
-      bot.lastSeenAt = now;
-      bot.lastInputReceivedAt = now;
-
-      const team = String(bot?.team || "cyan") === "orange" ? "orange" : "cyan";
-      const squad = squadByTeam[team];
-      if (!squad?.ownBase || !squad?.enemyBase || !squad?.ownFlag || !squad?.enemyFlag) continue;
-
-      const role = this.normalizeCoreHeistRole(bot?.heistRole || "attacker");
-      const ownFlagId = String(squad.ownFlag.id || "");
-      const enemyFlagId = String(squad.enemyFlag.id || "");
-      const enemyCarrier = squad.enemies.find((unit: any) => String(unit?.heistFlagId || "") === ownFlagId) || null;
-      const friendlyCarrier = squad.members.find((unit: any) => String(unit?.heistFlagId || "") === enemyFlagId) || null;
-      const nearbyThreat = chooseThreat(bot, squad.enemies, ownFlagId, role === "defender" ? CORE_HEIST_BOT_HOME_THREAT_RADIUS : 2400);
-      const lowEnergy = Number(bot?.energy || 0) < CORE_HEIST_BOT_LOW_ENERGY;
-      const noEscort = Number(bot?.drones || 0) <= 0;
-      const needEnergy = Number(bot?.energy || 0) < 28;
-      const needsFarm = lowEnergy || noEscort;
-
-      let state = "hold";
-      let target = { x: Number(bot.x || 0), y: Number(bot.y || 0) };
-      let attackTarget: any = null;
-      let shield = false;
-      let emergency = false;
-
-      // Absolute objectives: return the flag you are carrying, then stop the
-      // enemy carrier who stole yours. Every role obeys these first.
-      if (bot.heistFlagId) {
-        target = { x: Number(squad.ownBase.x || 0), y: Number(squad.ownBase.y || 0) };
-        attackTarget = chooseThreat(bot, squad.enemies, ownFlagId, 1800);
-        state = "carry-flag-home";
-        emergency = true;
-      } else if (enemyCarrier) {
-        const baseDistance = Math.max(1, distance(squad.ownBase, squad.enemyBase));
-        const maxIntercept = role === "defender"
-          ? baseDistance * CORE_HEIST_DEFENDER_MAX_INTERCEPT_RATIO
-          : baseDistance * 0.70;
-        target = pointToward(squad.ownBase, enemyCarrier, maxIntercept);
-        attackTarget = enemyCarrier;
-        state = "intercept-enemy-carrier";
-        emergency = true;
-        shield = Number(bot?.energy || 0) >= 24 && distance(bot, enemyCarrier) < 840;
-      } else if (openingFarm) {
-        // Entire first economy phase is orb-first. Energy is taken only at a
-        // critically low battery, so the opening produces escort drones.
-        const energy = needEnergy
-          ? pickResource(bot, "energy", room.energyCells || [], energyClaims, { maxDistance: 2500 })
-          : null;
-        const orb = pickResource(bot, "orb", room.orbs || [], orbClaims, { maxDistance: 3200 });
-        const resource = energy || orb;
-        if (resource) target = { x: Number(resource.x || bot.x), y: Number(resource.y || bot.y) };
-        state = energy ? "opening-energy" : "opening-orb-farm";
-      } else if (role === "defender") {
-        const guardRadius = Number(squad.ownBase.perimeterRadius || CORE_HEIST_BASE_PERIMETER_RADIUS) + 900;
-        const homeThreat = chooseThreat(squad.ownBase, squad.enemies, ownFlagId, guardRadius + 1150);
-        if (homeThreat) {
-          target = pointToward(squad.ownBase, homeThreat, guardRadius);
-          attackTarget = homeThreat;
-          state = "defend-perimeter";
-          emergency = distance(squad.ownBase, homeThreat) < guardRadius;
-          shield = Number(bot?.energy || 0) >= 24 && distance(bot, homeThreat) < 760;
-        } else if (needsFarm) {
-          const energy = needEnergy
-            ? pickResource(bot, "energy", room.energyCells || [], energyClaims, { anchor: squad.ownBase, anchorRadius: guardRadius, maxDistance: guardRadius + 300 })
-            : null;
-          const orb = pickResource(bot, "orb", room.orbs || [], orbClaims, { anchor: squad.ownBase, anchorRadius: guardRadius, maxDistance: guardRadius + 300 });
-          const resource = energy || orb;
-          target = resource
-            ? { x: Number(resource.x || bot.x), y: Number(resource.y || bot.y) }
-            : { x: Number(squad.ownBase.x || 0), y: Number(squad.ownBase.y || 0) };
-          state = resource ? "defender-safe-farm" : "defender-regroup";
-        } else {
-          const patrolIndex = Number(bot.heistPatrolIndex || 0) % 4;
-          const inward = Number(squad.enemyBase.x || 0) > Number(squad.ownBase.x || 0) ? 1 : -1;
-          const patrol = [
-            { x: inward * 560, y: -420 },
-            { x: inward * 860, y: -120 },
-            { x: inward * 720, y: 420 },
-            { x: inward * 340, y: 260 },
-          ][patrolIndex];
-          target = clampWorld(Number(squad.ownBase.x || 0) + patrol.x, Number(squad.ownBase.y || 0) + patrol.y);
-          if (distance(bot, target) < 150) bot.heistPatrolIndex = (patrolIndex + 1) % 4;
-          state = "defender-patrol";
-        }
-      } else if (role === "tank") {
-        const enemyFlagAvailable = ["home", "dropped"].includes(String(squad.enemyFlag.status || "home"));
-        if (friendlyCarrier && String(friendlyCarrier.id) !== String(bot.id)) {
-          // The tank becomes the heavy return escort when an attacker secured
-          // the flag before it could reach it.
-          const line = normalize(Number(squad.ownBase.x || 0) - Number(friendlyCarrier.x || 0), Number(squad.ownBase.y || 0) - Number(friendlyCarrier.y || 0));
-          target = clampWorld(Number(friendlyCarrier.x || 0) - line.x * 220, Number(friendlyCarrier.y || 0) - line.y * 220);
-          attackTarget = chooseThreat(bot, squad.enemies, ownFlagId, 2000);
-          state = "tank-escort-carrier";
-        } else if (!enemyFlagAvailable) {
-          target = { x: Number(squad.enemyBase.x || 0), y: Number(squad.enemyBase.y || 0) };
-          attackTarget = chooseThreat(bot, squad.enemies, ownFlagId, 2100);
-          state = "tank-hold-objective";
-        } else if (needsFarm && distance(bot, squad.enemyFlag) > 1100) {
-          const energy = needEnergy ? pickResource(bot, "energy", room.energyCells || [], energyClaims, { maxDistance: 1800 }) : null;
-          const orb = pickResource(bot, "orb", room.orbs || [], orbClaims, { maxDistance: 1800 });
-          const resource = energy || orb;
-          target = resource
-            ? { x: Number(resource.x || bot.x), y: Number(resource.y || bot.y) }
-            : { x: Number(squad.enemyFlag.x || squad.enemyBase.x || 0), y: Number(squad.enemyFlag.y || squad.enemyBase.y || 0) };
-          attackTarget = chooseThreat(bot, squad.enemies, ownFlagId, 1600);
-          state = resource ? "tank-resupply" : "tank-push-flag";
-        } else {
-          target = { x: Number(squad.enemyFlag.x || squad.enemyBase.x || 0), y: Number(squad.enemyFlag.y || squad.enemyBase.y || 0) };
-          attackTarget = chooseThreat(bot, squad.enemies, ownFlagId, 2100);
-          state = "tank-push-flag";
-          shield = Number(bot?.energy || 0) >= 24 && Boolean(attackTarget) && distance(bot, attackTarget) < 780;
-        }
-      } else {
-        const isHomeGuard = String(squad.homeGuard?.id || "") === String(bot.id || "");
-        if (isHomeGuard) {
-          const guardAnchor = squad.defender || squad.ownBase;
-          const guardRadius = Number(squad.ownBase.perimeterRadius || CORE_HEIST_BASE_PERIMETER_RADIUS) + 1050;
-          const homeThreat = chooseThreat(guardAnchor, squad.enemies, ownFlagId, guardRadius + 700);
-          if (homeThreat) {
-            target = pointToward(squad.ownBase, homeThreat, guardRadius);
-            attackTarget = homeThreat;
-            state = "attacker-home-defense";
-            emergency = true;
-          } else if (needsFarm) {
-            const energy = needEnergy
-              ? pickResource(bot, "energy", room.energyCells || [], energyClaims, { anchor: squad.ownBase, anchorRadius: guardRadius, maxDistance: guardRadius + 260 })
-              : null;
-            const orb = pickResource(bot, "orb", room.orbs || [], orbClaims, { anchor: squad.ownBase, anchorRadius: guardRadius, maxDistance: guardRadius + 260 });
-            const resource = energy || orb;
-            target = resource
-              ? { x: Number(resource.x || bot.x), y: Number(resource.y || bot.y) }
-              : { x: Number(guardAnchor.x || squad.ownBase.x || 0), y: Number(guardAnchor.y || squad.ownBase.y || 0) };
-            state = resource ? "attacker-home-farm" : "attacker-home-regroup";
-          } else {
-            target = clampWorld(Number(guardAnchor.x || squad.ownBase.x || 0) + 180, Number(guardAnchor.y || squad.ownBase.y || 0) + 120);
-            state = "attacker-home-support";
-          }
-        } else {
-          const leader = friendlyCarrier || squad.tank;
-          if (leader && String(leader.id) !== String(bot.id)) {
-            const destination = friendlyCarrier
-              ? squad.ownBase
-              : { x: Number(squad.enemyFlag.x || squad.enemyBase.x || 0), y: Number(squad.enemyFlag.y || squad.enemyBase.y || 0) };
-            const direction = normalize(Number(destination.x || 0) - Number(leader.x || 0), Number(destination.y || 0) - Number(leader.y || 0));
-            // Escort stays behind and slightly off the tank's line, never in
-            // front of it. This is the stable formation requested for CTF.
-            const side = String(bot.id).charCodeAt(0) % 2 === 0 ? 1 : -1;
-            target = clampWorld(
-              Number(leader.x || 0) - direction.x * 290 + direction.y * 170 * side,
-              Number(leader.y || 0) - direction.y * 290 - direction.x * 170 * side,
-            );
-            attackTarget = chooseThreat(bot, squad.enemies, ownFlagId, 2150);
-            state = friendlyCarrier ? "attacker-escort-carrier" : "attacker-escort-tank";
-            shield = Number(bot?.energy || 0) >= 24 && Boolean(attackTarget) && distance(bot, attackTarget) < 760;
-          } else {
-            target = { x: Number(squad.enemyFlag.x || squad.enemyBase.x || 0), y: Number(squad.enemyFlag.y || squad.enemyBase.y || 0) };
-            attackTarget = chooseThreat(bot, squad.enemies, ownFlagId, 2000);
-            state = "attacker-push-flag";
-          }
-        }
-      }
-
-      if (!attackTarget && combatReady) {
-        attackTarget = chooseThreat(bot, squad.enemies, ownFlagId, role === "defender" ? 1750 : 1500);
-      }
-
-      const dx = Number(target.x || bot.x) - Number(bot.x || 0);
-      const dy = Number(target.y || bot.y) - Number(bot.y || 0);
-      const targetDistance = Math.hypot(dx, dy);
-      let desired = targetDistance > 80 ? normalize(dx, dy) : { x: 0, y: 0 };
-      const push = separation(bot, squad.members);
-      desired = normalize(desired.x + push.x * 0.34, desired.y + push.y * 0.34);
-
-      const previous = normalize(Number(bot.heistSteerX || 0), Number(bot.heistSteerY || 0));
-      const changedState = String(bot.heistAiState || "") !== state;
-      const blend = emergency ? 0.19 : changedState ? 0.12 : 0.075;
-      const direction = (previous.x || previous.y)
-        ? normalize(previous.x * (1 - blend) + desired.x * blend, previous.y * (1 - blend) + desired.y * blend)
-        : desired;
-      const arriveRadius = state.includes("farm") || state.includes("resupply") ? 95 : state.includes("patrol") ? 140 : 72;
-      const move = targetDistance <= arriveRadius && !attackTarget ? { x: 0, y: 0 } : direction;
-
-      bot.heistSteerX = move.x;
-      bot.heistSteerY = move.y;
-      bot.heistAiState = state;
-      bot.aiState = `core-heist:${role}:${state}`;
-      bot.aiTargetX = Number(target.x || bot.x);
-      bot.aiTargetY = Number(target.y || bot.y);
-
-      const attackRange = role === "attacker" ? 2050 : role === "tank" ? 1750 : 1800;
-      bot.input = {
-        mobileMove: true,
-        moveX: move.x,
-        moveY: move.y,
-        attacking: Boolean(combatReady && attackTarget && Number(bot?.drones || 0) > 0 && distance(bot, attackTarget) <= attackRange),
-        shield: Boolean(combatReady && shield),
-        mouseX: Number(attackTarget?.x ?? target.x ?? bot.x),
-        mouseY: Number(attackTarget?.y ?? target.y ?? bot.y),
-      };
-    }
-  }
-
-  private tickCoreHeistRoom(room: any, now: number, deltaFrames: number, zoneRadius: number) {
-    const run = (stage: string, action: () => void) => {
-      try {
-        action();
-      } catch (error) {
-        this.reportCoreHeistStepError(room, stage, error, now);
-      }
-    };
-
-    run("runtime-guard", () => this.hardenCoreHeistRuntime(room, now));
-    run("respawn", () => this.reviveCoreHeistPlayers(room, now));
-    run("bot-ai", () => this.updateCoreHeistBots(room, now));
-    run("movement", () => this.updatePlayers(room, now, zoneRadius, deltaFrames));
-    run("role-passives", () => this.applyCoreHeistRolePassives(room, now, deltaFrames));
-    run("projectiles", () => this.updateProjectiles(room, deltaFrames, now));
-
-    if (!room.lastZoneCollisionAt || now - room.lastZoneCollisionAt >= ZONE_COLLISION_TICK_INTERVAL_MS) {
-      room.lastZoneCollisionAt = now;
-      run("collisions", () => this.handleBodyCollisions(room, now, zoneRadius));
-    }
-    if (!room.lastZoneLootAt || now - room.lastZoneLootAt >= CORE_HEIST_LOOT_TICK_INTERVAL_MS) {
-      room.lastZoneLootAt = now;
-      run("loot", () => {
-        this.collectOrbs(room, zoneRadius);
-        this.collectEnergy(room, zoneRadius);
-      });
-    }
-    if (!room.lastZoneItemMaintenanceAt || now - room.lastZoneItemMaintenanceAt >= CORE_HEIST_ITEM_MAINTENANCE_INTERVAL_MS) {
-      room.lastZoneItemMaintenanceAt = now;
-      run("world-maintenance", () => {
-        this.maintainWorldItems(room, zoneRadius, now);
-        this.cleanupCombatEvents(room, now);
-      });
-    }
-    run("objective", () => this.updateCoreHeistObjective(room, now));
-    room.coreHeistLastHealthyTickAt = now;
-  }
-
-  private updateCoreHeistObjective(room: any, now: number) {
-    const heist = room?.heist;
-    if (!heist || room.status !== "playing") return;
-
-    const matchEndsAt = Number(heist.matchEndsAt || 0);
-    if (matchEndsAt > 0 && now >= matchEndsAt) {
-      const cyan = Number(heist.score?.cyan || 0);
-      const orange = Number(heist.score?.orange || 0);
-      const winnerTeam = cyan === orange ? "cyan" : cyan > orange ? "cyan" : "orange";
-      const winner = [...room.players.values()].find((player: any) => String(player?.team || "cyan") === winnerTeam) || null;
-      this.finishCoreHeistMatch(room, winner, winnerTeam, now, "time");
-      return;
-    }
-
-    const alivePlayers = [...room.players.values()].filter((player: any) => player?.alive !== false);
-
-    for (const player of alivePlayers) {
-      const team = String(player.team || "cyan") === "orange" ? "orange" : "cyan";
-      const enemyTeam = this.getCoreHeistEnemyTeam(team);
-      const ownBase = this.getCoreHeistBase(room, team);
-      const ownFlag = this.getCoreHeistFlag(room, team);
-      const enemyFlag = this.getCoreHeistFlag(room, enemyTeam);
-
-      // A drone can carry exactly one objective. Enemy flag => capture. Own
-      // dropped flag => physically carry it back to its own base to return it.
-      if (player.heistFlagId) {
-        const carried = this.getCoreHeistFlag(room, String(player.heistFlagId));
-        if (!carried || !ownBase) {
-          player.heistFlagId = null;
-          continue;
-        }
-
-        carried.status = "carried";
-        carried.carrierId = player.id;
-        carried.x = Number(player.x || carried.x || 0);
-        carried.y = Number(player.y || carried.y || 0);
-        carried.returnAt = 0;
-
-        const dx = Number(player.x || 0) - Number(ownBase.x || 0);
-        const dy = Number(player.y || 0) - Number(ownBase.y || 0);
-        if (dx * dx + dy * dy <= CORE_HEIST_BASE_CAPTURE_RADIUS * CORE_HEIST_BASE_CAPTURE_RADIUS) {
-          carried.lastCarrierId = player.id;
-          carried.lastCarrierName = this.getCoreHeistPlayerName(player);
-          carried.lastCarrierTeam = team;
-          player.heistFlagId = null;
-
-          if (String(carried.team || "") === team) {
-            this.resetCoreHeistFlag(carried);
-            this.pushCombatEvent(room, player, "FLAG RETURNED", "heal", now);
-            this.pushCoreHeistEvent(room, {
-              type: "returned",
-              actor: player,
-              flag: carried,
-            }, now);
-          } else {
-            // Regula explicita: poti puncta DOAR daca steagul tau NU e dus de un inamic
-            // (poate fi acasa sau cazut pe jos, dar nu in mainile inamicului)
-            const myFlag = this.getCoreHeistFlag(room, team);
-            const myFlagCarriedByEnemy = myFlag && String(myFlag.status||"") === "carried" &&
-              String(myFlag.carrierId||"") !== String(player.id||"") &&
-              !([...room.players.values()].find((p:any) =>
-                String(p?.id||"") === String(myFlag.carrierId||"") &&
-                String(p?.team||"cyan") === team
-              ));
-            if (myFlagCarriedByEnemy) {
-              // Nu putem puncta - steagul nostru e dus de inamic
-              // Setam un mesaj de hint si eliberam steagul inamic capturat
-              // (il lasam jos, nu il resetam la baza lor - raman sanse de recuperare)
-              carried.status = "dropped";
-              carried.carrierId = null;
-              carried.x = Number(player.x || carried.x || 0);
-              carried.y = Number(player.y || carried.y || 0);
-              player.heistFlagId = null;
-              this.pushCombatEvent(room, player, "SCORE BLOCKED", "damage", now);
-            } else {
-              heist.score[team] = Number(heist.score?.[team] || 0) + 1;
-              heist.lastScoreAt = now;
-              this.pushCombatEvent(room, player, "FLAG CAPTURED", "drone-reward", now);
-              this.pushCoreHeistEvent(room, {
-                type: "captured",
-                actor: player,
-                flag: carried,
-                scoreTeam: team,
-              }, now);
-              this.resetCoreHeistFlag(carried);
-              if (Number(heist.score?.[team] || 0) >= CORE_HEIST_TARGET_SCORE) {
-                this.finishCoreHeistMatch(room, player, team, now, "flag-capture");
-                return;
-              }
-            }
-          }
-        }
-        continue;
-      }
-
-      // Your home flag can never be picked up while it is safe at base. When
-      // it was dropped, any teammate may recover it and physically carry it
-      // home; it does not teleport or auto-return after a timeout.
-      if (ownFlag?.status === "dropped") {
-        const dx = Number(player.x || 0) - Number(ownFlag.x || 0);
-        const dy = Number(player.y || 0) - Number(ownFlag.y || 0);
-        if (dx * dx + dy * dy <= CORE_HEIST_FLAG_PICKUP_DISTANCE * CORE_HEIST_FLAG_PICKUP_DISTANCE) {
-          ownFlag.status = "carried";
-          ownFlag.carrierId = player.id;
-          ownFlag.lastCarrierId = player.id;
-          ownFlag.lastCarrierName = this.getCoreHeistPlayerName(player);
-          ownFlag.lastCarrierTeam = team;
-          ownFlag.returnAt = 0;
-          ownFlag.droppedAt = 0;
-          player.heistFlagId = ownFlag.id;
-          this.pushCombatEvent(room, player, "OWN FLAG RECOVERED", "heal", now);
-          // Defer forced broadcast to next scheduled tick - avoids blocking 60Hz loop
-          room.lastBroadcastAt = 0;
-          continue;
-        }
-      }
-
-      // Enemy home or dropped flags can be carried by any opposing drone.
-      if (enemyFlag && (enemyFlag.status === "home" || enemyFlag.status === "dropped")) {
-        const dx = Number(player.x || 0) - Number(enemyFlag.x || 0);
-        const dy = Number(player.y || 0) - Number(enemyFlag.y || 0);
-        if (dx * dx + dy * dy <= CORE_HEIST_FLAG_PICKUP_DISTANCE * CORE_HEIST_FLAG_PICKUP_DISTANCE) {
-          enemyFlag.status = "carried";
-          enemyFlag.carrierId = player.id;
-          enemyFlag.lastCarrierId = player.id;
-          enemyFlag.lastCarrierName = this.getCoreHeistPlayerName(player);
-          enemyFlag.lastCarrierTeam = team;
-          enemyFlag.returnAt = 0;
-          enemyFlag.droppedAt = 0;
-          player.heistFlagId = enemyFlag.id;
-          this.pushCombatEvent(room, player, "ENEMY FLAG TAKEN", "drone-reward", now);
-          this.pushCoreHeistEvent(room, {
-            type: "taken",
-            actor: player,
-            flag: enemyFlag,
-          }, now);
-          // Defer broadcast - avoids 60Hz loop spike
-          room.lastBroadcastAt = 0;
-        }
-      }
-    }
-  }
-
-  private finishCoreHeistMatch(room: any, winner: any, winnerTeam: string, now = Date.now(), reason = "score") {
-    if (!room || room.status === "finished") return;
-    room.status = "finished";
-    room.locked = true;
-    room.countdownStartedAt = null;
-    room.battlePrepareUntil = null;
-    room.heistRoleRevealUntil = null;
-    room.battleBeginFlashUntil = null;
-    room.winnerId = winner?.id || null;
-    room.winnerName = `${this.getCoreHeistTeamLabel(winnerTeam)} TEAM`;
-    room.finishReason = `capture-the-flag-${reason}`;
-    room.finishedAt = now;
-    room.closingAt = now + ZONE_PVP_FINISH_DISPLAY_MS;
-    room.phaseVersion = Number(room.phaseVersion || 0) + 1;
-    room.projectiles = [];
-    for (const player of room.players.values()) {
-      player.input = {};
-      player.shieldActive = false;
-      player.shieldUntil = 0;
-    }
-    this.broadcastZonePvpRoomState(room, now, true);
-  }
-
   updateZonePvpRoomStatus(room, now) {
-    // Both Zone PvP and Capture the Flag are one-way: waiting -> countdown -> playing -> finished.
+    // Zone PvP is one-way: waiting -> countdown -> playing -> finished.
+    // `roundStarted` survives reconnects and prevents any stale lobby branch
+    // from turning an active room back into WAITING.
     if (room.roundStarted || room.status === "playing" || room.status === "finished") return;
     if (room.status !== "countdown") return;
 
-    const minPlayers = room?.coreHeistMode ? CORE_HEIST_ROOM_MIN_PLAYERS : ZONE_PVP_ROOM_MIN_PLAYERS;
-    const countdownMs = room?.coreHeistMode ? CORE_HEIST_START_COUNTDOWN_MS : ZONE_PVP_START_COUNTDOWN_MS;
-
-    if (this.getZoneConnectedHumanPlayerCount(room) < minPlayers) {
+    if (this.getZoneConnectedHumanPlayerCount(room) < ZONE_PVP_ROOM_MIN_PLAYERS) {
       room.status = "waiting";
       room.locked = false;
       room.countdownStartedAt = null;
@@ -4900,78 +3578,47 @@ export class GameGateway {
       return;
     }
 
-    if (now - room.countdownStartedAt >= countdownMs) {
+    if (now - room.countdownStartedAt >= ZONE_PVP_START_COUNTDOWN_MS) {
       const zoneRadius = this.getZonePvpZoneRadius(room);
+      // The human-only admission window has closed. Complete the exact 60-seat
+      // round once, then lock it permanently — never rebuild/reset this room.
       this.fillZonePvpBots(room, zoneRadius);
       room.status = "playing";
       room.roundStarted = true;
       room.locked = true;
       room.countdownStartedAt = null;
       room.matchStartedAt = now;
-      room.heistRoleRevealUntil = room?.coreHeistMode ? now + CORE_HEIST_ROLE_REVEAL_DURATION : null;
-      room.battlePrepareUntil = now + (
-        room?.coreHeistMode
-          ? CORE_HEIST_ROLE_REVEAL_DURATION + CORE_HEIST_BATTLE_PREPARE_DURATION
-          : ZONE_PVP_BATTLE_PREPARE_DURATION
-      );
+      room.battlePrepareUntil = now + ZONE_PVP_BATTLE_PREPARE_DURATION;
       room.battleBeginFlashUntil = room.battlePrepareUntil + 1800;
       room.matchHadMultiplePlayers = true;
       room.phaseVersion = Number(room.phaseVersion || 0) + 1;
       room.lastCoreWaveAt = now - CORE_RESPAWN_DELAY + CORE_WARNING_DELAY;
 
-      if (room?.coreHeistMode) {
-        this.initializeCoreHeistRoom(room, now);
-
-        // Assign deterministic launch pads per team. This keeps a 4v4 opening
-        // readable: teammates launch from distinct points in their own base,
-        // rather than all spawning at the human player's position.
-        const nextSpawnSlot: Record<string, number> = { cyan: 0, orange: 0 };
-        for (const player of room.players.values()) {
-          const team = String(player.team || this.assignCoreHeistTeam(room)) === "orange"
-            ? "orange"
-            : "cyan";
-          player.team = team;
-          const slot = nextSpawnSlot[team] || 0;
-          nextSpawnSlot[team] = slot + 1;
-          player.heistSpawnIndex = slot;
-          const spawn = this.getCoreHeistSpawn(room, team, slot);
-          player.x = spawn.x;
-          player.y = spawn.y;
-          player.prevX = spawn.x;
-          player.prevY = spawn.y;
-          player.velocityX = 0;
-          player.velocityY = 0;
-          player.input = {};
-        }
-
-        this.assignCoreHeistTeamRoles(room);
-        room.lastBroadcastAt = 0;
-        room.lastTransformBroadcastAt = 0;
-      }
-
+      // Reliable phase boundary only. Continuous movement uses latest-wins
+      // transform packets below and therefore cannot build a stale queue.
       this.broadcastZonePvpRoomState(room, now, true);
     }
   }
 
   isBattlePrepareLocked(room, now = Date.now()) {
     return Boolean(
-      room?.zonePvpMode &&
+      (room?.zonePvpMode || room?.captureTheFlagMode) &&
       room?.battlePrepareUntil &&
       now < room.battlePrepareUntil,
     );
   }
 
-  isCoreHeistRoleRevealLocked(room, now = Date.now()) {
+  isCaptureTheFlagRoleRevealLocked(room, now = Date.now()) {
     return Boolean(
-      room?.coreHeistMode &&
-      room?.heistRoleRevealUntil &&
-      now < room.heistRoleRevealUntil,
+      room?.captureTheFlagMode &&
+      room?.roleRevealUntil &&
+      now < Number(room.roleRevealUntil),
     );
   }
 
   updatePlayers(room, now, zoneRadius, deltaFrames = 1) {
     const battleLocked = this.isBattlePrepareLocked(room, now);
-    const roleRevealLocked = this.isCoreHeistRoleRevealLocked(room, now);
+    const roleRevealLocked = this.isCaptureTheFlagRoleRevealLocked(room, now);
     for (const player of room.players.values()) {
       if (!player.alive) continue;
       let dx = 0;
@@ -4980,34 +3627,25 @@ export class GameGateway {
       // Nu continuam sa deplasam drona la infinit daca telefonul a intrat in
       // background sau ultimul pachet de input s-a pierdut. Clientul activ
       // trimite heartbeat mult mai des decat acest timeout.
-      // Human input is latest-wins. On mobile, socket.volatile.emit can drop
-      // packets under congestion so we use a longer timeout. Bots keep their
-      // held vector until next replan (up to 620ms by design).
-      const inputTimeout = player.isBot
-        ? Infinity
-        : (Boolean(input?.mobileMove) ? 600 : 280);
-      const inputFresh = player.isBot ||
-        !player.lastInputReceivedAt ||
-        now - player.lastInputReceivedAt <= inputTimeout;
+      // Human input is latest-wins and expires quickly after a lost STOP packet.
+      // Bots keep their held vector until the next tactical replan (up to 320 ms),
+      // otherwise they visibly pause before every AI decision.
+      const inputFresh = player.isBot || !player.lastInputReceivedAt || now - player.lastInputReceivedAt <= 280;
       if (!inputFresh) {
         player.input = {};
       }
       const activeInput = inputFresh ? input : {};
-      if (activeInput.w) dy -= 1;
-      if (activeInput.s) dy += 1;
-      if (activeInput.a) dx -= 1;
-      if (activeInput.d) dx += 1;
-      if (activeInput.mobileMove) {
-        dx += Number(activeInput.moveX || 0);
-        dy += Number(activeInput.moveY || 0);
+      if (!roleRevealLocked) {
+        if (activeInput.w) dy -= 1;
+        if (activeInput.s) dy += 1;
+        if (activeInput.a) dx -= 1;
+        if (activeInput.d) dx += 1;
+        if (activeInput.mobileMove) {
+          dx += Number(activeInput.moveX || 0);
+          dy += Number(activeInput.moveY || 0);
+        }
       }
-      if (roleRevealLocked && room?.coreHeistMode) {
-        dx = 0;
-        dy = 0;
-        player.velocityX = 0;
-        player.velocityY = 0;
-      }
-      const isMovingInput = dx !== 0 || dy !== 0;
+      const isMovingInput = !roleRevealLocked && (dx !== 0 || dy !== 0);
       if (
         isMovingInput &&
         now - player.lastEnergyDrainAt >= ENERGY_DRAIN_INTERVAL
@@ -5023,7 +3661,7 @@ export class GameGateway {
           // Keep the legacy elimination rule for the old non-Zone modes, but
           // clamp Zone players at zero until they collect an energy cell.
           player.energy = 0;
-          if (!room?.zonePvpMode) {
+          if (!room?.zonePvpMode && !room?.captureTheFlagMode) {
             this.eliminatePlayer(room, player, null, now, "energy-empty");
             continue;
           }
@@ -5045,7 +3683,15 @@ export class GameGateway {
         player.nextDroneAt = this.getNextDroneAt(player.drones);
         player.energy = Math.max(0, player.energy - 20);
         player.shieldActive = true;
-        player.shieldUntil = now + 3000;
+        player.shieldUntil = now + (
+          room?.captureTheFlagMode && String(player?.ctfRole || "") === "defense"
+            ? CAPTURE_THE_FLAG_DEFENDER_SHIELD_DURATION_MS
+            : 3000
+        );
+        if (room?.captureTheFlagMode && String(player?.ctfRole || "") === "defense") {
+          player.ctfAegisPulseAt = 0;
+          this.pushCombatEvent(room, player, "AEGIS FIELD ONLINE", "shield", now);
+        }
         player.lastShieldAt = now;
       }
       player.prevX = player.x;
@@ -5058,11 +3704,17 @@ export class GameGateway {
         ? NORMAL_BASE_MOVE_SPEED_MULTIPLIER *
           Math.max(1, Number(player.moveSpeedMultiplier || 1))
         : 1;
-      const coreCarryMultiplier =
-        room?.coreHeistMode && player?.heistFlagId
-          ? CORE_HEIST_CARRIER_SPEED_MULTIPLIER
+      const captureCarrierSpeedMultiplier =
+        room?.captureTheFlagMode && player?.carryingFlagTeam
+          ? CAPTURE_THE_FLAG_CARRIER_SPEED_MULTIPLIER
           : 1;
-      const speed = PLAYER_SPEED * progressionMoveMultiplier * coreCarryMultiplier;
+      const captureRoleMoveMultiplier = room?.captureTheFlagMode
+        ? Math.max(0.75, Number(player?.ctfRoleMoveSpeedMultiplier || 1))
+        : 1;
+      const aegisSuppressionMultiplier = room?.captureTheFlagMode && Number(player?.aegisSuppressedUntil || 0) > now
+        ? 0.68
+        : 1;
+      const speed = PLAYER_SPEED * progressionMoveMultiplier * captureCarrierSpeedMultiplier * captureRoleMoveMultiplier * aegisSuppressionMultiplier;
       const rawX = player.x + (dx / length) * speed * deltaFrames;
       const rawY = player.y + (dy / length) * speed * deltaFrames;
       const safe = this.keepInsideSafeZone(
@@ -5072,12 +3724,12 @@ export class GameGateway {
         PLAYER_RADIUS + 18,
         Boolean(room.zonePvpMode),
       );
-      const movementWorldWidth = room?.normalMode
-        ? NORMAL_WORLD_WIDTH
-        : WORLD_WIDTH;
-      const movementWorldHeight = room?.normalMode
-        ? NORMAL_WORLD_HEIGHT
-        : WORLD_HEIGHT;
+      const movementWorldWidth = Number(room?.worldWidth) || (
+        room?.normalMode ? NORMAL_WORLD_WIDTH : WORLD_WIDTH
+      );
+      const movementWorldHeight = Number(room?.worldHeight) || (
+        room?.normalMode ? NORMAL_WORLD_HEIGHT : WORLD_HEIGHT
+      );
       player.x = this.clamp(
         safe.x,
         PLAYER_RADIUS,
@@ -5148,16 +3800,15 @@ export class GameGateway {
     killer.progress = 0;
     killer.nextDroneAt = this.getNextDroneAt(killer.drones || 0);
 
-    const killerRole = room?.coreHeistMode
-      ? this.normalizeCoreHeistRole(killer?.heistRole || "attacker")
-      : "attacker";
-    const roleMaxHp = room?.coreHeistMode && killerRole === "tank"
-      ? CORE_HEIST_TANK_HP
-      : MAX_HP;
-    const nextMaxHp = Math.min(
-      roleMaxHp,
-      (killer.maxHp || START_HP) + KILL_HP_REWARD,
-    );
+    const roleBaseMaxHp = room?.captureTheFlagMode
+      ? Math.max(START_HP, Number(killer?.ctfRoleBaseMaxHp || killer?.maxHp || START_HP))
+      : null;
+    const nextMaxHp = room?.captureTheFlagMode
+      ? roleBaseMaxHp
+      : Math.min(
+        MAX_HP,
+        (killer.maxHp || START_HP) + KILL_HP_REWARD,
+      );
     killer.maxHp = nextMaxHp;
     killer.hp = Math.min(nextMaxHp, previousHp + KILL_HP_REWARD);
     killer.killAttackSpeedMultiplier = Math.max(
@@ -5166,15 +3817,9 @@ export class GameGateway {
     );
 
     if (this.usesProgressionPvpCombat(room)) {
-      const roleSpeedFloor = room?.coreHeistMode && killerRole === "attacker"
-        ? CORE_HEIST_ATTACKER_MOVE_SPEED_MULTIPLIER
-        : 1;
-      const roleSpeedCap = room?.coreHeistMode && killerRole === "attacker"
-        ? Math.max(NORMAL_MAX_MOVE_SPEED_MULTIPLIER, CORE_HEIST_ATTACKER_MOVE_SPEED_MULTIPLIER + 0.30)
-        : NORMAL_MAX_MOVE_SPEED_MULTIPLIER;
-      killer.moveSpeedMultiplier = Math.max(
-        roleSpeedFloor,
-        Math.min(roleSpeedCap, previousMoveSpeed + NORMAL_KILL_MOVE_SPEED_STEP),
+      killer.moveSpeedMultiplier = Math.min(
+        NORMAL_MAX_MOVE_SPEED_MULTIPLIER,
+        previousMoveSpeed + NORMAL_KILL_MOVE_SPEED_STEP,
       );
       killer.attackDroneSpeedMultiplier = Math.min(
         NORMAL_MAX_ATTACK_DRONE_SPEED_MULTIPLIER,
@@ -5232,15 +3877,11 @@ export class GameGateway {
       : null;
     if (isValid(lockedTarget)) return lockedTarget;
 
-    // Capture the Flag spectators follow their own surviving team first. This keeps
-    // an eliminated player inside the tactical context of their flag run.
-    const allCandidates = [...room.players.values()].filter(isValid);
-    const candidates = room?.coreHeistMode
-      ? allCandidates.filter((candidate: any) => String(candidate?.team || "cyan") === String(victim?.team || "cyan"))
-      : allCandidates;
-    const pool = candidates.length ? candidates : allCandidates;
-    if (!pool.length) return null;
-    return pool[Math.floor(Math.random() * pool.length)] || null;
+    // The first target (or replacement after its death/exit) is deliberately
+    // random among living participants, as requested for spectator mode.
+    const candidates = [...room.players.values()].filter(isValid);
+    if (!candidates.length) return null;
+    return candidates[Math.floor(Math.random() * candidates.length)] || null;
   }
 
   eliminatePlayer(room, victim, killer = null, now = Date.now(), reason = "unknown", forceEmit = false) {
@@ -5269,38 +3910,15 @@ export class GameGateway {
     victim.killedById = validKiller?.id || null;
     victim.eliminatedAt = now;
     victim.eliminationReason = reason;
-
-    // Capture the Flag gives every drone two lives. First death redeploys at
-    // its own base; second death is a permanent same-team spectator state.
-    if (room?.coreHeistMode) {
-      this.dropCoreHeistFlag(room, victim, now);
-      victim.heistDeaths = Number(victim.heistDeaths || 0) + 1;
-      victim.lastSeenAt = now;
-      const permanent = Number(victim.heistDeaths || 0) >= CORE_HEIST_MAX_DEATHS;
-      victim.heistPermanentElimination = permanent;
-      victim.respawnAt = permanent ? 0 : now + CORE_HEIST_RESPAWN_MS;
-      const spectatorTarget = permanent
-        ? this.getStableSpectatorTarget(room, victim, validKiller)
-        : null;
-      victim.spectatorTargetId = spectatorTarget?.id || null;
-
+    if (room?.captureTheFlagMode) {
+      this.dropCaptureTheFlagCarrier(room, victim, now);
       if (wasAlive) {
-        const socket = this.server.sockets.sockets.get(victim.id);
-        socket?.emit("zone-pvp:eliminated", {
-          serverTime: now,
-          reason,
-          permanent,
-          deaths: Number(victim.heistDeaths || 0),
-          respawnAt: victim.respawnAt,
-          you: this.serializeZonePvpStatePlayer(room, victim),
-          spectatorTargetId: spectatorTarget?.id || null,
-          spectatingPlayer: spectatorTarget
-            ? this.serializeZonePvpStatePlayer(room, spectatorTarget)
-            : null,
-        });
+        victim.deathCount = Number(victim.deathCount || 0) + 1;
       }
-
-      return spectatorTarget;
+      // CTF grants one and only one redeploy. The second death stays in the
+      // room as a spectator so the camera can follow surviving teammates.
+      victim.spectatorOnly = Number(victim.deathCount || 0) >= 2;
+      victim.respawnAt = victim.spectatorOnly ? 0 : now + CAPTURE_THE_FLAG_RESPAWN_MS;
     }
 
     const spectatorTarget = this.getStableSpectatorTarget(room, victim, validKiller);
@@ -5323,10 +3941,14 @@ export class GameGateway {
         socket.emit(`${prefix}:eliminated`, {
           serverTime: now,
           reason,
-          you: this.serializePlayer(victim),
+          you: room?.captureTheFlagMode
+            ? this.serializeCaptureTheFlagPlayer(room, victim)
+            : this.serializePlayer(victim),
           spectatorTargetId: spectatorTarget?.id || null,
           spectatingPlayer: spectatorTarget
-            ? this.serializePlayer(spectatorTarget)
+            ? (room?.captureTheFlagMode
+              ? this.serializeCaptureTheFlagPlayer(room, spectatorTarget)
+              : this.serializePlayer(spectatorTarget))
             : null,
         });
       }
@@ -5341,49 +3963,40 @@ export class GameGateway {
   getBodyCollisionOutcome(a, b) {
     const aHasDrones = (a.drones || 0) > 0;
     const bHasDrones = (b.drones || 0) > 0;
-
-    // CORE HEIST: reguli de coliziune specifice per rol.
-    // Attacker/Defender: o coliziune/drona mica distruge o drona + 20hp,
-    //   sau daca nu are drone, -30hp direct.
-    // Tank: necesita 2 coliziuni/drone mici sa piarda o drona (counter
-    //   tankCollisionHits), si ia doar 10hp per lovitura cu drona sau 20hp fara.
-    const aRole = a.heistRole ? String(a.heistRole).toLowerCase() : null;
-    const bRole = b.heistRole ? String(b.heistRole).toLowerCase() : null;
-    const isHeist = Boolean(aRole || bRole);
-
-    if (isHeist) {
-      const heistSide = (unit: any, role: string | null, hasDrones: boolean) => {
-        if (role === "tank") {
-          unit.tankCollisionHits = (Number(unit.tankCollisionHits) || 0) + 1;
-          const losesDrone = hasDrones && unit.tankCollisionHits >= 2;
-          if (losesDrone) unit.tankCollisionHits = 0;
-          return { hpDamage: losesDrone ? 10 : 20, droneLoss: losesDrone ? 1 : 0 };
-        }
-        // attacker, defender, sau null
-        return { hpDamage: hasDrones ? 20 : 30, droneLoss: hasDrones ? 1 : 0 };
-      };
-      const aOut = heistSide(a, aRole, aHasDrones);
-      const bOut = heistSide(b, bRole, bHasDrones);
+    if (aHasDrones && bHasDrones) {
       return {
-        aHpDamage: aOut.hpDamage,
-        bHpDamage: bOut.hpDamage,
-        aDroneLoss: aOut.droneLoss,
-        bDroneLoss: bOut.droneLoss,
+        aHpDamage: BODY_COLLISION_BOTH_HAVE_DRONES_DAMAGE,
+        bHpDamage: BODY_COLLISION_BOTH_HAVE_DRONES_DAMAGE,
+        aDroneLoss: 1,
+        bDroneLoss: 1,
         push: BODY_COLLISION_MEDIUM_PUSH,
       };
     }
-
-    // Generic (celelalte moduri — neschimbat)
-    if (aHasDrones && bHasDrones) {
-      return { aHpDamage: BODY_COLLISION_BOTH_HAVE_DRONES_DAMAGE, bHpDamage: BODY_COLLISION_BOTH_HAVE_DRONES_DAMAGE, aDroneLoss: 1, bDroneLoss: 1, push: BODY_COLLISION_MEDIUM_PUSH };
-    }
     if (!aHasDrones && !bHasDrones) {
-      return { aHpDamage: BODY_COLLISION_BOTH_NO_DRONES_DAMAGE, bHpDamage: BODY_COLLISION_BOTH_NO_DRONES_DAMAGE, aDroneLoss: 0, bDroneLoss: 0, push: BODY_COLLISION_STRONG_PUSH };
+      return {
+        aHpDamage: BODY_COLLISION_BOTH_NO_DRONES_DAMAGE,
+        bHpDamage: BODY_COLLISION_BOTH_NO_DRONES_DAMAGE,
+        aDroneLoss: 0,
+        bDroneLoss: 0,
+        push: BODY_COLLISION_STRONG_PUSH,
+      };
     }
     if (aHasDrones && !bHasDrones) {
-      return { aHpDamage: BODY_COLLISION_WITH_DRONES_DAMAGE, bHpDamage: BODY_COLLISION_WITHOUT_DRONES_DAMAGE, aDroneLoss: 1, bDroneLoss: 0, push: BODY_COLLISION_STRONG_PUSH };
+      return {
+        aHpDamage: BODY_COLLISION_WITH_DRONES_DAMAGE,
+        bHpDamage: BODY_COLLISION_WITHOUT_DRONES_DAMAGE,
+        aDroneLoss: 1,
+        bDroneLoss: 0,
+        push: BODY_COLLISION_STRONG_PUSH,
+      };
     }
-    return { aHpDamage: BODY_COLLISION_WITHOUT_DRONES_DAMAGE, bHpDamage: BODY_COLLISION_WITH_DRONES_DAMAGE, aDroneLoss: 0, bDroneLoss: 1, push: BODY_COLLISION_STRONG_PUSH };
+    return {
+      aHpDamage: BODY_COLLISION_WITHOUT_DRONES_DAMAGE,
+      bHpDamage: BODY_COLLISION_WITH_DRONES_DAMAGE,
+      aDroneLoss: 0,
+      bDroneLoss: 1,
+      push: BODY_COLLISION_STRONG_PUSH,
+    };
   }
   applyBodyCollisionDamage(player, hpDamage, droneLoss = 0) {
     const nextDrones = Math.max(0, (player.drones || 0) - droneLoss);
@@ -5428,6 +4041,10 @@ export class GameGateway {
     if (!player?.id || !payload) return;
     this.server?.to(String(player.id)).emit("zone-pvp:collision", payload);
   }
+  private emitCaptureTheFlagCollisionImpulse(player: any, payload: any) {
+    if (!player?.id || !payload) return;
+    this.server?.to(String(player.id)).emit("capture-the-flag:collision", payload);
+  }
 
   private applyCollisionSeparation(
     player: any,
@@ -5444,8 +4061,8 @@ export class GameGateway {
       PLAYER_RADIUS + 18,
       Boolean(room?.zonePvpMode),
     );
-    const width = room?.normalMode ? NORMAL_WORLD_WIDTH : WORLD_WIDTH;
-    const height = room?.normalMode ? NORMAL_WORLD_HEIGHT : WORLD_HEIGHT;
+    const width = Number(room?.worldWidth) || (room?.normalMode ? NORMAL_WORLD_WIDTH : WORLD_WIDTH);
+    const height = Number(room?.worldHeight) || (room?.normalMode ? NORMAL_WORLD_HEIGHT : WORLD_HEIGHT);
     player.x = this.clamp(safe.x, PLAYER_RADIUS, width - PLAYER_RADIUS);
     player.y = this.clamp(safe.y, PLAYER_RADIUS, height - PLAYER_RADIUS);
   }
@@ -5466,12 +4083,12 @@ export class GameGateway {
       PLAYER_RADIUS + 18,
       Boolean(room?.zonePvpMode),
     );
-    const knockbackWorldWidth = room?.normalMode
-      ? NORMAL_WORLD_WIDTH
-      : WORLD_WIDTH;
-    const knockbackWorldHeight = room?.normalMode
-      ? NORMAL_WORLD_HEIGHT
-      : WORLD_HEIGHT;
+    const knockbackWorldWidth = Number(room?.worldWidth) || (
+      room?.normalMode ? NORMAL_WORLD_WIDTH : WORLD_WIDTH
+    );
+    const knockbackWorldHeight = Number(room?.worldHeight) || (
+      room?.normalMode ? NORMAL_WORLD_HEIGHT : WORLD_HEIGHT
+    );
     player.x = this.clamp(
       safe.x,
       PLAYER_RADIUS,
@@ -5555,19 +4172,16 @@ export class GameGateway {
   }
 
   resolvePlayerPairCollision(a, b, room, now, zoneRadius) {
+    if (room?.captureTheFlagMode && String(a?.team || "") === String(b?.team || "")) return;
     const key = this.getCollisionKey(a.id, b.id);
     const lastAt = room.collisionCooldowns.get(key) || 0;
     const rawDx = Number(b.x || 0) - Number(a.x || 0);
     const rawDy = Number(b.y || 0) - Number(a.y || 0);
     const rawDistance = Math.hypot(rawDx, rawDy);
-    const coreHeistTeammates = Boolean(
-      room?.coreHeistMode &&
-      String(a?.team || "cyan") === String(b?.team || "cyan"),
-    );
-    const collisionDistance = coreHeistTeammates
-      ? Math.max(BODY_COLLISION_DISTANCE, CORE_HEIST_TEAMMATE_SOLID_DISTANCE)
-      : BODY_COLLISION_DISTANCE;
-    if (rawDistance > collisionDistance) return;
+    if (rawDistance > BODY_COLLISION_DISTANCE) return;
+
+    if (this.isBattlePrepareLocked(room, now)) return;
+    if (now - lastAt < BODY_COLLISION_COOLDOWN) return;
 
     // Two network players can occasionally reach the exact same coordinate
     // between snapshots. Give that degenerate pair a deterministic direction
@@ -5584,45 +4198,12 @@ export class GameGateway {
       dirY = Math.sin(angle);
     }
 
-    if (coreHeistTeammates) {
-      // Friendly CTF drones are physically solid in every phase. Resolve them
-      // before the prepare lock and use the true drone diameter so Tank escorts
-      // cannot sit inside the same sprite or pass through one another.
-      const overlap = Math.max(0, CORE_HEIST_TEAMMATE_SOLID_DISTANCE - rawDistance);
-      if (overlap > 0) {
-        const separation = Math.max(12, Math.min(42, overlap * 0.58 + 8));
-        this.applyCollisionSeparation(a, -dirX, -dirY, separation, zoneRadius, room);
-        this.applyCollisionSeparation(b, dirX, dirY, separation, zoneRadius, room);
-      }
-      return;
-    }
-
-    if (this.isBattlePrepareLocked(room, now)) return;
-    if (now - lastAt < BODY_COLLISION_COOLDOWN) return;
-
     room.collisionCooldowns.set(key, now);
+    const outcome = this.getBodyCollisionOutcome(a, b);
     const aWasAlive = a.alive;
     const bWasAlive = b.alive;
-    const outcome = room?.coreHeistMode
-      ? {
-          ...this.getBodyCollisionOutcome(a, b),
-          aHpDamage: 0,
-          bHpDamage: 0,
-          aDroneLoss: 0,
-          bDroneLoss: 0,
-          push: BODY_COLLISION_MEDIUM_PUSH,
-        }
-      : this.getBodyCollisionOutcome(a, b);
-
-    if (room?.coreHeistMode) {
-      // Contact counts as a real impact for both sides, so each role follows
-      // the exact escort/armor rules used by launched attack drones.
-      this.applyCoreHeistImpactDamage(room, a, now, "collision");
-      this.applyCoreHeistImpactDamage(room, b, now, "collision");
-    } else {
-      this.applyBodyCollisionDamage(a, outcome.aHpDamage, outcome.aDroneLoss);
-      this.applyBodyCollisionDamage(b, outcome.bHpDamage, outcome.bDroneLoss);
-    }
+    this.applyBodyCollisionDamage(a, outcome.aHpDamage, outcome.aDroneLoss);
+    this.applyBodyCollisionDamage(b, outcome.bHpDamage, outcome.bDroneLoss);
 
     // Battle Royale-style contact physics is deliberately enabled for both PvP
     // modes. The server remains the sole authority; clients only replay the
@@ -5640,7 +4221,7 @@ export class GameGateway {
       this.addSmoothKnockback(a, -dirX, -dirY, outcome.push);
       this.addSmoothKnockback(b, dirX, dirY, outcome.push);
 
-      if (room?.normalMode || room?.zonePvpMode) {
+      if (room?.normalMode || room?.zonePvpMode || room?.captureTheFlagMode) {
         const collisionVersion = Number(room.collisionSequence || 0) + 1;
         room.collisionSequence = collisionVersion;
         a.collisionVersion = collisionVersion;
@@ -5648,10 +4229,16 @@ export class GameGateway {
         a.lastCollisionAt = now;
         b.lastCollisionAt = now;
 
-        const eventName = room.normalMode ? "normal-pvp:collision" : "zone-pvp:collision";
+        const eventName = room.normalMode
+          ? "normal-pvp:collision"
+          : room.captureTheFlagMode
+            ? "capture-the-flag:collision"
+            : "zone-pvp:collision";
         const emit = room.normalMode
           ? this.emitNormalPvpCollisionImpulse.bind(this)
-          : this.emitZonePvpCollisionImpulse.bind(this);
+          : room.captureTheFlagMode
+            ? this.emitCaptureTheFlagCollisionImpulse.bind(this)
+            : this.emitZonePvpCollisionImpulse.bind(this);
         const baseEvent = {
           id: `${eventName}-${collisionVersion}-${key}`,
           serverTime: now,
@@ -5702,16 +4289,7 @@ export class GameGateway {
 
   tryFireProjectile(room, player, now) {
     if (this.isBattlePrepareLocked(room, now)) return;
-
-    // Core Heist Tank launches an orbiting escort drone too. It cannot fire
-    // with zero escorts, so its offensive pressure is tied to orb farming.
-    const isCoreHeistTank = Boolean(
-      room?.coreHeistMode &&
-      this.normalizeCoreHeistRole(player?.heistRole || "attacker") === "tank",
-    );
-    const hasEscortDrone = Number(player?.drones || 0) > 0;
-    if (!hasEscortDrone) return;
-
+    if ((player.drones || 0) <= 0) return;
     if (this.hasActiveAttackDrone(room, player.id)) return;
     const cooldown = this.getFireCooldown(player, now);
     if (now - player.lastFireAt < cooldown) return;
@@ -5728,19 +4306,19 @@ export class GameGateway {
       ? NORMAL_BASE_ATTACK_DRONE_SPEED_MULTIPLIER *
         Math.max(1, Number(player.attackDroneSpeedMultiplier || 1))
       : 1;
+    const captureRoleAttackDroneMultiplier = room?.captureTheFlagMode
+      ? Math.max(0.75, Number(player?.ctfRoleAttackDroneSpeedMultiplier || 1))
+      : 1;
     const speed =
       (PROJECTILE_SPEED +
         (player.projectileSpeedBonus || 0) +
         rapidBonus +
         overclockBonus) *
-      progressionAttackDroneMultiplier;
+      progressionAttackDroneMultiplier *
+      captureRoleAttackDroneMultiplier;
     player.lastFireAt = now;
-
-    // Every Core Heist attack is a launched small drone. Tank visuals can use
-    // the tank projectile flag, but one orbiting escort is always consumed.
     player.drones = Math.max(0, player.drones - 1);
     this.resetDroneProgress(player);
-
     room.projectiles.push({
       id: crypto.randomUUID(),
       ownerId: player.id,
@@ -5755,14 +4333,10 @@ export class GameGateway {
       // transform lane below repeats this tiny skin token for projectiles so
       // receivers never render one cyan frame before metadata arrives.
       skin: normalizeSkin(player.skin || "cyan"),
-      // The renderer can use this flag later for a heavier muzzle/tracer look;
-      // gameplay damage stays identical to the ordinary attack drone.
-      isTankCannon: isCoreHeistTank,
-      damage: room?.coreHeistMode
-        ? CORE_HEIST_PROJECTILE_DAMAGE
-        : (player.berserkUntil && player.berserkUntil > now
+      damage:
+        player.berserkUntil && player.berserkUntil > now
           ? BERSERK_PROJECTILE_DAMAGE
-          : PROJECTILE_DAMAGE),
+          : PROJECTILE_DAMAGE,
       pierceLeft: (player.piercingShots || 0) > 0 ? 3 : 1,
       shieldBreaker: (player.shieldBreakerShots || 0) > 0,
       piercesShield: (player.shieldBreakerShots || 0) > 0,
@@ -5813,23 +4387,22 @@ export class GameGateway {
       for (const target of room.players.values()) {
         if (!target.alive || target.id === projectile.ownerId) continue;
         const owner = room.players.get(projectile.ownerId);
-        if (
-          room?.coreHeistMode &&
-          owner &&
-          String(owner.team || "cyan") === String(target.team || "cyan")
-        ) {
-          continue;
-        }
+        if (room?.captureTheFlagMode && owner && String(owner.team || "") === String(target.team || "")) continue;
         const dx = target.x - projectile.x;
         const dy = target.y - projectile.y;
         if (dx * dx + dy * dy > 105 * 105) continue;
-        // Owner was resolved above so Capture the Flag can ignore friendly fire.
-
         // In both Normal PvP and Zone PvP, the shield absorbs exactly one
         // attack drone completely: no HP damage and no escort-drone loss.
         // It then drops immediately, even against a shield-breaker projectile.
+        const defenderAegisShield = Boolean(
+          room?.captureTheFlagMode &&
+          String(target?.ctfRole || "") === "defense" &&
+          target.shieldActive
+        );
         const progressionShieldIntercept = Boolean(
-          this.usesProgressionPvpCombat(room) && target.shieldActive,
+          this.usesProgressionPvpCombat(room) &&
+          target.shieldActive &&
+          !defenderAegisShield,
         );
         const damageBlocked =
           progressionShieldIntercept ||
@@ -5842,14 +4415,51 @@ export class GameGateway {
           projectile.pierceLeft = 0;
         } else if (!damageBlocked) {
           const hpBefore = Number(target.hp || 0);
-          const heistImpact = room?.coreHeistMode
-            ? this.applyCoreHeistImpactDamage(room, target, now, "projectile")
-            : null;
+          let appliedHpDamage = 0;
+          let removedDrone = false;
+          const targetIsCtfTank = Boolean(
+            room?.captureTheFlagMode &&
+            String(target?.ctfRole || "") === "tank"
+          );
 
-          if (!room?.coreHeistMode) {
+          if (targetIsCtfTank) {
+            const hasOrbitalDrones = Number(target.drones || 0) > 0;
+            const ownerIsAttackDrone = Boolean(
+              owner &&
+              (String(owner?.ctfRole || "") === "attack-alpha" || String(owner?.ctfRole || "") === "attack-bravo")
+            );
+
+            if (hasOrbitalDrones) {
+              if (ownerIsAttackDrone) {
+                if (now > Number(target.ctfTankOrbitalHitResetAt || 0)) {
+                  target.ctfTankOrbitalHitCount = 0;
+                }
+                target.ctfTankOrbitalHitCount = Number(target.ctfTankOrbitalHitCount || 0) + 1;
+                target.ctfTankOrbitalHitResetAt = now + CAPTURE_THE_FLAG_TANK_ORBITAL_HIT_WINDOW_MS;
+
+                if (Number(target.ctfTankOrbitalHitCount || 0) >= CAPTURE_THE_FLAG_TANK_ORBITAL_HITS_REQUIRED) {
+                  target.ctfTankOrbitalHitCount = 0;
+                  target.ctfTankOrbitalHitResetAt = 0;
+                  target.drones = Math.max(0, Number(target.drones || 0) - 1);
+                  target.nextDroneAt = this.getNextDroneAt(target.drones || 0);
+                  target.hp = Math.max(0, hpBefore - CAPTURE_THE_FLAG_TANK_ORBITAL_HP_DAMAGE);
+                  appliedHpDamage = Math.max(0, hpBefore - Number(target.hp || 0));
+                  removedDrone = true;
+                  this.pushCombatEvent(room, target, "ORBITAL SHATTERED · -15 HP", "drone-loss", now);
+                } else {
+                  this.pushCombatEvent(room, target, "ORBITAL ARMOR 1 / 2", "shield", now);
+                }
+              } else {
+                this.pushCombatEvent(room, target, "TANK ORBITAL ARMOR", "shield", now);
+              }
+            } else {
+              target.hp = Math.max(0, hpBefore - CAPTURE_THE_FLAG_TANK_NO_ORBITAL_HIT_DAMAGE);
+              appliedHpDamage = Math.max(0, hpBefore - Number(target.hp || 0));
+            }
+          } else {
             target.hp = Math.max(0, hpBefore - projectile.damage);
+            appliedHpDamage = Math.max(0, hpBefore - Number(target.hp || 0));
 
-            let removedDrone = false;
             if (
               this.usesProgressionPvpCombat(room) &&
               (target.drones || 0) > 0
@@ -5858,33 +4468,32 @@ export class GameGateway {
               target.nextDroneAt = this.getNextDroneAt(target.drones || 0);
               removedDrone = true;
             }
-
-            if (this.usesProgressionPvpCombat(room)) {
-              this.pushCombatEvent(
-                room,
-                target,
-                `-${Math.max(0, hpBefore - target.hp)} HP`,
-                "damage",
-                now,
-              );
-              if (removedDrone) {
-                this.pushCombatEvent(room, target, "-1 DRONE", "drone-loss", now);
-              }
-            }
           }
 
-          if (owner && owner.id !== target.id) {
+          if (owner && owner.id !== target.id && appliedHpDamage > 0) {
             target.lastDamageById = owner.id;
             target.lastDamageAt = now;
           }
-          if (owner && owner.vampireUntil && owner.vampireUntil > now) {
-            const actualDamage = room?.coreHeistMode
-              ? Number(heistImpact?.hpDamage || 0)
-              : Math.max(0, hpBefore - Number(target.hp || 0));
+          if (owner && owner.vampireUntil && owner.vampireUntil > now && appliedHpDamage > 0) {
             owner.hp = Math.min(
               owner.maxHp,
-              owner.hp + Math.floor(actualDamage * VAMPIRE_HEAL_RATIO),
+              owner.hp + Math.floor(appliedHpDamage * VAMPIRE_HEAL_RATIO),
             );
+          }
+
+          if (this.usesProgressionPvpCombat(room)) {
+            if (appliedHpDamage > 0) {
+              this.pushCombatEvent(
+                room,
+                target,
+                `-${appliedHpDamage} HP`,
+                "damage",
+                now,
+              );
+            }
+            if (removedDrone && !targetIsCtfTank) {
+              this.pushCombatEvent(room, target, "-1 DRONE", "drone-loss", now);
+            }
           }
 
           if (target.hp <= 0) {
@@ -5964,6 +4573,7 @@ export class GameGateway {
   }
 
   getRoomEventPrefix(room) {
+    if (room?.captureTheFlagMode) return "capture-the-flag";
     if (room?.normalMode) return "normal-pvp";
     if (room?.zonePvpMode) return "zone-pvp";
     if (room?.battleRoyaleOnlineMode) return "battle-royale-online";
@@ -5985,9 +4595,7 @@ export class GameGateway {
       ...payload,
       collectionSeq: player.collectionSeq,
       serverTime: Date.now(),
-      you: room?.zonePvpMode
-        ? this.serializeZonePvpStatePlayer(room, player)
-        : this.serializePlayer(player),
+      you: this.serializePlayer(player),
     });
   }
 
@@ -6071,19 +4679,14 @@ export class GameGateway {
 
       let collected = 0;
       const collectedOrbIds: string[] = [];
-      const pickupDistance = room?.coreHeistMode
-        ? CORE_HEIST_ORB_COLLECT_DISTANCE
-        : ORB_COLLECT_DISTANCE;
-      const candidates = room?.coreHeistMode
-        ? room.orbs
-        : room.orbSpatialIndex
-          ? this.querySpatialIndex(
-              room.orbSpatialIndex,
-              player.x,
-              player.y,
-              pickupDistance + 180,
-            )
-          : room.orbs;
+      const candidates = room.orbSpatialIndex
+        ? this.querySpatialIndex(
+            room.orbSpatialIndex,
+            player.x,
+            player.y,
+            ORB_COLLECT_DISTANCE + 180,
+          )
+        : room.orbs;
 
       for (const orb of candidates) {
         if (
@@ -6107,8 +4710,8 @@ export class GameGateway {
 
         if (
           endDx * endDx + endDy * endDy >
-            pickupDistance * pickupDistance &&
-          pathDistance > pickupDistance
+            ORB_COLLECT_DISTANCE * ORB_COLLECT_DISTANCE &&
+          pathDistance > ORB_COLLECT_DISTANCE
         ) {
           continue;
         }
@@ -6151,14 +4754,10 @@ export class GameGateway {
         this.ensureNormalOrbDistribution(room, Date.now());
       }
 
-      // Core Heist scans the live resource arrays for pickup validation, so it
-      // never needs a forced full spatial-index rebuild per collected orb.
-      // Refills/indexing happen once on the bounded maintenance cadence instead.
-      if (room?.coreHeistMode) {
-        room.coreHeistLootDirtyAt = Date.now();
-      } else {
-        this.refreshRoomSpatialIndexes(room, Date.now(), true);
-      }
+      // Keep the next collect pass and the next network snapshot in sync with
+      // the authoritative arrays; stale index references caused the old
+      // repeated/missing-count bug.
+      this.refreshRoomSpatialIndexes(room, Date.now(), true);
 
       this.emitWorldItemDelta(room, {
         removedOrbIds: [...collectedIds],
@@ -6176,19 +4775,14 @@ export class GameGateway {
 
       let collected = 0;
       const collectedEnergyIds: string[] = [];
-      const pickupDistance = room?.coreHeistMode
-        ? CORE_HEIST_ENERGY_COLLECT_DISTANCE
-        : ENERGY_CELL_COLLECT_DISTANCE;
-      const candidates = room?.coreHeistMode
-        ? room.energyCells
-        : room.energySpatialIndex
-          ? this.querySpatialIndex(
-              room.energySpatialIndex,
-              player.x,
-              player.y,
-              pickupDistance + 180,
-            )
-          : room.energyCells;
+      const candidates = room.energySpatialIndex
+        ? this.querySpatialIndex(
+            room.energySpatialIndex,
+            player.x,
+            player.y,
+            ENERGY_CELL_COLLECT_DISTANCE + 180,
+          )
+        : room.energyCells;
 
       for (const cell of candidates) {
         if (
@@ -6212,8 +4806,8 @@ export class GameGateway {
 
         if (
           endDx * endDx + endDy * endDy >
-            pickupDistance * pickupDistance &&
-          pathDistance > pickupDistance
+            ENERGY_CELL_COLLECT_DISTANCE * ENERGY_CELL_COLLECT_DISTANCE &&
+          pathDistance > ENERGY_CELL_COLLECT_DISTANCE
         ) {
           continue;
         }
@@ -6263,11 +4857,7 @@ export class GameGateway {
         }
       }
 
-      if (room?.coreHeistMode) {
-        room.coreHeistLootDirtyAt = Date.now();
-      } else {
-        this.refreshRoomSpatialIndexes(room, Date.now(), true);
-      }
+      this.refreshRoomSpatialIndexes(room, Date.now(), true);
       this.emitWorldItemDelta(room, {
         removedEnergyIds: [...collectedIds],
       });
@@ -6452,32 +5042,6 @@ export class GameGateway {
       cores: room.cores.length,
     };
 
-    // Core Heist is not a generic Zone PvP world. The generic branch below
-    // refills until MAX_ORBS / MAX_ENERGY_CELLS and schedules cores, which can
-    // create a growing item payload and eventually stall a match. Keep this
-    // mode strictly at its own bounded targets and never spawn cores here.
-    if (room?.coreHeistMode) {
-      room.cores = [];
-      room.pendingCores = [];
-      room.nextCoreWaveAt = null;
-      this.ensureCoreHeistResources(room, zoneRadius);
-
-      if (
-        itemsBefore.orbs !== room.orbs.length ||
-        itemsBefore.energy !== room.energyCells.length ||
-        itemsBefore.cores !== room.cores.length
-      ) {
-        room.itemSpatialDirty = true;
-      }
-
-      // Static indexes are only an optional optimization for this mode, but a
-      // periodic rebuild keeps every fallback/diagnostic path correct without
-      // doing hundreds of allocations per collected pickup.
-      this.refreshRoomSpatialIndexes(room, now);
-      room.coreHeistLootDirtyAt = 0;
-      return;
-    }
-
     // Normal PvP has a static, oversized play area. Rechecking every item
     // every 16 ms is pure overhead. Shrinking-zone modes prune at a bounded rate.
     if (
@@ -6524,7 +5088,7 @@ export class GameGateway {
       }
     }
 
-    if (room.normalMode || room.battleRoyaleOnlineMode || (room.zonePvpMode && !room.coreHeistMode)) {
+    if (room.normalMode || room.battleRoyaleOnlineMode || room.zonePvpMode) {
       if (room.cores.length > 0) {
         room.nextCoreWaveAt = null;
       } else {
@@ -6549,8 +5113,7 @@ export class GameGateway {
       }
     }
 
-    const localItemRefreshMs = room?.coreHeistMode ? 650 : 1800;
-    if (now - (room.lastLocalItemAt || 0) > localItemRefreshMs) {
+    if (now - (room.lastLocalItemAt || 0) > 1800) {
       room.lastLocalItemAt = now;
       this.ensureLocalItemsAroundPlayers(room, zoneRadius);
     }
@@ -7611,71 +6174,16 @@ export class GameGateway {
     }
   }
 
-  private releaseCoreHeistBotSeat(room: any, now = Date.now()) {
-    if (!room?.coreHeistMode || room.status !== "playing") return null;
-    const humanCountByTeam = { cyan: 0, orange: 0 } as Record<string, number>;
-    for (const unit of room.players.values()) {
-      if (!unit?.isBot) {
-        const team = String(unit?.team || "cyan") === "orange" ? "orange" : "cyan";
-        humanCountByTeam[team] += 1;
-      }
-    }
-
-    const bots = [...room.players.values()]
-      .filter((unit: any) => Boolean(unit?.isBot))
-      .sort((a: any, b: any) => {
-        const aTeam = String(a?.team || "cyan") === "orange" ? "orange" : "cyan";
-        const bTeam = String(b?.team || "cyan") === "orange" ? "orange" : "cyan";
-        const teamBias = humanCountByTeam[aTeam] - humanCountByTeam[bTeam];
-        if (teamBias !== 0) return teamBias;
-        const aRole = this.normalizeCoreHeistRole(a?.heistRole || "attacker");
-        const bRole = this.normalizeCoreHeistRole(b?.heistRole || "attacker");
-        const roleOrder = { attacker: 0, defender: 1, tank: 2 } as Record<string, number>;
-        return roleOrder[aRole] - roleOrder[bRole];
-      });
-    const bot = bots[0] || null;
-    if (!bot) return null;
-
-    this.dropCoreHeistFlag(room, bot, now);
-    room.players.delete(bot.id);
-    room.projectiles = (room.projectiles || []).filter((projectile: any) => String(projectile?.ownerId || "") !== String(bot.id));
-    room.projectileSpatialIndex = null;
-    room.zoneNetIds?.delete?.(String(bot.id));
-    return {
-      team: String(bot?.team || "cyan") === "orange" ? "orange" : "cyan",
-      role: this.normalizeCoreHeistRole(bot?.heistRole || "attacker"),
-    };
-  }
-
   findOrCreateZonePvpRoom(
     participantId: string | null = null,
     userId: string | null = null,
-    coreHeistMode = false,
   ) {
-    const maxPlayers = coreHeistMode ? CORE_HEIST_ROOM_MAX_PLAYERS : ZONE_PVP_ROOM_MAX_PLAYERS;
-
-    // Core Heist is one persistent session. During a running round a newly
-    // connected human replaces one bot instead of creating a second hidden CTF
-    // room with another match timer.
-    if (coreHeistMode) {
-      const activeRoom = [...this.zonePvpRooms.values()]
-        .filter((room: any) =>
-          room?.coreHeistMode &&
-          room?.status === "playing" &&
-          !room?.closedAt &&
-          [...room.players.values()].some((unit: any) => unit?.isBot),
-        )
-        .sort((a: any, b: any) => Number(a?.matchStartedAt || 0) - Number(b?.matchStartedAt || 0))[0];
-      if (activeRoom) return activeRoom;
-    }
-
     const joinableRoom = this.selectMostPopulatedJoinableRoom(
       this.zonePvpRooms,
       (room) =>
-        Boolean(room?.coreHeistMode) === Boolean(coreHeistMode) &&
         (room.status === "waiting" || room.status === "countdown") &&
         !room.locked &&
-        room.players.size < maxPlayers &&
+        room.players.size < ZONE_PVP_ROOM_MAX_PLAYERS &&
         !(
           participantId &&
           room.departedParticipantIds instanceof Set &&
@@ -7691,7 +6199,7 @@ export class GameGateway {
     if (joinableRoom) return joinableRoom;
 
     const room = {
-      id: `${coreHeistMode ? "core-heist" : "zone-pvp"}-${crypto.randomUUID()}`,
+      id: `zone-pvp-${crypto.randomUUID()}`,
       status: "waiting",
       locked: false,
       // Monotonic version lets the client discard stale volatile countdown packets.
@@ -7708,9 +6216,6 @@ export class GameGateway {
       zoneLoopErrorCount: 0,
       lastZoneLoopErrorAt: 0,
       lastZoneLoopErrorLogAt: 0,
-      coreHeistStepErrorCount: 0,
-      lastCoreHeistStepErrorAt: 0,
-      lastCoreHeistStepErrorLogAt: 0,
       lastNoAliveAt: null,
       players: new Map(),
       orbs: Array.from({ length: MAX_ORBS }, () =>
@@ -7730,7 +6235,6 @@ export class GameGateway {
       emptySince: Date.now(),
       matchStartedAt: null,
       battlePrepareUntil: null,
-      heistRoleRevealUntil: null,
       battleBeginFlashUntil: null,
       matchHadMultiplePlayers: false,
       lastCoreWaveAt: 0,
@@ -7756,8 +6260,6 @@ export class GameGateway {
       abandonedByAllHumansAt: null,
       collisionCooldowns: new Map(),
       zonePvpMode: true,
-      coreHeistMode: Boolean(coreHeistMode),
-      heist: coreHeistMode ? this.createCoreHeistState(Date.now()) : null,
     };
 
     this.zonePvpRooms.set(room.id, room);
@@ -7814,14 +6316,8 @@ export class GameGateway {
 
       // A voluntary departure cannot become a win, but its personal best-kill
       // result from this round must still be retained.
-      if (room.status === "playing" && !room?.coreHeistMode) {
+      if (room.status === "playing") {
         this.recordZonePvpParticipant(player, null);
-      }
-
-      // A carrier who leaves drops the objective at the last authoritative
-      // position before the player entity disappears.
-      if (room?.coreHeistMode && player) {
-        this.dropCoreHeistFlag(room, player, now);
       }
 
       // An explicit EXIT TO MENU is authoritative: remove the main drone,
@@ -7873,34 +6369,23 @@ export class GameGateway {
       // alive and this room cannot be reused as a new lobby.
       if (humanCount === 0) {
         room.abandonedByAllHumansAt = now;
-        if (room?.coreHeistMode && room.status === "playing") {
-          // Keep the exact same Core Heist session alive. A later human joins
-          // this room by replacing a bot; only score 3/3 or the match timer can
-          // end the round.
-          room.lastBroadcastAt = 0;
-        } else {
-          this.finishZonePvpMatch(room, null, now, "all-real-players-left");
-          this.closeZonePvpRoom(room, now, "all-real-players-left");
-          return;
-        }
+        this.finishZonePvpMatch(room, null, now, "all-real-players-left");
+        this.closeZonePvpRoom(room, now, "all-real-players-left");
+        return;
       }
 
       // Only the pre-match lobby may go back to waiting. A live round stays
       // one-way and never becomes a new lobby after somebody exits.
-      if (
-        room.status === "countdown" &&
-        connectedHumanCount < (room?.coreHeistMode ? CORE_HEIST_ROOM_MIN_PLAYERS : ZONE_PVP_ROOM_MIN_PLAYERS)
-      ) {
+      if (room.status === "countdown" && connectedHumanCount < ZONE_PVP_ROOM_MIN_PLAYERS) {
         room.status = "waiting";
         room.locked = false;
         room.countdownStartedAt = null;
         room.roundId = null;
         room.phaseVersion = Number(room.phaseVersion || 0) + 1;
       } else if (room.status === "playing") {
-        // Capture the Flag never resolves by last drone alive; it resolves only by
-        // extracting cores or the match clock. Zone PvP keeps its normal rule.
-        if (room?.coreHeistMode) this.updateCoreHeistObjective(room, now);
-        else this.updateZonePvpWinCondition(room, now);
+        // Remaining humans and bots continue normally. This can only finish
+        // the existing round; it never reopens matchmaking.
+        this.updateZonePvpWinCondition(room, now);
       }
 
       // Push one authoritative full state immediately so all players, HUDs and
@@ -7953,7 +6438,6 @@ export class GameGateway {
   }
 
   getZonePvpZoneRadius(room) {
-    if (room?.coreHeistMode) return Math.max(WORLD_WIDTH, WORLD_HEIGHT);
     if (!room.matchStartedAt) return ZONE_START_RADIUS;
     const elapsed = Math.max(0, Date.now() - room.matchStartedAt);
     const progress = Math.min(1, elapsed / ZONE_PVP_ZONE_SHRINK_DURATION);
@@ -7990,31 +6474,22 @@ export class GameGateway {
         ? VIEW_DISTANCE + 1700
         : VIEW_DISTANCE + ZONE_TRANSFORM_RANGE_PADDING;
 
-      const nearbyUnits = room?.coreHeistMode
-        ? units.filter(
-            (other: any) =>
-              other.id !== viewer.id &&
-              (viewer.alive !== false || other.alive !== false),
-          )
-        : this.querySpatialIndex(
-            unitSpatialIndex,
-            viewAnchor.x,
-            viewAnchor.y,
-            range,
-          ).filter(
-            (other: any) =>
-              other.id !== viewer.id &&
-              (viewer.alive !== false || other.alive !== false),
-          );
+      const nearbyUnits = this.querySpatialIndex(
+        unitSpatialIndex,
+        viewAnchor.x,
+        viewAnchor.y,
+        range,
+      ).filter(
+        (other: any) =>
+          other.id !== viewer.id &&
+          (viewer.alive !== false || other.alive !== false),
+      );
 
-      const playerRows = (room?.coreHeistMode
-        ? nearbyUnits.slice(0, CORE_HEIST_ROOM_MAX_PLAYERS)
-        : this.filterNear(
-            viewAnchor,
-            nearbyUnits,
-            range,
-            ZONE_TRANSFORM_PLAYER_LIMIT,
-          )
+      const playerRows = this.filterNear(
+        viewAnchor,
+        nearbyUnits,
+        range,
+        ZONE_TRANSFORM_PLAYER_LIMIT,
       ).map((unit: any) => {
         const flags =
           (unit.isMoving ? 1 : 0) |
@@ -8031,22 +6506,6 @@ export class GameGateway {
           Math.round(Number(unit.moveAngle || 0) * 10000) / 10000,
           flags,
           Math.max(0, Math.min(MAX_DRONES, Number(unit.drones || 0))),
-          // Index 8: skin — critical for CoreHeist role variants (heist-attacker-cyan etc).
-          // Without this, bots appear as plain cyan drones until the slow state packet
-          // arrives. The skin string is short and worth the extra bytes.
-          unit.skin || "cyan",
-          // Core Heist embeds stable identity/role/HP in the hot lane. This
-          // removes the metadata race that could make a distant bot vanish when
-          // a slow state packet was delayed under load.
-          ...(room?.coreHeistMode
-            ? [
-                String(unit.id || ""),
-                String(unit.team || "cyan"),
-                this.normalizeCoreHeistRole(unit.heistRole || "attacker"),
-                Math.round(Number(unit.hp || 0) * 10) / 10,
-                Math.round(Number(unit.maxHp || START_HP) * 10) / 10,
-              ]
-            : []),
         ];
       });
 
@@ -8092,15 +6551,12 @@ export class GameGateway {
     const players = [...room.players.values()];
     const alivePlayers = players.filter((player) => player.alive);
     const zoneRadius = this.getZonePvpZoneRadius(room);
-    const zoneCountdownDuration = room?.coreHeistMode
-      ? CORE_HEIST_START_COUNTDOWN_MS
-      : ZONE_PVP_START_COUNTDOWN_MS;
     const zonePvpCountdown =
       room.status === "countdown" && room.countdownStartedAt
         ? Math.max(
             1,
             Math.ceil(
-              (zoneCountdownDuration - (now - room.countdownStartedAt)) /
+              (ZONE_PVP_START_COUNTDOWN_MS - (now - room.countdownStartedAt)) /
                 1000,
             ),
           )
@@ -8155,20 +6611,16 @@ export class GameGateway {
         ? secondsUntilCoreDrop
         : null;
 
-    if (includeStaticState && !room.coreHeistMode) {
-      const minimapOrbStride = 3;
-      const minimapOrbLimit = 120;
-      const minimapEnergyStride = 2;
-      const minimapEnergyLimit = 60;
+    if (includeStaticState) {
       minimapOrbs = [...room.orbs]
         .sort((a, b) => a.id.localeCompare(b.id))
-        .filter((_, index) => index % minimapOrbStride === 0)
-        .slice(0, minimapOrbLimit);
+        .filter((_, index) => index % 3 === 0)
+        .slice(0, 120);
 
       minimapEnergyCells = [...room.energyCells]
         .sort((a, b) => a.id.localeCompare(b.id))
-        .filter((_, index) => index % minimapEnergyStride === 0)
-        .slice(0, minimapEnergyLimit);
+        .filter((_, index) => index % 2 === 0)
+        .slice(0, 60);
 
       minimapCores = [...room.cores]
         .sort((a, b) => a.id.localeCompare(b.id))
@@ -8200,15 +6652,9 @@ export class GameGateway {
       }
 
       const viewAnchor = spectatorTarget || player;
-      // Nearby loot is intentionally sampled, not sent in every 140 ms Core
-      // Heist snapshot. Sending hundreds of objects every snapshot can build a
-      // Socket.IO queue after a minute or two and freeze time/transforms.
-      const viewportItemInterval = room?.coreHeistMode
-        ? CORE_HEIST_VIEWPORT_ITEM_STATE_INTERVAL_MS
-        : VIEWPORT_ITEM_STATE_INTERVAL_MS;
       const includeViewportItems =
         !player.lastViewportItemStateAt ||
-        now - player.lastViewportItemStateAt >= viewportItemInterval;
+        now - player.lastViewportItemStateAt >= VIEWPORT_ITEM_STATE_INTERVAL_MS;
       if (includeViewportItems) player.lastViewportItemStateAt = now;
 
       // Static definitions (name, skin, netId) are resent occasionally or on a
@@ -8243,14 +6689,6 @@ export class GameGateway {
           ).map((other) => this.serializeZonePvpStatePlayer(room, other))
         : undefined;
 
-      // Tactical mini-map receives all squadmates even when they are outside
-      // the camera/renderer culling range.
-      const heistTeammates = room.coreHeistMode
-        ? this.getCoreHeistTeamPlayers(room, String(player?.team || "cyan"))
-            .filter((other: any) => String(other?.id || "") !== String(player?.id || ""))
-            .map((other: any) => this.serializeZonePvpStatePlayer(room, other))
-        : undefined;
-
       const payload: any = {
         serverNow: now,
         roomId: room.id,
@@ -8258,9 +6696,6 @@ export class GameGateway {
         phaseVersion: Number(room.phaseVersion || 0),
         status: room.status,
         countdown: zonePvpCountdown,
-        countdownEndsAt: room.status === "countdown" && room.countdownStartedAt
-          ? Number(room.countdownStartedAt) + zoneCountdownDuration
-          : null,
         coreDropCountdown,
         winnerId: room.winnerId,
         winnerName: room.winnerName,
@@ -8271,23 +6706,18 @@ export class GameGateway {
             ? this.getZoneConnectedHumanPlayerCount(room)
             : this.getZoneHumanPlayerCount(room),
         botCount: this.getZoneBotCount(room),
-        minPlayers: room?.coreHeistMode ? CORE_HEIST_ROOM_MIN_PLAYERS : ZONE_PVP_ROOM_MIN_PLAYERS,
-        maxPlayers: room?.coreHeistMode ? CORE_HEIST_ROOM_MAX_PLAYERS : ZONE_PVP_ROOM_MAX_PLAYERS,
-        mode: room?.coreHeistMode ? CORE_HEIST_MODE : "zone-pvp",
-        heist: this.serializeCoreHeist(room, player, now),
+        minPlayers: ZONE_PVP_ROOM_MIN_PLAYERS,
+        maxPlayers: ZONE_PVP_ROOM_MAX_PLAYERS,
         worldWidth: WORLD_WIDTH,
         worldHeight: WORLD_HEIGHT,
         safeZoneRadius: zoneRadius,
-        zoneShrinkDuration: room?.coreHeistMode ? 0 : ZONE_PVP_ZONE_SHRINK_DURATION,
+        zoneShrinkDuration: ZONE_PVP_ZONE_SHRINK_DURATION,
         matchStartedAt: room.matchStartedAt,
         battlePrepareUntil: room.battlePrepareUntil || null,
         battlePrepareRemainingMs,
-        heistRoleRevealUntil: room?.coreHeistMode ? (room.heistRoleRevealUntil || null) : null,
-        heistRoleRevealRemainingMs: room?.coreHeistMode && room.heistRoleRevealUntil ? Math.max(0, room.heistRoleRevealUntil - now) : 0,
         battleBeginFlashUntil: room.battleBeginFlashUntil || null,
         you: this.serializeZonePvpStatePlayer(room, player),
         players: visiblePlayers,
-        heistTeammates,
         spectatorTargetId: spectatorTarget?.id || null,
         spectatingPlayer: spectatorTarget
           ? this.serializeZonePvpStatePlayer(room, spectatorTarget)
@@ -8326,38 +6756,15 @@ export class GameGateway {
       };
 
       if (includeViewportItems) {
-        const visibleOrbLimit = room.coreHeistMode ? CORE_HEIST_VIEWPORT_ORB_LIMIT : 140;
-        const visibleEnergyLimit = room.coreHeistMode ? CORE_HEIST_VIEWPORT_ENERGY_LIMIT : 30;
-
-        if (room.coreHeistMode) {
-          // Do not depend on a cached index for the 4v4 resource lane. A full
-          // exact scan of roughly one thousand static items is cheap here and
-          // guarantees that nearby world pickups arrive after spawn, collect
-          // and deployment without any stale-index gaps.
-          payload.orbs = this.filterNear(
-            viewAnchor,
-            room.orbs,
-            VIEW_DISTANCE + 720,
-            visibleOrbLimit,
-          );
-          payload.energyCells = this.filterNear(
-            viewAnchor,
-            room.energyCells,
-            VIEW_DISTANCE + 720,
-            visibleEnergyLimit,
-          );
-          payload.cores = this.filterNear(viewAnchor, room.cores, VIEW_DISTANCE + 600, 8);
-        } else {
-          payload.orbs = room.orbSpatialIndex
-            ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, visibleOrbLimit)
-            : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, visibleOrbLimit);
-          payload.energyCells = room.energySpatialIndex
-            ? this.filterNearIndexed(viewAnchor, room.energySpatialIndex, VIEW_DISTANCE, visibleEnergyLimit)
-            : this.filterNear(viewAnchor, room.energyCells, VIEW_DISTANCE, visibleEnergyLimit);
-          payload.cores = room.coreSpatialIndex
-            ? this.filterNearIndexed(viewAnchor, room.coreSpatialIndex, VIEW_DISTANCE + 600, 8)
-            : this.filterNear(viewAnchor, room.cores, VIEW_DISTANCE + 600, 8);
-        }
+        payload.orbs = room.orbSpatialIndex
+          ? this.filterNearIndexed(viewAnchor, room.orbSpatialIndex, VIEW_DISTANCE, 140)
+          : this.filterNear(viewAnchor, room.orbs, VIEW_DISTANCE, 140);
+        payload.energyCells = room.energySpatialIndex
+          ? this.filterNearIndexed(viewAnchor, room.energySpatialIndex, VIEW_DISTANCE, 30)
+          : this.filterNear(viewAnchor, room.energyCells, VIEW_DISTANCE, 30);
+        payload.cores = room.coreSpatialIndex
+          ? this.filterNearIndexed(viewAnchor, room.coreSpatialIndex, VIEW_DISTANCE + 600, 8)
+          : this.filterNear(viewAnchor, room.cores, VIEW_DISTANCE + 600, 8);
       }
 
       if (includeStaticState) {
@@ -8548,11 +6955,6 @@ export class GameGateway {
       for (const player of alive) {
         this.ensureNormalEnergyCellsNearPlayer(room, player);
       }
-      return;
-    }
-
-    if (room?.coreHeistMode) {
-      this.ensureCoreHeistResources(room, zoneRadius);
       return;
     }
 
@@ -8839,4 +7241,1673 @@ export class GameGateway {
   clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
   }
+
+
+  // ===========================================================================
+  // CAPTURE THE FLAG 4v4 — isolated room/session implementation
+  // ===========================================================================
+  @SubscribeMessage("capture-the-flag:join")
+  handleCaptureTheFlagJoin(@ConnectedSocket() client: Socket, @MessageBody() data: any) {
+    this.removePlayer(client.id);
+    this.removeNormalPlayer(client.id);
+    this.removeBattleRoyaleOnlinePlayer(client.id);
+    this.removeZonePvpPlayer(client.id, { explicit: true });
+    this.removeCaptureTheFlagPlayer(client.id, "rejoin");
+
+    const room = this.findOrCreateCaptureTheFlagRoom();
+    const team = this.assignCaptureTheFlagTeam(room);
+    const spawn = this.getCaptureTheFlagSpawn(room, team, this.getCaptureTheFlagTeamPlayers(room, team).length);
+    const player = this.createCaptureTheFlagPlayer({
+      id: client.id,
+      data,
+      team,
+      x: spawn.x,
+      y: spawn.y,
+      isBot: false,
+    });
+
+    room.players.set(player.id, player);
+    this.captureTheFlagSocketRoom.set(player.id, room.id);
+    client.join(room.id);
+
+    const joinedAt = Date.now();
+    if (room.status === "waiting") {
+      room.status = "countdown";
+      room.countdownStartedAt = joinedAt;
+      room.phaseVersion = Number(room.phaseVersion || 0) + 1;
+    }
+
+    // The lobby remains open for the whole ten-second real-player window,
+    // except when every one of the eight seats is already occupied by humans.
+    // In that case we start immediately and never add AI to this round.
+    const realPilotCount = [...room.players.values()].filter((entry: any) => !entry?.isBot).length;
+    if (room.status === "countdown" && realPilotCount >= CAPTURE_THE_FLAG_ROOM_MAX_PLAYERS) {
+      this.startCaptureTheFlagRound(room, joinedAt);
+    }
+
+    this.emitCaptureTheFlagJoined(client, room, player);
+    this.broadcastCaptureTheFlagState(room, joinedAt, true);
+  }
+
+  @SubscribeMessage("capture-the-flag:leave")
+  handleCaptureTheFlagLeave(@ConnectedSocket() client: Socket) {
+    this.removeCaptureTheFlagPlayer(client.id, "leave");
+    client.emit("capture-the-flag:left");
+  }
+
+  @SubscribeMessage("capture-the-flag:input")
+  handleCaptureTheFlagInput(@ConnectedSocket() client: Socket, @MessageBody() input: any) {
+    const room = this.getCaptureTheFlagRoomBySocket(client.id);
+    const player = room?.players?.get(client.id);
+    if (!room || !player || player.isBot || room.status !== "playing" || !player.alive) return;
+
+    const now = Date.now();
+    const safeSeq = Math.max(0, Math.floor(Number(input?.seq || 0)));
+    player.input = {
+      w: Boolean(input?.w),
+      a: Boolean(input?.a),
+      s: Boolean(input?.s),
+      d: Boolean(input?.d),
+      mobileMove: Boolean(input?.mobileMove),
+      moveX: this.clamp(Number(input?.moveX || 0), -1, 1),
+      moveY: this.clamp(Number(input?.moveY || 0), -1, 1),
+      attacking: Boolean(input?.attacking),
+      shield: Boolean(input?.shield),
+      mouseX: this.sanitizeCoordinate(input?.mouseX, player.x, 0, CAPTURE_THE_FLAG_WORLD_WIDTH),
+      mouseY: this.sanitizeCoordinate(input?.mouseY, player.y, 0, CAPTURE_THE_FLAG_WORLD_HEIGHT),
+    };
+    player.lastInputReceivedAt = now;
+    player.lastSeenAt = now;
+    player.lastProcessedInputSeq = Math.max(Number(player.lastProcessedInputSeq || 0), safeSeq);
+  }
+
+  @SubscribeMessage("capture-the-flag:input-stop")
+  handleCaptureTheFlagInputStop(@ConnectedSocket() client: Socket, @MessageBody() payload: any) {
+    const room = this.getCaptureTheFlagRoomBySocket(client.id);
+    const player = room?.players?.get(client.id);
+    if (!room || !player || player.isBot) return;
+    player.input = {};
+    player.lastSeenAt = Date.now();
+    player.lastInputReceivedAt = Date.now();
+    const safeSeq = Math.max(0, Math.floor(Number(payload?.seq || 0)));
+    player.lastProcessedInputSeq = Math.max(Number(player.lastProcessedInputSeq || 0), safeSeq);
+  }
+
+  @SubscribeMessage("capture-the-flag:resync")
+  handleCaptureTheFlagResync(@ConnectedSocket() client: Socket) {
+    const room = this.getCaptureTheFlagRoomBySocket(client.id);
+    const player = room?.players?.get(client.id);
+    if (!room || !player) {
+      client.emit("capture-the-flag:resume-missing");
+      return;
+    }
+    this.emitCaptureTheFlagJoined(client, room, player);
+  }
+
+  @SubscribeMessage("capture-the-flag:session-check")
+  handleCaptureTheFlagSessionCheck(@ConnectedSocket() client: Socket) {
+    const room = this.getCaptureTheFlagRoomBySocket(client.id);
+    client.emit("capture-the-flag:session-check:result", {
+      active: Boolean(room),
+      roomId: room?.id || null,
+      status: room?.status || "closed",
+    });
+  }
+
+  private findOrCreateCaptureTheFlagRoom() {
+    const joinable = this.selectMostPopulatedJoinableRoom(
+      this.captureTheFlagRooms,
+      (room) => Boolean(
+        room &&
+        !room.closedAt &&
+        !room.locked &&
+        (room.status === "waiting" || room.status === "countdown") &&
+        room.players.size < CAPTURE_THE_FLAG_ROOM_MAX_PLAYERS,
+      ),
+    );
+    if (joinable) return joinable;
+
+    const now = Date.now();
+    const room: any = {
+      id: `capture-the-flag-${crypto.randomUUID()}`,
+      captureTheFlagMode: true,
+      status: "waiting",
+      locked: false,
+      roundStarted: false,
+      roundId: null,
+      phaseVersion: 1,
+      worldWidth: CAPTURE_THE_FLAG_WORLD_WIDTH,
+      worldHeight: CAPTURE_THE_FLAG_WORLD_HEIGHT,
+      players: new Map(),
+      projectiles: [],
+      orbs: [],
+      energyCells: [],
+      cores: [],
+      pendingCores: [],
+      combatEvents: [],
+      combatEventSequence: 0,
+      collisionCooldowns: new Map(),
+      countdownStartedAt: null,
+      matchStartedAt: null,
+      matchEndsAt: null,
+      battlePrepareUntil: null,
+      battleBeginFlashUntil: null,
+      winnerId: null,
+      winnerName: null,
+      winnerTeam: null,
+      finishReason: null,
+      finishedAt: null,
+      closingAt: null,
+      closedAt: null,
+      createdAt: now,
+      emptySince: null,
+      lastBroadcastAt: 0,
+      lastTransformBroadcastAt: 0,
+      score: { cyan: 0, orange: 0 },
+      eventSequence: 0,
+      ctfEvents: [],
+      bases: [
+        {
+          id: "cyan-base",
+          team: "cyan",
+          label: "BLUE BASE",
+          x: CAPTURE_THE_FLAG_BASE_X_OFFSET,
+          y: CAPTURE_THE_FLAG_WORLD_HEIGHT / 2,
+          radius: CAPTURE_THE_FLAG_BASE_RADIUS,
+          perimeterRadius: CAPTURE_THE_FLAG_BASE_PERIMETER_RADIUS,
+        },
+        {
+          id: "orange-base",
+          team: "orange",
+          label: "RED BASE",
+          x: CAPTURE_THE_FLAG_WORLD_WIDTH - CAPTURE_THE_FLAG_BASE_X_OFFSET,
+          y: CAPTURE_THE_FLAG_WORLD_HEIGHT / 2,
+          radius: CAPTURE_THE_FLAG_BASE_RADIUS,
+          perimeterRadius: CAPTURE_THE_FLAG_BASE_PERIMETER_RADIUS,
+        },
+      ],
+      flags: [],
+    };
+
+    room.flags = room.bases.map((base: any) => ({
+      id: `${base.team}-flag`,
+      team: base.team,
+      homeX: base.x,
+      homeY: base.y,
+      x: base.x,
+      y: base.y,
+      status: "home",
+      carrierId: null,
+      carrierName: null,
+      carrierTeam: null,
+    }));
+
+    for (let index = 0; index < CAPTURE_THE_FLAG_ORB_TARGET; index += 1) {
+      room.orbs.push(this.createCaptureTheFlagOrb());
+    }
+    for (let index = 0; index < CAPTURE_THE_FLAG_ENERGY_TARGET; index += 1) {
+      room.energyCells.push(this.createCaptureTheFlagEnergyCell());
+    }
+    room.itemSpatialDirty = true;
+    this.refreshRoomSpatialIndexes(room, now, true);
+    this.captureTheFlagRooms.set(room.id, room);
+    return room;
+  }
+
+  private createCaptureTheFlagOrb() {
+    const margin = CAPTURE_THE_FLAG_BOT_WORLD_MARGIN;
+    return {
+      id: crypto.randomUUID(),
+      // Keep new CTF resources inside the same safe inner arena used by the
+      // tactical AI. Nobody is tempted to farm a pickup directly at the wall.
+      x: this.clamp(
+        margin + Math.random() * (CAPTURE_THE_FLAG_WORLD_WIDTH - margin * 2),
+        margin,
+        CAPTURE_THE_FLAG_WORLD_WIDTH - margin,
+      ),
+      y: this.clamp(
+        margin + Math.random() * (CAPTURE_THE_FLAG_WORLD_HEIGHT - margin * 2),
+        margin,
+        CAPTURE_THE_FLAG_WORLD_HEIGHT - margin,
+      ),
+      color: COLORS[Math.floor(Math.random() * COLORS.length)] || "cyan",
+    };
+  }
+
+  private createCaptureTheFlagEnergyCell() {
+    const margin = CAPTURE_THE_FLAG_BOT_WORLD_MARGIN + 80;
+    return {
+      id: crypto.randomUUID(),
+      x: this.clamp(
+        margin + Math.random() * (CAPTURE_THE_FLAG_WORLD_WIDTH - margin * 2),
+        margin,
+        CAPTURE_THE_FLAG_WORLD_WIDTH - margin,
+      ),
+      y: this.clamp(
+        margin + Math.random() * (CAPTURE_THE_FLAG_WORLD_HEIGHT - margin * 2),
+        margin,
+        CAPTURE_THE_FLAG_WORLD_HEIGHT - margin,
+      ),
+    };
+  }
+
+  private createCaptureTheFlagPlayer({
+    id,
+    data = {},
+    team,
+    x,
+    y,
+    isBot,
+    index = 0,
+  }: any) {
+    const username = isBot
+      ? `${ZONE_PVP_BOT_NAMES[index % ZONE_PVP_BOT_NAMES.length]} ${index + 1}`
+      : String(data?.username || (data?.isGuest ? "Guest" : "Player")).slice(0, 18);
+    const skin = isBot
+      ? ZONE_PVP_BOT_SKINS[index % ZONE_PVP_BOT_SKINS.length]
+      : normalizeSkin(data?.isGuest ? "cyan" : data?.skin);
+    return {
+      id,
+      userId: isBot || data?.isGuest ? null : data?.userId || null,
+      isGuest: Boolean(data?.isGuest),
+      isBot: Boolean(isBot),
+      username,
+      skin,
+      team,
+      x,
+      y,
+      prevX: x,
+      prevY: y,
+      hp: START_HP,
+      maxHp: START_HP,
+      energy: START_ENERGY,
+      drones: 0,
+      progress: 0,
+      nextDroneAt: DRONE_REQUIREMENTS[0],
+      totalCollected: 0,
+      kills: 0,
+      killStreak: 0,
+      alive: true,
+      input: {},
+      lastSeenAt: Date.now(),
+      lastInputReceivedAt: Date.now(),
+      lastEnergyDrainAt: Date.now(),
+      lastFireAt: 0,
+      lastShieldAt: 0,
+      shieldActive: false,
+      shieldUntil: 0,
+      moveSpeedMultiplier: 1,
+      attackDroneSpeedMultiplier: 1,
+      killAttackSpeedMultiplier: 1,
+      attackCooldownMultiplier: 1,
+      botNextPlanAt: 0,
+      botFireCooldown: isBot ? 840 : FIRE_COOLDOWN,
+      // These are CTF-only tactical assignments. They never affect the
+      // Normal/Zone/Battle Royale bot planners.
+      ctfBotSlot: Number(index || 0),
+      ctfRole: null,
+      ctfRoleBaseMaxHp: START_HP,
+      // Tank orbital armor charges: two incoming Attack Drone impacts within
+      // the window are required to remove one orbital escort.
+      ctfTankOrbitalHitCount: 0,
+      ctfTankOrbitalHitResetAt: 0,
+      // Defender Aegis pulse state is server-authoritative and never exists in
+      // Normal / Zone / Battle Royale rooms.
+      ctfAegisPulseAt: 0,
+      aegisSuppressedUntil: 0,
+      carryingFlagTeam: null,
+      respawnAt: 0,
+      deathCount: 0,
+      spectatorOnly: false,
+    };
+  }
+
+  private getCaptureTheFlagRoomBySocket(socketId: string) {
+    const roomId = this.captureTheFlagSocketRoom.get(String(socketId));
+    return roomId ? this.captureTheFlagRooms.get(roomId) || null : null;
+  }
+
+  private getCaptureTheFlagTeamPlayers(room: any, team: string) {
+    return [...(room?.players?.values?.() || [])].filter((player: any) => String(player?.team || "cyan") === team);
+  }
+
+  private assignCaptureTheFlagTeam(room: any) {
+    const cyanCount = this.getCaptureTheFlagTeamPlayers(room, "cyan").length;
+    const orangeCount = this.getCaptureTheFlagTeamPlayers(room, "orange").length;
+    return cyanCount <= orangeCount ? "cyan" : "orange";
+  }
+
+  private getCaptureTheFlagBase(room: any, team: string) {
+    return (room?.bases || []).find((base: any) => String(base?.team || "") === String(team || "")) || null;
+  }
+
+  private getCaptureTheFlagSpawn(room: any, team: string, slot = 0) {
+    const base = this.getCaptureTheFlagBase(room, team);
+    const offsets = [
+      { x: 0, y: 0 },
+      { x: 180, y: -180 },
+      { x: 180, y: 180 },
+      { x: 310, y: 0 },
+    ];
+    const offset = offsets[Math.abs(Number(slot || 0)) % offsets.length];
+    const direction = team === "orange" ? -1 : 1;
+    return {
+      x: this.clamp(Number(base?.x || CAPTURE_THE_FLAG_WORLD_WIDTH / 2) + direction * offset.x, PLAYER_RADIUS, CAPTURE_THE_FLAG_WORLD_WIDTH - PLAYER_RADIUS),
+      y: this.clamp(Number(base?.y || CAPTURE_THE_FLAG_WORLD_HEIGHT / 2) + offset.y, PLAYER_RADIUS, CAPTURE_THE_FLAG_WORLD_HEIGHT - PLAYER_RADIUS),
+    };
+  }
+
+  private updateCaptureTheFlagRoomStatus(room: any, now: number) {
+    if (!room || room.status === "finished" || room.status === "playing") return;
+    if (room.status !== "countdown") return;
+
+    const humans = [...room.players.values()].filter((player: any) => !player.isBot);
+    if (!humans.length) {
+      this.closeCaptureTheFlagRoom(room, "empty-lobby");
+      return;
+    }
+
+    // Full real 4v4 lobbies never wait for the remaining seconds.
+    if (humans.length >= CAPTURE_THE_FLAG_ROOM_MAX_PLAYERS) {
+      this.startCaptureTheFlagRound(room, now);
+      return;
+    }
+
+    // Otherwise the lobby stays human-only for the full ten seconds. Only when
+    // that window closes do the remaining seats become authoritative AI seats.
+    if (now - Number(room.countdownStartedAt || now) < CAPTURE_THE_FLAG_START_COUNTDOWN_MS) return;
+    this.startCaptureTheFlagRound(room, now);
+  }
+
+  private startCaptureTheFlagRound(room: any, now: number) {
+    if (!room || room.status === "playing" || room.status === "finished") return;
+
+    this.fillCaptureTheFlagBots(room);
+    this.randomizeCaptureTheFlagTeamsAndRoles(room);
+
+    room.status = "playing";
+    room.locked = true;
+    room.roundStarted = true;
+    room.roundId = crypto.randomUUID();
+    room.roleRevealUntil = now + CAPTURE_THE_FLAG_ROLE_REVEAL_DURATION_MS;
+    room.matchStartedAt = now;
+    // The ten-minute match clock and the thirty-second orb phase both begin
+    // only after the seven-second deployment/class presentation is complete.
+    room.matchEndsAt = room.roleRevealUntil + CAPTURE_THE_FLAG_MATCH_DURATION_MS;
+    room.battlePrepareUntil = room.roleRevealUntil + CAPTURE_THE_FLAG_BATTLE_PREPARE_DURATION;
+    room.battleBeginFlashUntil = room.battlePrepareUntil + 1800;
+    room.countdownStartedAt = null;
+    room.phaseVersion = Number(room.phaseVersion || 0) + 1;
+
+    const nextSlots: Record<string, number> = { cyan: 0, orange: 0 };
+    for (const player of room.players.values()) {
+      const team = String(player.team || "cyan") === "orange" ? "orange" : "cyan";
+      const spawn = this.getCaptureTheFlagSpawn(room, team, nextSlots[team]++);
+      player.x = spawn.x;
+      player.y = spawn.y;
+      player.prevX = spawn.x;
+      player.prevY = spawn.y;
+      player.alive = true;
+      player.hp = player.maxHp || START_HP;
+      player.energy = START_ENERGY;
+      player.input = {};
+      player.respawnAt = 0;
+      player.deathCount = 0;
+      player.spectatorOnly = false;
+    }
+
+    this.pushCaptureTheFlagEvent(room, {
+      kind: "roles",
+      team: "cyan",
+      title: "TEAMS AND ROLES ASSIGNED",
+      detail: "7-second deployment lock. Then collect orbs before the flag battle begins.",
+    }, now);
+    this.refreshRoomSpatialIndexes(room, now, true);
+  }
+
+  private fillCaptureTheFlagBots(room: any) {
+    while (room.players.size < CAPTURE_THE_FLAG_ROOM_MAX_PLAYERS) {
+      const provisionalTeam = this.assignCaptureTheFlagTeam(room);
+      const provisionalSlot = this.getCaptureTheFlagTeamPlayers(room, provisionalTeam).length;
+      const spawn = this.getCaptureTheFlagSpawn(room, provisionalTeam, provisionalSlot);
+      const bot = this.createCaptureTheFlagPlayer({
+        id: `ctf-bot-${crypto.randomUUID()}`,
+        team: provisionalTeam,
+        x: spawn.x,
+        y: spawn.y,
+        isBot: true,
+        index: room.players.size,
+      });
+      room.players.set(bot.id, bot);
+    }
+  }
+
+  private shuffleCaptureTheFlagRoster(entries: any[] = []) {
+    // Server-side Fisher-Yates shuffle. randomInt is intentionally used instead
+    // of a lobby-seat rule or predictable client order: every real pilot and AI
+    // seat has the same chance to land in Blue / Red and every valid class seat.
+    const shuffled = [...entries];
+    for (let index = shuffled.length - 1; index > 0; index -= 1) {
+      const swapIndex = randomInt(index + 1);
+      const temporary = shuffled[index];
+      shuffled[index] = shuffled[swapIndex];
+      shuffled[swapIndex] = temporary;
+    }
+    return shuffled;
+  }
+
+  /**
+   * Teams are intentionally unknown while the ten-second human lobby is open.
+   * Once all eight final seats are known (real pilots plus any required AI),
+   * this method performs ONE authoritative assignment for the full roster:
+   *
+   *  - shuffle all 8 seats, then split exactly 4 BLUE / 4 RED;
+   *  - independently shuffle ATTACK / ATTACK / TANK / DEFENDER inside each team;
+   *  - reset every temporary lobby/provisional assignment first.
+   *
+   * No join order, browser identity, bot flag, or previously provisional team
+   * can influence the result. Reconnects keep the assigned match seat because
+   * this runs only once as the round transitions into `playing`.
+   */
+  private randomizeCaptureTheFlagTeamsAndRoles(room: any) {
+    const finalRoster = this.shuffleCaptureTheFlagRoster([...room.players.values()])
+      .slice(0, CAPTURE_THE_FLAG_ROOM_MAX_PLAYERS);
+
+    if (finalRoster.length !== CAPTURE_THE_FLAG_ROOM_MAX_PLAYERS) return;
+
+    const blueRoster = finalRoster.slice(0, 4);
+    const redRoster = finalRoster.slice(4, 8);
+    const randomTeams = [
+      { team: "cyan", roster: blueRoster },
+      { team: "orange", roster: redRoster },
+    ];
+
+    for (const teamEntry of randomTeams) {
+      for (const player of teamEntry.roster) {
+        player.team = teamEntry.team;
+        player.ctfRole = null;
+        player.ctfRoleLabel = null;
+        player.ctfRoleVariant = null;
+        player.ctfSkinFamily = null;
+        player.ctfSkinVariantKey = null;
+        player.ctfSkinTeam = null;
+        player.ctfRoleProfileVersion = null;
+      }
+    }
+
+    // Assignment metadata is useful for debugging a reported lobby imbalance,
+    // but never exposes anything to the client that changes the result.
+    room.ctfAssignmentVersion = Number(room.ctfAssignmentVersion || 0) + 1;
+    room.ctfAssignmentAt = Date.now();
+    room.ctfAssignmentRoster = finalRoster.map((player: any) => ({
+      id: String(player.id),
+      isBot: Boolean(player.isBot),
+      team: String(player.team),
+    }));
+
+    // This allocates all four roles in each final team with a second independent
+    // shuffle. It applies equally to humans and bots.
+    this.assignCaptureTheFlagBotRoles(room, true);
+  }
+
+  private getCaptureTheFlagRoleProfile(team: string, role: string, preferredSkinVariantKey: string | null = null) {
+    const normalizedTeam = String(team || "cyan") === "orange" ? "orange" : "cyan";
+    const normalizedRole = String(role || "attack-bravo");
+
+    const roleProfiles: Record<string, any> = {
+      "attack-alpha": {
+        label: "ATTACK DRONE",
+        maxHp: 100,
+        moveMultiplier: 1.18,
+        attackDroneMultiplier: 1.30,
+        botFireCooldown: 450,
+      },
+      "attack-bravo": {
+        label: "ATTACK DRONE",
+        maxHp: 100,
+        moveMultiplier: 1.15,
+        attackDroneMultiplier: 1.27,
+        botFireCooldown: 475,
+      },
+      tank: {
+        label: "TANK",
+        maxHp: 200,
+        moveMultiplier: 0.94,
+        attackDroneMultiplier: 0.96,
+        botFireCooldown: 650,
+      },
+      defense: {
+        label: "DEFENDER",
+        maxHp: 150,
+        moveMultiplier: 1.00,
+        attackDroneMultiplier: 1.10,
+        botFireCooldown: 470,
+      },
+    };
+
+    const profile = roleProfiles[normalizedRole] || roleProfiles["attack-bravo"];
+    const teamCollection = CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS[normalizedTeam] || CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS.cyan;
+    const variants = teamCollection[normalizedRole] || teamCollection["attack-bravo"];
+    const selectedVariant =
+      variants.find((candidate) => String(candidate.key) === String(preferredSkinVariantKey || "")) ||
+      variants[Math.floor(Math.random() * variants.length)] ||
+      teamCollection["attack-bravo"][0];
+
+    return {
+      ...profile,
+      role: normalizedRole,
+      variant: selectedVariant.name,
+      skinFamily: selectedVariant.family || "GALACTIC",
+      skinVariantKey: selectedVariant.key,
+      skin: selectedVariant.skin,
+    };
+  }
+
+  /**
+   * CTF role roster. Roles are assigned to all four seats in each team, not
+   * just bots, so every real player sees their class during the deployment lock.
+   * The role is random for every seat, whether that seat belongs to a real
+   * pilot or an AI bot. Each side still receives exactly two Attack, one Tank
+   * and one Defender.
+   */
+  private assignCaptureTheFlagBotRoles(room: any, randomize = false) {
+    for (const team of ["cyan", "orange"]) {
+      const teamPlayers = this.getCaptureTheFlagTeamPlayers(room, team)
+        .sort((left: any, right: any) => String(left?.id || "").localeCompare(String(right?.id || "")));
+      if (!teamPlayers.length) continue;
+
+      const roleByPlayerId = new Map<string, string>();
+      if (randomize) {
+        const randomizedPlayers = this.shuffleCaptureTheFlagRoster(teamPlayers);
+        const randomizedRoles = this.shuffleCaptureTheFlagRoster([...CAPTURE_THE_FLAG_ROLE_ORDER]);
+        randomizedPlayers.forEach((player: any, index: number) => {
+          roleByPlayerId.set(String(player.id), randomizedRoles[index] || "attack-bravo");
+        });
+      } else {
+        // updateCaptureTheFlagBots calls this every plan cycle; preserve the
+        // match-start allocation and only repair a missing/duplicate seat if a
+        // disconnected player has just been replaced by a new AI bot.
+        const availableRoles = [...CAPTURE_THE_FLAG_ROLE_ORDER];
+        const assignedRoles = new Set<string>();
+        for (const player of teamPlayers) {
+          const existingRole = String(player?.ctfRole || "");
+          if (availableRoles.includes(existingRole as any) && !assignedRoles.has(existingRole)) {
+            roleByPlayerId.set(String(player.id), existingRole);
+            assignedRoles.add(existingRole);
+          }
+        }
+        const missingRoles = availableRoles.filter((role) => !assignedRoles.has(role));
+        for (const player of teamPlayers) {
+          const id = String(player.id);
+          if (roleByPlayerId.has(id)) continue;
+          roleByPlayerId.set(id, missingRoles.shift() || "attack-bravo");
+        }
+      }
+
+      for (const player of teamPlayers) {
+        const role = roleByPlayerId.get(String(player.id)) || "attack-bravo";
+        const keepExistingVariant =
+          !randomize &&
+          String(player?.ctfRole || "") === role &&
+          String(player?.ctfSkinTeam || "") === team
+            ? String(player?.ctfSkinVariantKey || "")
+            : null;
+        const profile = this.getCaptureTheFlagRoleProfile(team, role, keepExistingVariant);
+        const roleChanged = String(player?.ctfRole || "") !== String(profile.role || "") ||
+          String(player?.ctfSkinVariantKey || "") !== String(profile.skinVariantKey || "") ||
+          String(player?.ctfSkinFamily || "") !== String(profile.skinFamily || "") ||
+          String(player?.ctfRoleProfileVersion || "") !== "ctf-class-v5-role-combat";
+
+        player.ctfRole = profile.role;
+        player.ctfRoleLabel = profile.label;
+        player.ctfRoleVariant = profile.variant;
+        player.ctfSkinFamily = profile.skinFamily;
+        player.ctfSkinVariantKey = profile.skinVariantKey;
+        player.ctfSkinTeam = team;
+        player.ctfRoleMoveSpeedMultiplier = profile.moveMultiplier;
+        player.ctfRoleAttackDroneSpeedMultiplier = profile.attackDroneMultiplier;
+        player.ctfRoleBaseFireCooldown = profile.botFireCooldown;
+        player.ctfRoleProfileVersion = "ctf-class-v5-role-combat";
+        player.ctfRoleBaseMaxHp = profile.maxHp;
+        player.maxHp = profile.maxHp;
+        if (String(profile.role) !== "tank") {
+          player.ctfTankOrbitalHitCount = 0;
+          player.ctfTankOrbitalHitResetAt = 0;
+        }
+
+        // CTF class hulls are temporary room-only skins; saved Hangar skins
+        // stay untouched outside this Capture The Flag round.
+        player.skin = profile.skin;
+
+        if (roleChanged && !room?.roundStarted) {
+          player.hp = profile.maxHp;
+        } else {
+          const currentHp = Number(player?.hp);
+          player.hp = Number.isFinite(currentHp)
+            ? Math.min(currentHp, profile.maxHp)
+            : profile.maxHp;
+        }
+      }
+    }
+  }
+
+  private updateCaptureTheFlagBots(room: any, now: number) {
+    // CTF has only eight seats, but this planner is deliberately role-based:
+    // one guardian holds base, the runner handles the enemy flag and the other
+    // units escort/intercept instead of all piling into the same body collision.
+    this.assignCaptureTheFlagBotRoles(room);
+
+    const flags = room.flags || [];
+    const allPlayers = [...room.players.values()];
+    const battleLocked = this.isBattlePrepareLocked(room, now);
+    const distance = (a: any, b: any) => Math.hypot(
+      Number(a?.x || 0) - Number(b?.x || 0),
+      Number(a?.y || 0) - Number(b?.y || 0),
+    );
+    const unit = (x: number, y: number, fallbackX = 1, fallbackY = 0) => {
+      const length = Math.hypot(x, y);
+      return length > 0.0001
+        ? { x: x / length, y: y / length }
+        : { x: fallbackX, y: fallbackY };
+    };
+
+    // Formation and flank calculations can legitimately produce a point beyond
+    // an objective. Clamp that point before creating the movement input, then
+    // add a strong inward correction for any bot already touching a border.
+    // This prevents the old "walk forever into the map edge" failure state.
+    const keepBotInsideArena = (bot: any, targetX: number, targetY: number) => {
+      const margin = CAPTURE_THE_FLAG_BOT_WORLD_MARGIN;
+      const minX = margin;
+      const maxX = CAPTURE_THE_FLAG_WORLD_WIDTH - margin;
+      const minY = margin;
+      const maxY = CAPTURE_THE_FLAG_WORLD_HEIGHT - margin;
+      const recoveryDistance = CAPTURE_THE_FLAG_BOT_EDGE_RECOVERY_DISTANCE;
+      const recoveryPush = CAPTURE_THE_FLAG_BOT_EDGE_RECOVERY_PUSH;
+      const currentX = Number(bot?.x || CAPTURE_THE_FLAG_WORLD_WIDTH / 2);
+      const currentY = Number(bot?.y || CAPTURE_THE_FLAG_WORLD_HEIGHT / 2);
+
+      let x = this.clamp(Number(targetX || currentX), minX, maxX);
+      let y = this.clamp(Number(targetY || currentY), minY, maxY);
+
+      if (currentX < minX + recoveryDistance) {
+        x = Math.max(x, Math.min(maxX, minX + recoveryPush));
+      } else if (currentX > maxX - recoveryDistance) {
+        x = Math.min(x, Math.max(minX, maxX - recoveryPush));
+      }
+
+      if (currentY < minY + recoveryDistance) {
+        y = Math.max(y, Math.min(maxY, minY + recoveryPush));
+      } else if (currentY > maxY - recoveryDistance) {
+        y = Math.min(y, Math.max(minY, maxY - recoveryPush));
+      }
+
+      return { x, y };
+    };
+
+    const applyFriendlySpacing = (bot: any, teammates: any[], targetX: number, targetY: number) => {
+      let pushX = 0;
+      let pushY = 0;
+      for (const teammate of teammates) {
+        if (!teammate || teammate.id === bot.id || !teammate.alive) continue;
+        const dx = Number(bot.x || 0) - Number(teammate.x || 0);
+        const dy = Number(bot.y || 0) - Number(teammate.y || 0);
+        const d = Math.hypot(dx, dy);
+        if (d <= 0.001 || d >= CAPTURE_THE_FLAG_BOT_PERSONAL_SPACE) continue;
+        const force = (CAPTURE_THE_FLAG_BOT_PERSONAL_SPACE - d) / CAPTURE_THE_FLAG_BOT_PERSONAL_SPACE;
+        pushX += (dx / d) * force;
+        pushY += (dy / d) * force;
+      }
+      return keepBotInsideArena(
+        bot,
+        targetX + pushX * 330,
+        targetY + pushY * 330,
+      );
+    };
+
+    const pickPrepareOrb = (bot: any, teammates: any[], ownBase: any, role: string) => {
+      const candidates = room.orbs || [];
+      let best: any = null;
+      let bestScore = Number.POSITIVE_INFINITY;
+      for (const orb of candidates) {
+        const fromBot = distance(bot, orb);
+        const fromBase = ownBase ? distance(ownBase, orb) : 0;
+        // Guardian keeps enough proximity to defend immediately once combat starts.
+        if (role === "defense" && fromBase > CAPTURE_THE_FLAG_BOT_PREPARE_FARM_RADIUS) continue;
+        let score = fromBot;
+        for (const teammate of teammates) {
+          if (!teammate || teammate.id === bot.id || !teammate.alive) continue;
+          const targetDistance = Math.hypot(
+            Number(teammate.botTargetX || teammate.x || 0) - Number(orb.x || 0),
+            Number(teammate.botTargetY || teammate.y || 0) - Number(orb.y || 0),
+          );
+          if (targetDistance < 340) score += 520;
+        }
+        if (score < bestScore) {
+          bestScore = score;
+          best = orb;
+        }
+      }
+      return best;
+    };
+
+    const nearest = (origin: any, candidates: any[]) => {
+      let result: any = null;
+      let resultDistance = Number.POSITIVE_INFINITY;
+      for (const candidate of candidates) {
+        if (!candidate?.alive || candidate.id === origin.id) continue;
+        const d = distance(origin, candidate);
+        if (d < resultDistance) {
+          resultDistance = d;
+          result = candidate;
+        }
+      }
+      return result ? { unit: result, distance: resultDistance } : null;
+    };
+
+    for (const bot of allPlayers) {
+      if (!bot?.isBot || !bot.alive) continue;
+      if (now < Number(bot.botNextPlanAt || 0)) continue;
+
+      bot.botNextPlanAt = now + CAPTURE_THE_FLAG_BOT_REPLAN_MIN_MS + Math.random() * (
+        CAPTURE_THE_FLAG_BOT_REPLAN_MAX_MS - CAPTURE_THE_FLAG_BOT_REPLAN_MIN_MS
+      );
+
+      const team = String(bot.team || "cyan") === "orange" ? "orange" : "cyan";
+      const enemyTeam = team === "cyan" ? "orange" : "cyan";
+      const role = String(bot.ctfRole || "attack-bravo");
+      const ownBase = this.getCaptureTheFlagBase(room, team);
+      const enemyBase = this.getCaptureTheFlagBase(room, enemyTeam);
+      const ownFlag = flags.find((flag: any) => String(flag?.team || "") === team);
+      const enemyFlag = flags.find((flag: any) => String(flag?.team || "") === enemyTeam);
+      const teammates = allPlayers.filter((candidate: any) => candidate?.alive && String(candidate?.team || "") === team);
+      const enemies = allPlayers.filter((candidate: any) => candidate?.alive && String(candidate?.team || "") === enemyTeam);
+      const teammateCarrier = teammates.find((candidate: any) => String(candidate?.carryingFlagTeam || "") === enemyTeam) || null;
+      const enemyCarrier = enemies.find((candidate: any) => String(candidate?.carryingFlagTeam || "") === team) || null;
+      const guardian = teammates.find((candidate: any) => candidate?.isBot && String(candidate?.ctfRole || "") === "defense") || null;
+      const runner = teammates.find((candidate: any) => String(candidate?.ctfRole || "") === "tank") || null;
+      const nearestEnemyToBot = nearest(bot, enemies);
+      const nearestEnemyToCarrier = teammateCarrier ? nearest(teammateCarrier, enemies) : null;
+      const nearestBaseIntruder = ownBase ? nearest(ownBase, enemies) : null;
+      const ownBaseX = Number(ownBase?.x || bot.x);
+      const ownBaseY = Number(ownBase?.y || bot.y);
+      const enemyBaseX = Number(enemyBase?.x || bot.x);
+      const enemyBaseY = Number(enemyBase?.y || bot.y);
+      const teamDirection = team === "orange" ? -1 : 1;
+      const formationSide = role === "attack-alpha"
+        ? CAPTURE_THE_FLAG_BOT_FORMATION_SIDE
+        : role === "attack-bravo"
+          ? -CAPTURE_THE_FLAG_BOT_FORMATION_SIDE
+          : 0;
+      const defenderBaseRadius = Number(ownBase?.perimeterRadius || ownBase?.radius || CAPTURE_THE_FLAG_BASE_PERIMETER_RADIUS);
+      const enemyFlagIsHome = String(enemyFlag?.status || "home") === "home";
+      const enemyFlagIsDropped = String(enemyFlag?.status || "") === "dropped";
+      const ownFlagIsCarried = String(ownFlag?.status || "") === "carried";
+
+      // Thirty seconds of economy: bots spread across nearby orbs and do not
+      // chase, shield, touch flags or fire. This gives every team a fair setup.
+      if (battleLocked) {
+        const farmOrb = pickPrepareOrb(bot, teammates, ownBase, role);
+        const fallbackX = ownBaseX + teamDirection * (role === "defense" ? 260 : 820);
+        const fallbackY = ownBaseY + (Number(bot.ctfBotSlot || 0) % 2 === 0 ? -260 : 260);
+        const rawTargetX = Number(farmOrb?.x ?? fallbackX);
+        const rawTargetY = Number(farmOrb?.y ?? fallbackY);
+        const formationTarget = applyFriendlySpacing(bot, teammates, rawTargetX, rawTargetY);
+        const spacedTarget = keepBotInsideArena(bot, formationTarget.x, formationTarget.y);
+        const dx = spacedTarget.x - Number(bot.x || 0);
+        const dy = spacedTarget.y - Number(bot.y || 0);
+        const direction = unit(dx, dy, teamDirection, 0);
+        bot.input = {
+          w: dy < -24,
+          s: dy > 24,
+          a: dx < -24,
+          d: dx > 24,
+          attacking: false,
+          shield: false,
+          mouseX: spacedTarget.x,
+          mouseY: spacedTarget.y,
+        };
+        bot.botIntent = "prepare-farm-orbs";
+        bot.botTargetX = spacedTarget.x;
+        bot.botTargetY = spacedTarget.y;
+        bot.botMoveX = direction.x;
+        bot.botMoveY = direction.y;
+        continue;
+      }
+
+      let targetX = Number(enemyFlag?.x ?? enemyBaseX);
+      let targetY = Number(enemyFlag?.y ?? enemyBaseY);
+      let intent = "steal-enemy-flag";
+      let priorityCombatTarget: any = null;
+      // True only for the one bot selected to physically touch an objective,
+      // or for a bot already carrying a flag. These routes bypass formation
+      // spacing and combat standoff so the bot cannot orbit forever.
+      let objectiveCommit = Boolean(bot.carryingFlagTeam);
+
+      if (bot.carryingFlagTeam) {
+        targetX = ownBaseX;
+        targetY = ownBaseY;
+        intent = "return-flag";
+      } else if (role === "defense") {
+        const flagNeedsRecovery = ownFlag?.status === "dropped" && ownBase && distance(ownFlag, ownBase) <= CAPTURE_THE_FLAG_BOT_GUARD_INTERCEPT_RADIUS;
+        const carrierNearBase = enemyCarrier && ownBase && distance(enemyCarrier, ownBase) <= CAPTURE_THE_FLAG_BOT_GUARD_INTERCEPT_RADIUS;
+        const intruderNearBase = nearestBaseIntruder && nearestBaseIntruder.distance <= CAPTURE_THE_FLAG_BOT_GUARD_INTERCEPT_RADIUS;
+        if (flagNeedsRecovery) {
+          targetX = Number(ownFlag.x);
+          targetY = Number(ownFlag.y);
+          intent = "recover-home-flag";
+        } else if (carrierNearBase) {
+          targetX = Number(enemyCarrier.x);
+          targetY = Number(enemyCarrier.y);
+          priorityCombatTarget = enemyCarrier;
+          intent = "intercept-carrier";
+        } else if (intruderNearBase) {
+          targetX = Number(nearestBaseIntruder.unit.x);
+          targetY = Number(nearestBaseIntruder.unit.y);
+          priorityCombatTarget = nearestBaseIntruder.unit;
+          intent = "defend-base";
+        } else {
+          targetX = ownBaseX + teamDirection * 250;
+          targetY = ownBaseY + (Number(bot.ctfBotSlot || 0) % 2 === 0 ? -170 : 170);
+          intent = "guard-base";
+        }
+      } else if (ownFlag?.status === "dropped") {
+        const guardianCanRecover = guardian?.alive && ownBase && distance(ownFlag, ownBase) <= CAPTURE_THE_FLAG_BOT_GUARD_INTERCEPT_RADIUS;
+        if (!guardianCanRecover || distance(bot, ownFlag) < distance(guardian, ownFlag) * 0.86) {
+          targetX = Number(ownFlag.x);
+          targetY = Number(ownFlag.y);
+          intent = "recover-home-flag";
+        }
+      }
+
+      if (!bot.carryingFlagTeam && enemyCarrier && ownFlag?.status === "carried") {
+        const escapeVector = unit(ownBaseX - Number(enemyCarrier.x || ownBaseX), ownBaseY - Number(enemyCarrier.y || ownBaseY), -teamDirection, 0);
+        const laneOffset = role === "attack-alpha" ? 210 : role === "attack-bravo" ? -210 : 0;
+        const lead = role === "defense" ? 20 : role === "tank" ? 170 : 120;
+        targetX = Number(enemyCarrier.x || ownBaseX) + escapeVector.x * lead - escapeVector.y * laneOffset;
+        targetY = Number(enemyCarrier.y || ownBaseY) + escapeVector.y * lead + escapeVector.x * laneOffset;
+        priorityCombatTarget = enemyCarrier;
+        intent = role === "defense" ? "intercept-carrier" : "hunt-flag-carrier";
+      }
+
+      // Once our flag is carried, all non-guardian bots keep the carrier hunt
+      // selected above. They must not fall back to the normal steal/escort plan.
+      if (role !== "defense" && !bot.carryingFlagTeam && ownFlag?.status !== "dropped" && !ownFlagIsCarried) {
+        if (teammateCarrier && teammateCarrier.id !== bot.id) {
+          const homeVector = unit(ownBaseX - Number(teammateCarrier.x || ownBaseX), ownBaseY - Number(teammateCarrier.y || ownBaseY), teamDirection, 0);
+          const trail = role === "tank" ? 95 : role === "attack-bravo" ? CAPTURE_THE_FLAG_BOT_ESCORT_DISTANCE + 20 : CAPTURE_THE_FLAG_BOT_ESCORT_DISTANCE - 20;
+          targetX = Number(teammateCarrier.x) - homeVector.x * trail - homeVector.y * formationSide;
+          targetY = Number(teammateCarrier.y) - homeVector.y * trail + homeVector.x * formationSide;
+          intent = "escort-carrier";
+          if (nearestEnemyToCarrier && nearestEnemyToCarrier.distance <= CAPTURE_THE_FLAG_BOT_ESCORT_THREAT_RADIUS * 1.45) {
+            priorityCombatTarget = nearestEnemyToCarrier.unit;
+          } else if (nearestEnemyToBot && nearestEnemyToBot.distance <= CAPTURE_THE_FLAG_BOT_ESCORT_THREAT_RADIUS) {
+            priorityCombatTarget = nearestEnemyToBot.unit;
+          }
+        } else if ((enemyFlagIsHome || enemyFlagIsDropped) && runner?.alive && runner.id !== bot.id) {
+          // Attack Drone pair stays near the Tank all the way to the enemy flag.
+          // They do not race past the Tank or orbit the objective alone.
+          const tankTargetX = Number(enemyFlag?.x ?? enemyBaseX);
+          const tankTargetY = Number(enemyFlag?.y ?? enemyBaseY);
+          const route = unit(tankTargetX - Number(runner.x || ownBaseX), tankTargetY - Number(runner.y || ownBaseY), teamDirection, 0);
+          const attackSide = role === "attack-alpha" ? 1 : -1;
+          targetX = Number(runner.x || tankTargetX) - route.x * 145 - route.y * attackSide * 230;
+          targetY = Number(runner.y || tankTargetY) - route.y * 145 + route.x * attackSide * 230;
+          intent = "escort-tank-to-flag";
+          const nearestThreatToTank = nearest(runner, enemies);
+          if (nearestThreatToTank && nearestThreatToTank.distance <= CAPTURE_THE_FLAG_BOT_ESCORT_THREAT_RADIUS * 1.40) {
+            priorityCombatTarget = nearestThreatToTank.unit;
+          }
+        } else if (enemyFlagIsDropped) {
+          const flagX = Number(enemyFlag?.x ?? enemyBaseX);
+          const flagY = Number(enemyFlag?.y ?? enemyBaseY);
+          if (role === "tank" || !runner || runner.id === bot.id) {
+            targetX = flagX;
+            targetY = flagY;
+            intent = "recover-enemy-flag";
+          } else {
+            const approach = unit(flagX - ownBaseX, flagY - ownBaseY, teamDirection, 0);
+            const escortDepth = role === "attack-alpha" ? 120 : 180;
+            targetX = flagX - approach.x * escortDepth - approach.y * formationSide;
+            targetY = flagY - approach.y * escortDepth + approach.x * formationSide;
+            intent = "escort-runner";
+          }
+        } else if (enemyFlagIsHome) {
+          const flagX = Number(enemyFlag?.x ?? enemyBaseX);
+          const flagY = Number(enemyFlag?.y ?? enemyBaseY);
+          if (role === "tank" || !runner || runner.id === bot.id) {
+            targetX = flagX;
+            targetY = flagY;
+            intent = "steal-enemy-flag";
+          } else {
+            const assaultVector = unit(flagX - ownBaseX, flagY - ownBaseY, teamDirection, 0);
+            const ringDepth = role === "attack-alpha" ? 150 : 220;
+            targetX = flagX - assaultVector.x * ringDepth - assaultVector.y * formationSide;
+            targetY = flagY - assaultVector.y * ringDepth + assaultVector.x * formationSide;
+            intent = "assault-enemy-flag";
+          }
+        } else if (role === "tank" || !runner || runner.id === bot.id) {
+          targetX = Number(enemyFlag?.x ?? enemyBaseX);
+          targetY = Number(enemyFlag?.y ?? enemyBaseY);
+          intent = "steal-enemy-flag";
+        } else {
+          const lead = runner || bot;
+          const route = unit(Number(enemyFlag?.x ?? enemyBaseX) - Number(lead.x || enemyBaseX), Number(enemyFlag?.y ?? enemyBaseY) - Number(lead.y || enemyBaseY), teamDirection, 0);
+          targetX = Number(lead.x || enemyBaseX) - route.x * Math.max(120, CAPTURE_THE_FLAG_BOT_ESCORT_DISTANCE - 30) - route.y * formationSide;
+          targetY = Number(lead.y || enemyBaseY) - route.y * Math.max(120, CAPTURE_THE_FLAG_BOT_ESCORT_DISTANCE - 30) + route.x * formationSide;
+          intent = "escort-runner";
+        }
+      }
+
+      // ---------------------------------------------------------------
+      // FLAG COMMIT: one designated bot must actually TOUCH the flag.
+      // The older generic combat standoff/formation logic kept runners at a
+      // safe orbit around the objective. CTF needs the opposite: the runner
+      // drives directly into the pickup radius, while escorts stay outside and
+      // fight defenders. This branch runs after strategic planning so it wins
+      // over all non-objective movement plans.
+      // ---------------------------------------------------------------
+      const attackCandidates = teammates
+        .filter((candidate: any) =>
+          candidate?.isBot &&
+          candidate?.alive &&
+          !candidate?.carryingFlagTeam &&
+          candidate.id !== guardian?.id,
+        )
+        .sort((left: any, right: any) => {
+          const leftDistance = enemyFlag ? distance(left, enemyFlag) : Number.POSITIVE_INFINITY;
+          const rightDistance = enemyFlag ? distance(right, enemyFlag) : Number.POSITIVE_INFINITY;
+          return leftDistance - rightDistance;
+        });
+      const designatedEnemyFlagRunner = (
+        runner?.isBot &&
+        runner?.alive &&
+        !runner?.carryingFlagTeam &&
+        runner.id !== guardian?.id
+      )
+        ? runner
+        : (!runner || !runner.alive ? attackCandidates[0] || null : null);
+
+      const returnCandidates = teammates
+        .filter((candidate: any) => candidate?.isBot && candidate?.alive && !candidate?.carryingFlagTeam)
+        .sort((left: any, right: any) => {
+          const leftDistance = ownFlag ? distance(left, ownFlag) : Number.POSITIVE_INFINITY;
+          const rightDistance = ownFlag ? distance(right, ownFlag) : Number.POSITIVE_INFINITY;
+          return leftDistance - rightDistance;
+        });
+      const designatedHomeFlagReturner = (
+        guardian?.alive && !guardian?.carryingFlagTeam
+      )
+        ? guardian
+        : returnCandidates[0] || null;
+
+      const enemyFlagCanBeTaken = Boolean(
+        enemyFlag &&
+        (enemyFlagIsHome || enemyFlagIsDropped) &&
+        !ownFlagIsCarried &&
+        !bot.carryingFlagTeam,
+      );
+      if (
+        enemyFlagCanBeTaken &&
+        designatedEnemyFlagRunner &&
+        String(designatedEnemyFlagRunner.id) === String(bot.id) &&
+        distance(bot, enemyFlag) <= CAPTURE_THE_FLAG_BOT_FLAG_COMMIT_RANGE
+      ) {
+        targetX = Number(enemyFlag.x);
+        targetY = Number(enemyFlag.y);
+        intent = enemyFlagIsDropped ? "commit-pickup-dropped-enemy-flag" : "commit-steal-enemy-flag";
+        objectiveCommit = true;
+      }
+
+      // A dropped home flag gets the same direct pickup treatment. The team
+      // does not orbit its own flag trying to defend it; the returner goes in.
+      if (
+        ownFlag?.status === "dropped" &&
+        designatedHomeFlagReturner &&
+        String(designatedHomeFlagReturner.id) === String(bot.id) &&
+        distance(bot, ownFlag) <= CAPTURE_THE_FLAG_BOT_FLAG_COMMIT_RANGE
+      ) {
+        targetX = Number(ownFlag.x);
+        targetY = Number(ownFlag.y);
+        intent = "commit-return-home-flag";
+        objectiveCommit = true;
+      }
+
+      // Low-energy non-carriers do a short loot reset unless a flag/carrier is
+      // directly threatened. This prevents aimless all-in fights with no shield.
+      const urgentDefense = Boolean(
+        priorityCombatTarget ||
+        ownFlagIsCarried ||
+        teammateCarrier ||
+        intent === "steal-enemy-flag" ||
+        intent === "assault-enemy-flag" ||
+        intent === "recover-enemy-flag" ||
+        intent === "escort-runner" ||
+        intent === "escort-tank-to-flag" ||
+        intent === "escort-carrier" ||
+        (enemyCarrier && ownBase && distance(enemyCarrier, ownBase) <= CAPTURE_THE_FLAG_BOT_GUARD_INTERCEPT_RADIUS * 1.22) ||
+        (teammateCarrier && nearestEnemyToCarrier && nearestEnemyToCarrier.distance <= CAPTURE_THE_FLAG_BOT_ESCORT_THREAT_RADIUS * 1.18)
+      );
+      if (!bot.carryingFlagTeam && !urgentDefense && Number(bot.energy || 0) <= 14) {
+        const closestEnergy = (room.energyCells || [])
+          .map((cell: any) => ({ cell, distance: distance(bot, cell) }))
+          .sort((a: any, b: any) => a.distance - b.distance)[0];
+        if (closestEnergy) {
+          targetX = Number(closestEnergy.cell.x);
+          targetY = Number(closestEnergy.cell.y);
+          intent = "recover-energy";
+        }
+      }
+
+      const combatTarget = priorityCombatTarget || nearestEnemyToBot?.unit || null;
+      const combatDistance = combatTarget ? distance(bot, combatTarget) : Number.POSITIVE_INFINITY;
+      const botPower = Number(bot.hp || 0) * 0.42 + Number(bot.drones || 0) * 36 + Number(bot.energy || 0) * 0.09;
+      const targetPower = combatTarget
+        ? Number(combatTarget.hp || 0) * 0.42 + Number(combatTarget.drones || 0) * 36 + Number(combatTarget.energy || 0) * 0.09
+        : 0;
+      const urgentCarrierPlay = Boolean(
+        bot.carryingFlagTeam ||
+        teammateCarrier ||
+        enemyCarrier ||
+        ownFlagIsCarried ||
+        String(combatTarget?.carryingFlagTeam || "") === team
+      );
+      const objectivePush = Boolean(
+        objectiveCommit ||
+        intent === "steal-enemy-flag" ||
+        intent === "assault-enemy-flag" ||
+        intent === "recover-enemy-flag" ||
+        intent === "escort-runner" ||
+        intent === "escort-tank-to-flag" ||
+        intent === "escort-carrier" ||
+        intent === "return-flag" ||
+        intent === "hunt-flag-carrier" ||
+        intent === "intercept-carrier"
+      );
+      const dynamicAttackRange = CAPTURE_THE_FLAG_BOT_ATTACK_RANGE + (urgentCarrierPlay ? 260 : objectivePush ? 140 : 0);
+      const mustProtect = Boolean(
+        combatTarget && (
+          intent === "intercept-carrier" ||
+          intent === "hunt-flag-carrier" ||
+          intent === "defend-base" ||
+          intent === "escort-carrier" ||
+          (teammateCarrier && distance(combatTarget, teammateCarrier) <= CAPTURE_THE_FLAG_BOT_ESCORT_THREAT_RADIUS * 1.18) ||
+          String(combatTarget.carryingFlagTeam || "") === team
+        ),
+      );
+      const favorable = Boolean(
+        combatTarget && (
+          botPower >= targetPower * (urgentCarrierPlay ? 0.64 : 0.8) ||
+          Number(bot.drones || 0) >= Number(combatTarget.drones || 0) + (urgentCarrierPlay ? 0 : 1)
+        ),
+      );
+
+      // Instead of flying straight into an enemy, a bot maintains an attack
+      // standoff and a stable flank. Escort/support bots bracket the carrier,
+      // fire a small drone and only close in when a decisive defence is needed.
+      if (!objectiveCommit && combatTarget && combatDistance <= dynamicAttackRange * 1.15 && (mustProtect || favorable || urgentCarrierPlay || combatDistance < 760)) {
+        const radial = unit(Number(bot.x || 0) - Number(combatTarget.x || 0), Number(bot.y || 0) - Number(combatTarget.y || 0), teamDirection, 0);
+        const flankSign = ((Number(bot.ctfBotSlot || 0) + (role === "attack-bravo" ? 1 : 0)) % 2 === 0) ? 1 : -1;
+        const standOff = role === "defense"
+          ? 470
+          : favorable || mustProtect
+            ? CAPTURE_THE_FLAG_BOT_COMBAT_STANDOFF
+            : CAPTURE_THE_FLAG_BOT_RETREAT_STANDOFF;
+        targetX = Number(combatTarget.x || 0) + radial.x * standOff + (-radial.y) * flankSign * (role === "defense" ? 150 : 250);
+        targetY = Number(combatTarget.y || 0) + radial.y * standOff + radial.x * flankSign * (role === "defense" ? 150 : 250);
+        intent = mustProtect ? `${intent}-bracket` : "tactical-dogfight";
+      }
+
+      // Defender never abandons its own base lane. It may pressure an intruder,
+      // but its planned point is clamped to the defensive perimeter.
+      if (role === "defense" && ownBase) {
+        const guardDx = targetX - ownBaseX;
+        const guardDy = targetY - ownBaseY;
+        const guardDistance = Math.hypot(guardDx, guardDy) || 1;
+        const maximumGuardDistance = defenderBaseRadius + 300;
+        if (guardDistance > maximumGuardDistance) {
+          targetX = ownBaseX + (guardDx / guardDistance) * maximumGuardDistance;
+          targetY = ownBaseY + (guardDy / guardDistance) * maximumGuardDistance;
+        }
+      }
+
+      const formationTarget = objectiveCommit
+        ? keepBotInsideArena(bot, targetX, targetY)
+        : applyFriendlySpacing(bot, teammates, targetX, targetY);
+      const spacedTarget = keepBotInsideArena(bot, formationTarget.x, formationTarget.y);
+      const dx = spacedTarget.x - Number(bot.x || 0);
+      const dy = spacedTarget.y - Number(bot.y || 0);
+      const direction = unit(dx, dy, teamDirection, 0);
+      const shouldAttack = Boolean(
+        combatTarget &&
+        Number(bot.drones || 0) > 0 &&
+        combatDistance <= dynamicAttackRange &&
+        (favorable || mustProtect || urgentCarrierPlay || objectivePush) &&
+        !(Number(bot.energy || 0) <= 8 && !mustProtect && !urgentCarrierPlay && !objectivePush),
+      );
+      const defenderBaseThreat = Boolean(
+        role === "defense" &&
+        ownBase &&
+        nearestBaseIntruder &&
+        nearestBaseIntruder.distance <= defenderBaseRadius + 360
+      );
+      const shouldShield = Boolean(
+        Number(bot.drones || 0) > 0 &&
+        Number(bot.energy || 0) >= 25 &&
+        (
+          (combatTarget && combatDistance < (urgentCarrierPlay ? 640 : 520) && (mustProtect || !favorable || urgentCarrierPlay)) ||
+          defenderBaseThreat
+        ),
+      );
+
+      // A flag carrier turns the whole defending side into an emergency
+      // response squad. Attack drones launch at the fastest allowed cadence
+      // until the carrier is stopped; normal CTF pacing resumes immediately
+      // after the objective is safe again.
+      const roleBaseFireCooldown = Math.max(420, Number(bot?.ctfRoleBaseFireCooldown || 840));
+      bot.botFireCooldown = urgentCarrierPlay
+        ? Math.max(360, Math.round(roleBaseFireCooldown * 0.64))
+        : objectivePush
+          ? Math.max(440, Math.round(roleBaseFireCooldown * 0.84))
+          : roleBaseFireCooldown;
+
+      bot.input = {
+        w: dy < -24,
+        s: dy > 24,
+        a: dx < -24,
+        d: dx > 24,
+        attacking: shouldAttack,
+        shield: shouldShield,
+        mouseX: combatTarget?.x ?? spacedTarget.x,
+        mouseY: combatTarget?.y ?? spacedTarget.y,
+      };
+      bot.botIntent = intent;
+      bot.botTargetX = spacedTarget.x;
+      bot.botTargetY = spacedTarget.y;
+      bot.botMoveX = direction.x;
+      bot.botMoveY = direction.y;
+    }
+  }
+
+  /**
+   * Defender-exclusive Aegis Field. While the four-second shield is active
+   * inside the home-base perimeter, it periodically repels intruders from the
+   * flag lane, slows them briefly, drains their energy and converts that
+   * pressure into a small energy refund for the Defender. This makes the
+   * shield a tactical base-economy tool instead of a passive damage bubble.
+   */
+  private updateCaptureTheFlagDefenderAegis(room: any, now: number) {
+    if (
+      !room?.captureTheFlagMode ||
+      room.status !== "playing" ||
+      this.isBattlePrepareLocked(room, now) ||
+      this.isCaptureTheFlagRoleRevealLocked(room, now)
+    ) return;
+
+    for (const defender of room.players.values()) {
+      if (
+        !defender?.alive ||
+        String(defender?.ctfRole || "") !== "defense" ||
+        !defender?.shieldActive ||
+        Number(defender?.shieldUntil || 0) <= now
+      ) continue;
+
+      const homeBase = this.getCaptureTheFlagBase(room, defender.team);
+      if (!homeBase) continue;
+
+      const baseRadius = Number(homeBase?.perimeterRadius || homeBase?.radius || CAPTURE_THE_FLAG_BASE_PERIMETER_RADIUS);
+      const defenderDistance = Math.hypot(
+        Number(defender.x || 0) - Number(homeBase.x || 0),
+        Number(defender.y || 0) - Number(homeBase.y || 0),
+      );
+      if (defenderDistance > baseRadius + 210) continue;
+      if (now - Number(defender?.ctfAegisPulseAt || 0) < CAPTURE_THE_FLAG_DEFENDER_AEGIS_PULSE_INTERVAL_MS) continue;
+
+      defender.ctfAegisPulseAt = now;
+      let affected = 0;
+
+      for (const enemy of room.players.values()) {
+        if (!enemy?.alive || String(enemy?.team || "") === String(defender?.team || "")) continue;
+
+        const dx = Number(enemy.x || 0) - Number(homeBase.x || 0);
+        const dy = Number(enemy.y || 0) - Number(homeBase.y || 0);
+        const distance = Math.hypot(dx, dy) || 1;
+        if (distance > CAPTURE_THE_FLAG_DEFENDER_AEGIS_RADIUS) continue;
+
+        const dirX = dx / distance;
+        const dirY = dy / distance;
+        const carrierBoost = enemy.carryingFlagTeam ? 1.32 : 1;
+        this.addSmoothKnockback(
+          enemy,
+          dirX,
+          dirY,
+          CAPTURE_THE_FLAG_DEFENDER_AEGIS_PUSH * carrierBoost,
+        );
+        enemy.energy = Math.max(0, Number(enemy.energy || 0) - CAPTURE_THE_FLAG_DEFENDER_AEGIS_ENERGY_DRAIN);
+        enemy.aegisSuppressedUntil = Math.max(
+          Number(enemy.aegisSuppressedUntil || 0),
+          now + CAPTURE_THE_FLAG_DEFENDER_AEGIS_SLOW_DURATION_MS,
+        );
+        this.pushCombatEvent(room, enemy, "AEGIS REPULSE", "shield", now);
+        affected += 1;
+      }
+
+      if (affected > 0) {
+        const energyRefund = Math.min(
+          12,
+          affected * CAPTURE_THE_FLAG_DEFENDER_AEGIS_ENERGY_RETURN_PER_TARGET,
+        );
+        defender.energy = Math.min(START_ENERGY, Number(defender.energy || 0) + energyRefund);
+        this.pushCombatEvent(room, defender, `AEGIS +${energyRefund} ENERGY`, "energy", now);
+      }
+    }
+  }
+
+  private updateCaptureTheFlagMatchTimer(room: any, now: number) {
+    if (!room?.captureTheFlagMode || room.status !== "playing") return;
+    const matchEndsAt = Number(room.matchEndsAt || 0);
+    if (!matchEndsAt || now < matchEndsAt) return;
+
+    const blueScore = Number(room.score?.cyan || 0);
+    const redScore = Number(room.score?.orange || 0);
+    const winnerTeam = blueScore === redScore ? null : blueScore > redScore ? "cyan" : "orange";
+    this.finishCaptureTheFlagMatch(room, winnerTeam, now, "time-limit");
+  }
+
+  private updateCaptureTheFlagObjectives(room: any, now: number) {
+    if (!room?.captureTheFlagMode || room.status !== "playing" || this.isBattlePrepareLocked(room, now)) return;
+
+    for (const flag of room.flags || []) {
+      const ownerTeam = String(flag.team || "cyan");
+      const carrier = flag.carrierId ? room.players.get(flag.carrierId) : null;
+
+      if (carrier && carrier.alive) {
+        flag.x = Number(carrier.x || flag.x);
+        flag.y = Number(carrier.y || flag.y);
+        flag.carrierName = carrier.username || "Player";
+        flag.carrierTeam = carrier.team;
+
+        const carrierTeam = String(carrier.team || "cyan");
+        const carrierBase = this.getCaptureTheFlagBase(room, carrierTeam);
+        const reachedCarrierBase = Boolean(
+          carrierBase &&
+          Math.hypot(
+            Number(carrier.x || 0) - Number(carrierBase.x || 0),
+            Number(carrier.y || 0) - Number(carrierBase.y || 0),
+          ) <= Number(carrierBase.radius || CAPTURE_THE_FLAG_BASE_RADIUS),
+        );
+
+        if (reachedCarrierBase) {
+          // The original owner physically returning their own dropped flag is
+          // not a score. It remains visible/contested until they deliver it.
+          if (carrierTeam === ownerTeam) {
+            carrier.carryingFlagTeam = null;
+            this.resetCaptureTheFlagFlag(flag, now);
+            this.pushCaptureTheFlagEvent(room, {
+              kind: "returned",
+              team: ownerTeam,
+              title: `${carrier.username || "PLAYER"} RETURNED THE ${ownerTeam === "orange" ? "RED" : "BLUE"} FLAG`,
+              detail: "The flag was carried safely back to its base.",
+            }, now);
+            continue;
+          }
+
+          room.score[carrierTeam] = Number(room.score[carrierTeam] || 0) + 1;
+          this.pushCaptureTheFlagEvent(room, {
+            kind: "capture",
+            team: carrierTeam,
+            title: `${carrier.username || "PLAYER"} CAPTURED THE ${ownerTeam === "orange" ? "RED" : "BLUE"} FLAG`,
+            detail: `${carrierTeam === "orange" ? "RED" : "BLUE"} TEAM SCORES ${room.score[carrierTeam]} / ${CAPTURE_THE_FLAG_TARGET_SCORE}`,
+          }, now);
+          carrier.carryingFlagTeam = null;
+          this.resetCaptureTheFlagFlag(flag, now);
+          if (Number(room.score[carrierTeam] || 0) >= CAPTURE_THE_FLAG_TARGET_SCORE) {
+            this.finishCaptureTheFlagMatch(room, carrierTeam, now, "three-captures");
+            return;
+          }
+        }
+        continue;
+      }
+
+      // A carrier can disappear between a death/disconnect tick and the
+      // objective tick. Keep the exact last position and make the objective
+      // collectible, never auto-return it.
+      if (flag.carrierId) {
+        flag.carrierId = null;
+        flag.status = "dropped";
+        flag.stateChangedAt = now;
+      }
+
+      for (const player of room.players.values()) {
+        if (!player?.alive) continue;
+        const flagPickupDistance = player.isBot
+          ? CAPTURE_THE_FLAG_BOT_FLAG_PICKUP_ASSIST_DISTANCE
+          : CAPTURE_THE_FLAG_FLAG_PICKUP_DISTANCE;
+        if (Math.hypot(Number(player.x || 0) - Number(flag.x || 0), Number(player.y || 0) - Number(flag.y || 0)) > flagPickupDistance) continue;
+
+        const playerTeam = String(player.team || "cyan");
+        // A home flag cannot be picked by its own team; a dropped flag can be
+        // picked by either side. Owner carries it home; enemy continues capture.
+        if (flag.status === "home" && playerTeam === ownerTeam) continue;
+
+        flag.status = "carried";
+        flag.carrierId = player.id;
+        flag.carrierName = player.username || "Player";
+        flag.carrierTeam = playerTeam;
+        flag.stateChangedAt = now;
+        player.carryingFlagTeam = ownerTeam;
+
+        const isReturnCarrier = playerTeam === ownerTeam;
+        this.pushCaptureTheFlagEvent(room, {
+          kind: isReturnCarrier ? "recovered" : "taken",
+          team: playerTeam,
+          title: isReturnCarrier
+            ? `${player.username || "PLAYER"} RECOVERED THE ${ownerTeam === "orange" ? "RED" : "BLUE"} FLAG`
+            : `${player.username || "PLAYER"} HAS THE ${ownerTeam === "orange" ? "RED" : "BLUE"} FLAG`,
+          detail: isReturnCarrier
+            ? `Carry it back to the ${playerTeam === "orange" ? "RED" : "BLUE"} base.`
+            : `Bring it to the ${playerTeam === "orange" ? "RED" : "BLUE"} base.`,
+        }, now);
+        break;
+      }
+    }
+  }
+
+  private dropCaptureTheFlagCarrier(room: any, player: any, now = Date.now()) {
+    if (!room?.captureTheFlagMode || !player?.carryingFlagTeam) return;
+    const flag = (room.flags || []).find((candidate: any) => String(candidate?.team || "") === String(player.carryingFlagTeam || ""));
+    if (!flag) return;
+    flag.status = "dropped";
+    flag.carrierId = null;
+    flag.carrierName = player.username || "Player";
+    flag.carrierTeam = player.team || null;
+    flag.x = Number(player.x || flag.x || 0);
+    flag.y = Number(player.y || flag.y || 0);
+    flag.stateChangedAt = now;
+    player.carryingFlagTeam = null;
+    this.pushCaptureTheFlagEvent(room, {
+      kind: "dropped",
+      team: player.team || "cyan",
+      title: `${player.username || "PLAYER"} DROPPED THE ${String(flag.team) === "orange" ? "RED" : "BLUE"} FLAG`,
+      detail: "The flag remains on the battlefield until somebody reaches it.",
+    }, now);
+  }
+
+  private resetCaptureTheFlagFlag(flag: any, now = Date.now()) {
+    flag.x = Number(flag.homeX || 0);
+    flag.y = Number(flag.homeY || 0);
+    flag.status = "home";
+    flag.carrierId = null;
+    flag.carrierName = null;
+    flag.carrierTeam = null;
+    flag.stateChangedAt = now;
+  }
+
+  private pushCaptureTheFlagEvent(room: any, event: any, now = Date.now()) {
+    if (!room) return;
+    room.eventSequence = Number(room.eventSequence || 0) + 1;
+    const entry = {
+      id: `ctf-${room.eventSequence}-${crypto.randomUUID()}`,
+      kind: event?.kind || "taken",
+      team: event?.team || "cyan",
+      title: String(event?.title || "OBJECTIVE UPDATE").slice(0, 100),
+      detail: String(event?.detail || "").slice(0, 130),
+      createdAt: now,
+      expiresAt: now + CAPTURE_THE_FLAG_EVENT_TTL_MS,
+    };
+    room.ctfEvents = [...(room.ctfEvents || []).filter((item: any) => Number(item?.expiresAt || 0) > now), entry].slice(-12);
+    this.server.to(room.id).emit("capture-the-flag:objective", entry);
+  }
+
+  private updateCaptureTheFlagRespawns(room: any, now: number) {
+    for (const player of room.players.values()) {
+      if (player?.alive || player?.spectatorOnly || Number(player?.deathCount || 0) >= 2 || !player?.respawnAt || now < Number(player.respawnAt || 0)) continue;
+      const teamPlayers = this.getCaptureTheFlagTeamPlayers(room, player.team);
+      const slot = Math.max(0, teamPlayers.findIndex((entry: any) => entry.id === player.id));
+      const spawn = this.getCaptureTheFlagSpawn(room, player.team, slot);
+      player.alive = true;
+      player.x = spawn.x;
+      player.y = spawn.y;
+      player.prevX = spawn.x;
+      player.prevY = spawn.y;
+      player.hp = player.maxHp || START_HP;
+      player.energy = START_ENERGY;
+      player.drones = 0;
+      player.progress = 0;
+      player.nextDroneAt = DRONE_REQUIREMENTS[0];
+      player.respawnAt = 0;
+      player.killedById = null;
+      player.spectatorTargetId = null;
+      player.input = {};
+    }
+  }
+
+  private maintainCaptureTheFlagItems(room: any, now: number) {
+    while (room.orbs.length < CAPTURE_THE_FLAG_ORB_TARGET) room.orbs.push(this.createCaptureTheFlagOrb());
+    while (room.energyCells.length < CAPTURE_THE_FLAG_ENERGY_TARGET) room.energyCells.push(this.createCaptureTheFlagEnergyCell());
+    room.itemSpatialDirty = true;
+    this.refreshRoomSpatialIndexes(room, now, true);
+  }
+
+  private serializeCaptureTheFlagPlayer(room: any, player: any) {
+    return {
+      ...this.serializePlayer(player),
+      netId: this.ensureZonePvpNetId(room, player.id),
+      team: player.team || "cyan",
+      carryingFlagTeam: player.carryingFlagTeam || null,
+      respawnAt: Number(player.respawnAt || 0),
+      deathCount: Number(player.deathCount || 0),
+      spectatorOnly: Boolean(player.spectatorOnly),
+      isBot: Boolean(player.isBot),
+      ctfRole: player.ctfRole || null,
+      ctfRoleLabel: player.ctfRoleLabel || null,
+      ctfRoleVariant: player.ctfRoleVariant || null,
+      ctfSkinFamily: player.ctfSkinFamily || null,
+      ctfSkinVariantKey: player.ctfSkinVariantKey || null,
+      ctfRoleMoveSpeedMultiplier: Number(player.ctfRoleMoveSpeedMultiplier || 1),
+      ctfRoleAttackDroneSpeedMultiplier: Number(player.ctfRoleAttackDroneSpeedMultiplier || 1),
+    };
+  }
+
+  private serializeCaptureTheFlag(room: any, viewer: any, now = Date.now()) {
+    const players = [...room.players.values()];
+    const activeEvents = (room.ctfEvents || []).filter((event: any) => Number(event?.expiresAt || 0) > now);
+    room.ctfEvents = activeEvents;
+    const countdown = room.status === "countdown"
+      ? Math.max(1, Math.ceil((CAPTURE_THE_FLAG_START_COUNTDOWN_MS - (now - Number(room.countdownStartedAt || now))) / 1000))
+      : null;
+
+    const allSerialized = players.map((player: any) => this.serializeCaptureTheFlagPlayer(room, player));
+    const self = this.serializeCaptureTheFlagPlayer(room, viewer);
+    return {
+      serverNow: now,
+      roomId: room.id,
+      roundId: room.roundId || null,
+      phaseVersion: Number(room.phaseVersion || 0),
+      status: room.status,
+      countdown,
+      playerCount: players.filter((player: any) => player.alive).length,
+      realPlayerCount: players.filter((player: any) => !player.isBot).length,
+      matchmakingPlayerCount: players.filter((player: any) => !player.isBot).length,
+      minPlayers: CAPTURE_THE_FLAG_ROOM_MIN_PLAYERS,
+      maxPlayers: CAPTURE_THE_FLAG_ROOM_MAX_PLAYERS,
+      worldWidth: CAPTURE_THE_FLAG_WORLD_WIDTH,
+      worldHeight: CAPTURE_THE_FLAG_WORLD_HEIGHT,
+      safeZoneRadius: null,
+      matchStartedAt: room.matchStartedAt || null,
+      matchEndsAt: room.matchEndsAt || null,
+      matchDurationMs: CAPTURE_THE_FLAG_MATCH_DURATION_MS,
+      matchRemainingMs: room.matchEndsAt ? Math.max(0, Number(room.matchEndsAt) - now) : CAPTURE_THE_FLAG_MATCH_DURATION_MS,
+      battlePrepareUntil: room.battlePrepareUntil || null,
+      battlePrepareRemainingMs: room.battlePrepareUntil ? Math.max(0, Number(room.battlePrepareUntil) - now) : 0,
+      roleRevealUntil: room.roleRevealUntil || null,
+      roleRevealRemainingMs: room.roleRevealUntil ? Math.max(0, Number(room.roleRevealUntil) - now) : 0,
+      battleBeginFlashUntil: room.battleBeginFlashUntil || null,
+      finishReason: room.finishReason || null,
+      winnerId: room.winnerId || null,
+      winnerName: room.winnerName || null,
+      you: self,
+      players: allSerialized.filter((player: any) => String(player.id) !== String(viewer.id)),
+      orbs: this.filterNear(viewer, room.orbs, VIEW_DISTANCE, 320),
+      energyCells: this.filterNear(viewer, room.energyCells, VIEW_DISTANCE, 32),
+      minimapOrbs: [],
+      minimapEnergyCells: [],
+      minimapCores: [],
+      cores: [],
+      projectiles: (room.projectiles || []).map((projectile: any) => this.serializeZonePvpStateProjectile(room, projectile)),
+      combatEvents: (room.combatEvents || []).filter((event: any) => String(event?.viewerId || "") === String(viewer.id)),
+      leaderboard: players
+        .sort((a: any, b: any) => Number(b.kills || 0) - Number(a.kills || 0) || Number(b.totalCollected || 0) - Number(a.totalCollected || 0))
+        .map((player: any) => ({
+          id: player.id,
+          username: player.username,
+          team: player.team,
+          alive: player.alive,
+          kills: player.kills || 0,
+          totalCollected: player.totalCollected || 0,
+        })),
+      ctf: {
+        team: viewer.team || "cyan",
+        targetScore: CAPTURE_THE_FLAG_TARGET_SCORE,
+        score: { cyan: Number(room.score?.cyan || 0), orange: Number(room.score?.orange || 0) },
+        winnerTeam: room.winnerTeam || null,
+        finishReason: room.finishReason || null,
+        matchEndsAt: room.matchEndsAt || null,
+        matchRemainingMs: room.matchEndsAt ? Math.max(0, Number(room.matchEndsAt) - now) : CAPTURE_THE_FLAG_MATCH_DURATION_MS,
+        roleRevealUntil: room.roleRevealUntil || null,
+        roleRevealRemainingMs: room.roleRevealUntil ? Math.max(0, Number(room.roleRevealUntil) - now) : 0,
+        bases: room.bases,
+        flags: (room.flags || []).map((flag: any) => ({
+          id: flag.id,
+          team: flag.team,
+          homeX: flag.homeX,
+          homeY: flag.homeY,
+          x: flag.x,
+          y: flag.y,
+          status: flag.status,
+          carrierId: flag.carrierId || null,
+          carrierName: flag.carrierName || null,
+          carrierTeam: flag.carrierTeam || null,
+          stateChangedAt: Number(flag.stateChangedAt || 0),
+        })),
+        latestEvent: activeEvents[activeEvents.length - 1] || null,
+        events: activeEvents,
+      },
+    };
+  }
+
+  private emitCaptureTheFlagJoined(client: Socket, room: any, player: any) {
+    const payload = this.serializeCaptureTheFlag(room, player, Date.now());
+    client.emit("capture-the-flag:joined", payload);
+    client.emit("capture-the-flag:join-confirmed", {
+      roomId: room.id,
+      playerId: player.id,
+      status: room.status,
+      you: payload.you,
+    });
+  }
+
+  private broadcastCaptureTheFlagState(room: any, now = Date.now(), _reliable = false) {
+    for (const player of room.players.values()) {
+      if (player.isBot) continue;
+      this.server.to(String(player.id)).emit("capture-the-flag:state", this.serializeCaptureTheFlag(room, player, now));
+    }
+  }
+
+  private broadcastCaptureTheFlagMovement(room: any, now = Date.now()) {
+    const players = [...room.players.values()].map((player: any) => this.serializeCaptureTheFlagPlayer(room, player));
+    const projectiles = (room.projectiles || []).map((projectile: any) => this.serializeZonePvpStateProjectile(room, projectile));
+    this.server.to(room.id).volatile.emit("capture-the-flag:movement", {
+      serverNow: now,
+      roomId: room.id,
+      sequence: Number(room.ctfMovementSequence || 0) + 1,
+      players,
+      projectiles,
+    });
+    room.ctfMovementSequence = Number(room.ctfMovementSequence || 0) + 1;
+  }
+
+  private finishCaptureTheFlagMatch(room: any, winnerTeam: string | null, now = Date.now(), reason = "score") {
+    if (!room || room.status === "finished") return;
+    room.status = "finished";
+    room.locked = true;
+    room.winnerTeam = winnerTeam || null;
+    room.winnerName = winnerTeam
+      ? `${winnerTeam === "orange" ? "RED" : "BLUE"} TEAM`
+      : "DRAW";
+    room.finishReason = reason;
+    room.finishedAt = now;
+    room.closingAt = now + 8000;
+    room.phaseVersion = Number(room.phaseVersion || 0) + 1;
+    for (const player of room.players.values()) player.input = {};
+    const blueScore = Number(room.score?.cyan || 0);
+    const redScore = Number(room.score?.orange || 0);
+    this.pushCaptureTheFlagEvent(room, {
+      kind: "capture",
+      team: winnerTeam || "cyan",
+      title: reason === "time-limit"
+        ? (winnerTeam ? `${winnerTeam === "orange" ? "RED" : "BLUE"} TEAM WINS ON TIME` : "MATCH ENDS IN A DRAW")
+        : `${winnerTeam === "orange" ? "RED" : "BLUE"} TEAM WINS`,
+      detail: `Final score: BLUE ${blueScore} · RED ${redScore}`,
+    }, now);
+  }
+
+  private removeCaptureTheFlagPlayer(socketId: string, _reason = "leave") {
+    const room = this.getCaptureTheFlagRoomBySocket(socketId);
+    if (!room) return;
+    const player = room.players.get(socketId);
+    if (player) {
+      this.dropCaptureTheFlagCarrier(room, player, Date.now());
+      room.players.delete(socketId);
+      room.projectiles = (room.projectiles || []).filter((projectile: any) => String(projectile.ownerId || "") !== String(socketId));
+      this.server.to(room.id).emit("capture-the-flag:entity-removed", {
+        roomId: room.id,
+        playerId: socketId,
+        projectileOwnerId: socketId,
+        serverNow: Date.now(),
+      });
+    }
+    this.captureTheFlagSocketRoom.delete(socketId);
+    this.server.sockets.sockets.get(socketId)?.leave(room.id);
+
+    const humanCount = [...room.players.values()].filter((entry: any) => !entry.isBot).length;
+    if (!humanCount) {
+      this.closeCaptureTheFlagRoom(room, "all-humans-left");
+      return;
+    }
+    if (room.status === "countdown" && room.players.size === 0) {
+      room.status = "waiting";
+      room.countdownStartedAt = null;
+    }
+    if (room.status === "playing") this.fillCaptureTheFlagBots(room);
+    this.broadcastCaptureTheFlagState(room, Date.now(), true);
+  }
+
+  private cleanupCaptureTheFlagRoom(room: any, now = Date.now()) {
+    const humans = [...room.players.values()].filter((player: any) => !player.isBot);
+    if (!humans.length) {
+      this.closeCaptureTheFlagRoom(room, "empty");
+      return;
+    }
+    if (room.status === "finished" && now >= Number(room.closingAt || now + 1)) {
+      this.server.to(room.id).emit("capture-the-flag:round-closed", { roomId: room.id });
+      this.closeCaptureTheFlagRoom(room, room.finishReason || "finished");
+    }
+  }
+
+  private closeCaptureTheFlagRoom(room: any, _reason = "closed") {
+    if (!room || room.closedAt) return;
+    room.closedAt = Date.now();
+    for (const player of room.players.values()) {
+      if (!player.isBot) {
+        this.captureTheFlagSocketRoom.delete(String(player.id));
+        this.server.sockets.sockets.get(String(player.id))?.leave(room.id);
+      }
+    }
+    room.players.clear();
+    room.orbs = [];
+    room.energyCells = [];
+    room.projectiles = [];
+    this.captureTheFlagRooms.delete(room.id);
+  }
+
 }

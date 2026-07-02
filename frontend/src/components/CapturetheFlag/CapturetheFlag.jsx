@@ -3,13 +3,13 @@ import { io } from "socket.io-client";
 import MiniMap from "../MiniMap/MiniMap";
 import PixiArenaRenderer from "../PixiArenaRenderer/PixiArenaRenderer";
 import "../GameArena/GameArena.css";
-import "./CoreHeistArena.css";
+import "./CapturetheFlag.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
-const WORLD_WIDTH_FALLBACK = 14000;
-const WORLD_HEIGHT_FALLBACK = 14000;
-const ZONE_RADIUS_FALLBACK = 7050;
+const WORLD_WIDTH_FALLBACK = 9000;
+const WORLD_HEIGHT_FALLBACK = 6000;
+const ZONE_RADIUS_FALLBACK = 10000;
 
 // GameArena movement: 2.8 px / 60fps frame ~= 168 px/sec.
 // Daca backend-ul tau ruleaza la 30 ticks/sec, PLAYER_SPEED pe server trebuie sa fie 5.6.
@@ -60,9 +60,6 @@ const PROJECTILE_STREAM_MISSING_MS = 190;
 // last authoritative position until a fresh transform arrives.
 const REMOTE_STALE_TIMEOUT_MS = 5000;
 const ZONE_PACKET_SILENCE_BEFORE_CHECK_MS = 20000;
-// Core Heist runs a compact 50 Hz transform lane. Detect a genuine silence
-// much sooner than the large Zone PvP lobby, then request a reliable resync.
-const CORE_HEIST_PACKET_SILENCE_BEFORE_CHECK_MS = 3500;
 const ZONE_SESSION_CHECK_TIMEOUT_MS = 8000;
 const ZONE_BINARY_PROTOCOL_VERSION = 1;
 const ZONE_BINARY_PLAYER_BYTES = 32;
@@ -77,9 +74,7 @@ const LOCAL_PROJECTILE_MAX_DISTANCE = 4200;
 const PROJECTILE_HIT_VISUAL_RADIUS = 118;
 const LOCAL_PROJECTILE_SPEED = 4.4;
 const FIRE_COOLDOWN = 3000;
-const BATTLE_PREPARE_DURATION = 20000; // 20-second economy phase before combat.
-const CORE_HEIST_ROLE_REVEAL_DURATION = 5000;
-const CORE_HEIST_OPENING_LOCK_DURATION = BATTLE_PREPARE_DURATION + CORE_HEIST_ROLE_REVEAL_DURATION;
+const BATTLE_PREPARE_DURATION = 30000; // 30-second economy phase: movement + loot only, combat/objectives locked.
 const ORB_STABLE_TTL = 2400;
 const MINIMAP_STABLE_TTL = 8000;
 
@@ -103,10 +98,13 @@ const SNAPSHOT_BUFFER_TTL_MS = 420;
 // BattleRoyaleMode uses 0.72 on desktop; do not change only one mode or the
 // perceived camera height will differ between PvE and PvP.
 const BATTLE_ROYALE_DESKTOP_CAMERA_SCALE = 0.72;
-const PVP_DESKTOP_CAMERA_SCALE = BATTLE_ROYALE_DESKTOP_CAMERA_SCALE;
+// CTF benefits from a slightly higher tactical camera so players can read
+// base pressure, escort lanes and dropped flags more easily.
+const PVP_DESKTOP_CAMERA_SCALE = 0.62;
 
-// Mobile remains intentionally farther out so controls do not hide the fight.
-const PVP_MOBILE_CAMERA_SCALE = 0.82;
+// Mobile stays a bit farther out than desktop, but also zooms out compared to
+// the previous CTF tuning so thumbs/HUD do not hide the action.
+const PVP_MOBILE_CAMERA_SCALE = 0.72;
 const MAX_PENDING_INPUTS = 90;
 
 const MAX_VISIBLE_REMOTE_PLAYERS = 60;
@@ -160,12 +158,48 @@ const DRONE_SKIN_THEMES = {
   "bronze-steel": ["#b87333", "#d1d5db", "#2b1605", "#fff7ed", "rgba(184, 115, 51, 0.72)"],
   "electric-indigo": ["#4f46e5", "#93c5fd", "#0b102f", "#eef2ff", "rgba(79, 70, 229, 0.82)"],
   "dark-emerald": ["#047857", "#34d399", "#001f16", "#d1fae5", "rgba(4, 120, 87, 0.82)"],
-  "heist-attacker-cyan": ["#00eaff", "#7cf8ff", "#002f44", "#ffffff", "rgba(0, 234, 255, 0.8)"],
-  "heist-defender-cyan": ["#38bdf8", "#d9f6ff", "#07273d", "#ffffff", "rgba(56, 189, 248, 0.82)"],
-  "heist-tank-cyan": ["#0ea5e9", "#8bd9ff", "#082032", "#ffffff", "rgba(14, 165, 233, 0.82)"],
-  "heist-attacker-orange": ["#ff6b4a", "#ffd0c2", "#3a0d00", "#fff7f2", "rgba(255, 107, 74, 0.82)"],
-  "heist-defender-orange": ["#ff4d5f", "#ffc3ca", "#35030f", "#fff5f6", "rgba(255, 77, 95, 0.82)"],
-  "heist-tank-orange": ["#ff8c42", "#ffd6a8", "#3a1800", "#fff7ed", "rgba(255, 140, 66, 0.82)"],
+
+  // CTF premium randomized class collection – same palettes as the WebGL hulls.
+  "ctf-blue-attack-alpha-raptor": ["#00ddff", "#9dfff8", "#00192d", "#f2ffff", "rgba(0, 221, 255, 0.82)"],
+  "ctf-blue-attack-alpha-comet": ["#38f5ff", "#b8fcff", "#062b42", "#ffffff", "rgba(56, 245, 255, 0.82)"],
+  "ctf-blue-attack-alpha-viper": ["#31ffc8", "#b7ffea", "#002d27", "#f3fffa", "rgba(49, 255, 200, 0.82)"],
+  "ctf-blue-attack-alpha-valkyrie": ["#667bff", "#cbd3ff", "#11154a", "#f7f8ff", "rgba(102, 123, 255, 0.82)"],
+  "ctf-blue-attack-alpha-talon": ["#16a7ff", "#8de2ff", "#03204f", "#f0fbff", "rgba(22, 167, 255, 0.82)"],
+  "ctf-blue-attack-bravo-phantom": ["#6d7cff", "#d4dbff", "#111238", "#f5f6ff", "rgba(109, 124, 255, 0.82)"],
+  "ctf-blue-attack-bravo-specter": ["#5871ff", "#c8d1ff", "#0a123c", "#f6f8ff", "rgba(88, 113, 255, 0.82)"],
+  "ctf-blue-attack-bravo-scythe": ["#00c4ff", "#a9edff", "#002b42", "#f4fcff", "rgba(0, 196, 255, 0.82)"],
+  "ctf-blue-attack-bravo-helix": ["#20d0d4", "#b5ffff", "#003337", "#f4ffff", "rgba(32, 208, 212, 0.82)"],
+  "ctf-blue-attack-bravo-eclipse": ["#5265ff", "#c5ccff", "#10133c", "#fafbff", "rgba(82, 101, 255, 0.82)"],
+  "ctf-blue-tank-bastion": ["#2878ff", "#9ec6ff", "#07173d", "#eaf5ff", "rgba(40, 120, 255, 0.82)"],
+  "ctf-blue-tank-titan": ["#1f5cdb", "#9ac4ff", "#071435", "#ecf6ff", "rgba(31, 92, 219, 0.82)"],
+  "ctf-blue-tank-juggernaut": ["#00aeef", "#91e5ff", "#002c47", "#f1fdff", "rgba(0, 174, 239, 0.82)"],
+  "ctf-blue-tank-citadel": ["#3559c7", "#9fb3ff", "#11153e", "#f3f5ff", "rgba(53, 89, 199, 0.82)"],
+  "ctf-blue-tank-atlas": ["#147acb", "#a4e2ff", "#06233b", "#f5fcff", "rgba(20, 122, 203, 0.82)"],
+  "ctf-blue-defense-aegis": ["#00c4af", "#a8fff2", "#002b2b", "#f0fffc", "rgba(0, 196, 175, 0.82)"],
+  "ctf-blue-defense-sentinel": ["#00a7ff", "#b1e9ff", "#002b47", "#f2fcff", "rgba(0, 167, 255, 0.82)"],
+  "ctf-blue-defense-warden": ["#3bb6ff", "#c7ecff", "#08264a", "#f8fdff", "rgba(59, 182, 255, 0.82)"],
+  "ctf-blue-defense-oracle": ["#4d7cff", "#cbd6ff", "#11183f", "#f7f9ff", "rgba(77, 124, 255, 0.82)"],
+  "ctf-blue-defense-bulwark": ["#0bc5c1", "#b0fffa", "#003738", "#f1ffff", "rgba(11, 197, 193, 0.82)"],
+  "ctf-red-attack-alpha-raptor": ["#ff4056", "#ffc3ca", "#3c0010", "#fff7f8", "rgba(255, 64, 86, 0.80)"],
+  "ctf-red-attack-alpha-comet": ["#ff7038", "#ffd2a6", "#471700", "#fffbf3", "rgba(255, 112, 56, 0.80)"],
+  "ctf-red-attack-alpha-viper": ["#ff34a1", "#ffb6e0", "#450027", "#fff4fb", "rgba(255, 52, 161, 0.80)"],
+  "ctf-red-attack-alpha-valkyrie": ["#d757ff", "#efb8ff", "#35004a", "#fff4ff", "rgba(215, 87, 255, 0.80)"],
+  "ctf-red-attack-alpha-talon": ["#ffae00", "#ffe38d", "#4a2600", "#fffcf0", "rgba(255, 174, 0, 0.80)"],
+  "ctf-red-attack-bravo-phantom": ["#ff7a35", "#ffd79b", "#421600", "#fff6ea", "rgba(255, 122, 53, 0.80)"],
+  "ctf-red-attack-bravo-specter": ["#e84d77", "#ffbfd0", "#400014", "#fff5f8", "rgba(232, 77, 119, 0.80)"],
+  "ctf-red-attack-bravo-scythe": ["#ff476e", "#ffc1cc", "#44000f", "#fff6f8", "rgba(255, 71, 110, 0.80)"],
+  "ctf-red-attack-bravo-helix": ["#e45aff", "#f2bdff", "#3b004c", "#fff5ff", "rgba(228, 90, 255, 0.80)"],
+  "ctf-red-attack-bravo-eclipse": ["#ff9b28", "#ffe0a8", "#4b1b00", "#fff9ee", "rgba(255, 155, 40, 0.80)"],
+  "ctf-red-tank-bastion": ["#e33d56", "#ff9eae", "#35000c", "#fff3f5", "rgba(227, 61, 86, 0.80)"],
+  "ctf-red-tank-titan": ["#bf2540", "#ff9aa7", "#35000d", "#fff5f6", "rgba(191, 37, 64, 0.80)"],
+  "ctf-red-tank-juggernaut": ["#e65b29", "#ffc095", "#441500", "#fff8f2", "rgba(230, 91, 41, 0.80)"],
+  "ctf-red-tank-citadel": ["#b43b8d", "#ffb5e0", "#3a0022", "#fff5fb", "rgba(180, 59, 141, 0.80)"],
+  "ctf-red-tank-atlas": ["#d88a16", "#ffe0a0", "#472400", "#fff9ee", "rgba(216, 138, 22, 0.80)"],
+  "ctf-red-defense-aegis": ["#c23483", "#ffb4df", "#350020", "#fff0fa", "rgba(194, 52, 131, 0.80)"],
+  "ctf-red-defense-sentinel": ["#f13e65", "#ffc1cc", "#43000f", "#fff5f7", "rgba(241, 62, 101, 0.80)"],
+  "ctf-red-defense-warden": ["#ff6348", "#ffd0b5", "#461300", "#fff8f3", "rgba(255, 99, 72, 0.80)"],
+  "ctf-red-defense-oracle": ["#a855f7", "#e5c0ff", "#310044", "#fff6ff", "rgba(168, 85, 247, 0.80)"],
+  "ctf-red-defense-bulwark": ["#db2e57", "#ffb5c2", "#41000e", "#fff4f6", "rgba(219, 46, 87, 0.80)"],
 };
 
 function normalizeSkin(skin) {
@@ -182,27 +216,6 @@ function getSelectedSkin(user) {
 function getDisplayName(user) {
   return user?.username || user?.firstName || user?.email?.split("@")?.[0] || "Player";
 }
-
-const CORE_HEIST_ROLE_META = {
-  attacker: {
-    label: "ATTACKER",
-    title: "ASSAULT DRONE",
-    accent: "attacker",
-    short: "Break lanes, pressure carriers and steal the enemy flag.",
-  },
-  defender: {
-    label: "DEFENDER",
-    title: "SHIELD DEFENDER",
-    accent: "defender",
-    short: "Guardian Matrix: protect the base and regenerate near your own flag.",
-  },
-  tank: {
-    label: "TANK",
-    title: "SIEGE TANK",
-    accent: "tank",
-    short: "Heavy frontline chassis with 150 HP and an integrated cannon.",
-  },
-};
 
 // Guest-ul nu are GameUser/Player în PostgreSQL. Această cheie anonimă este
 // însă stabilă pe durata browserului și leagă recordul lui de Top 10 global.
@@ -237,21 +250,18 @@ function isRealMobileDevice() {
 
   const ua = navigator.userAgent || "";
   const isPhoneUa = /Android.*Mobile|iPhone|iPod|IEMobile|Opera Mini/i.test(ua);
-  const isIpad = /iPad/i.test(ua) || (
-    navigator.platform === "MacIntel" && Number(navigator.maxTouchPoints || 0) > 1
-  );
   const hasTouch = navigator.maxTouchPoints > 0 || "ontouchstart" in window;
+  const isPortrait = window.innerHeight >= window.innerWidth;
+
   const shortSide = Math.min(window.innerWidth, window.innerHeight);
   const longSide = Math.max(window.innerWidth, window.innerHeight);
 
-  // A phone remains a phone after it rotates. The old portrait-only test
-  // disabled joystick / attack / shield exactly when the player switched to
-  // landscape, which is the intended gameplay orientation.
   return Boolean(
-    (isPhoneUa || isIpad) &&
+    isPhoneUa &&
     hasTouch &&
-    shortSide <= 1180 &&
-    longSide <= 3000
+    isPortrait &&
+    shortSide <= 980 &&
+    longSide <= 2600
   );
 }
 
@@ -705,7 +715,8 @@ function getLocalProjectileSpeed(unit) {
       rapidBonus +
       overclockBonus) *
     ZONE_BASE_ATTACK_DRONE_SPEED_MULTIPLIER *
-    Math.max(1, Number(unit?.attackDroneSpeedMultiplier || 1))
+    Math.max(1, Number(unit?.attackDroneSpeedMultiplier || 1)) *
+    Math.max(0.75, Number(unit?.ctfRoleAttackDroneSpeedMultiplier || 1))
   );
 }
 
@@ -726,13 +737,8 @@ function projectileHitsAnyTarget(projectile, targets = []) {
   return false;
 }
 
-function canCoreHeistTankFireWithoutEscort(unit) {
-  return String(unit?.heistRole || "").trim().toLowerCase() === "tank";
-}
-
 function createLocalProjectile(unit, mouseWorldX, mouseWorldY, now, fallbackSkin = "cyan") {
-  const hasEscortDrone = Number(unit?.drones || 0) > 0;
-  if (!unit || unit.alive === false || (!hasEscortDrone && !canCoreHeistTankFireWithoutEscort(unit))) return null;
+  if (!unit || unit.alive === false || (unit.drones || 0) <= 0) return null;
 
   const angle = Math.atan2(mouseWorldY - unit.y, mouseWorldX - unit.x);
   const speed = getLocalProjectileSpeed(unit);
@@ -795,7 +801,9 @@ function predictUnitFromInput(unit, input, dt, worldWidth, worldHeight, zoneRadi
     const moveSpeed =
       CLIENT_SPEED *
       ZONE_BASE_MOVE_SPEED_MULTIPLIER *
-      Math.max(1, Number(unit.moveSpeedMultiplier || 1));
+      Math.max(1, Number(unit.moveSpeedMultiplier || 1)) *
+      Math.max(0.75, Number(unit.ctfRoleMoveSpeedMultiplier || 1)) *
+      (unit.carryingFlagTeam ? 0.84 : 1);
     nextX += move.nx * moveSpeed * safeDt;
     nextY += move.ny * moveSpeed * safeDt;
   }
@@ -919,7 +927,8 @@ function getRemoteVelocity(snapshot) {
   const fallbackSpeed =
     CLIENT_SPEED *
     ZONE_BASE_MOVE_SPEED_MULTIPLIER *
-    Math.max(1, Number(snapshot?.moveSpeedMultiplier || 1));
+    Math.max(1, Number(snapshot?.moveSpeedMultiplier || 1)) *
+    Math.max(0.75, Number(snapshot?.ctfRoleMoveSpeedMultiplier || 1));
 
   return {
     x: Number.isFinite(Number(snapshot?.velocityX))
@@ -1060,18 +1069,9 @@ function decodeZonePlayerRow(row, meta = {}) {
   if (!Array.isArray(row)) return { ...(meta || {}), ...(row || {}) };
   const flags = Number(row[6] || 0);
   const netId = Number(row[0] || 0);
-  // row[8] carries the skin string when available (CoreHeist role variants).
-  // Core Heist extends the tuple with identity/team/role/HP so one delayed
-  // low-frequency state packet can never make a remote bot lose its metadata.
-  const rowSkin = row[8] ? String(row[8]) : null;
-  const rowId = row[9] ? String(row[9]) : null;
-  const rowTeam = row[10] ? String(row[10]) : null;
-  const rowRole = row[11] ? String(row[11]) : null;
-  const rowHp = Number(row[12]);
-  const rowMaxHp = Number(row[13]);
   return {
     ...(meta || {}),
-    id: rowId || meta?.id || zoneNetKey(netId),
+    id: meta?.id || zoneNetKey(netId),
     netId,
     x: Number(row[1] || 0),
     y: Number(row[2] || 0),
@@ -1084,11 +1084,7 @@ function decodeZonePlayerRow(row, meta = {}) {
     alive: Boolean(flags & 8),
     isBot: Boolean(flags & 16) || Boolean(meta?.isBot),
     drones: Number(row[7] ?? meta?.drones ?? 0),
-    skin: normalizeSkin(rowSkin || meta?.skin || 'cyan'),
-    team: rowTeam || meta?.team || null,
-    heistRole: rowRole || meta?.heistRole || null,
-    hp: Number.isFinite(rowHp) ? rowHp : meta?.hp,
-    maxHp: Number.isFinite(rowMaxHp) ? rowMaxHp : meta?.maxHp,
+    skin: normalizeSkin(meta?.skin || 'cyan'),
   };
 }
 
@@ -1273,7 +1269,7 @@ function getBattlePrepareRemainingMs(data = {}) {
 
   const matchStartedAt = Number(data.matchStartedAt);
   if (Number.isFinite(matchStartedAt) && matchStartedAt > 0) {
-    return Math.max(0, CORE_HEIST_OPENING_LOCK_DURATION - (Date.now() - matchStartedAt));
+    return Math.max(0, BATTLE_PREPARE_DURATION - (Date.now() - matchStartedAt));
   }
 
   return 0;
@@ -1283,21 +1279,31 @@ function isBattlePrepareLocked(data = {}) {
   return getBattlePrepareRemainingMs(data) > 0;
 }
 
-function getCoreHeistRoleRevealRemainingMs(data = {}) {
-  const explicitRemaining = Number(data?.heistRoleRevealRemainingMs);
+function getRoleRevealRemainingMs(data = {}) {
+  if (!data || data.status !== "playing") return 0;
+  const explicitRemaining = Number(data.roleRevealRemainingMs ?? data?.ctf?.roleRevealRemainingMs ?? 0);
   if (Number.isFinite(explicitRemaining) && explicitRemaining > 0) return explicitRemaining;
-
-  const revealUntil = Number(data?.heistRoleRevealUntil);
-  return Number.isFinite(revealUntil) && revealUntil > 0
-    ? Math.max(0, revealUntil - Date.now())
-    : 0;
+  const until = Number(data.roleRevealUntil ?? data?.ctf?.roleRevealUntil ?? 0);
+  return Number.isFinite(until) && until > 0 ? Math.max(0, until - Date.now()) : 0;
 }
 
-function isCoreHeistRoleRevealLocked(data = {}) {
-  return (
-    String(data?.mode || "") === "core-heist" &&
-    getCoreHeistRoleRevealRemainingMs(data) > 0
-  );
+function isRoleRevealLocked(data = {}) {
+  return getRoleRevealRemainingMs(data) > 0;
+}
+
+function getCaptureTheFlagRoleLabel(role, fallback = "PILOT") {
+  const normalized = String(role || "").toLowerCase();
+  if (normalized === "tank") return "TANK";
+  if (normalized === "defense") return "DEFENDER";
+  if (normalized === "attack-alpha" || normalized === "attack-bravo") return "ATTACK DRONE";
+  return fallback;
+}
+
+function getCaptureTheFlagSkinFamilyLabel(family) {
+  const normalized = String(family || "").trim().toUpperCase();
+  if (normalized === "MEDIEVAL") return "MEDIEVAL FORGE";
+  if (normalized === "MILITARY") return "MILITARY PROTOTYPE";
+  return "GALACTIC OPERA";
 }
 
 function getBattleBeginFlashActive(data = {}) {
@@ -1359,38 +1365,38 @@ function shouldAcceptZonePhase(current, incoming = {}, allowFreshRoom = false) {
   return true;
 }
 
-const CORE_HEIST_RESUME_STORAGE_KEY = "drone-swarm:core-heist-resume-v1";
-const CORE_HEIST_PARTICIPANT_STORAGE_KEY = "drone-swarm:core-heist-participant-v1";
+const CAPTURE_THE_FLAG_RESUME_STORAGE_KEY = "drone-swarm:capture-the-flag-resume-v1";
+const CAPTURE_THE_FLAG_PARTICIPANT_STORAGE_KEY = "drone-swarm:capture-the-flag-participant-v1";
 // Persisted before disconnecting. It prevents the next Zone PvP mount from
 // being admitted back into a room whose leave packet was lost mid-flight.
-const CORE_HEIST_DEPARTED_ROOM_STORAGE_KEY = "drone-swarm:core-heist-departed-room-v1";
+const CAPTURE_THE_FLAG_DEPARTED_ROOM_STORAGE_KEY = "drone-swarm:capture-the-flag-departed-room-v1";
 
-function createCoreHeistResumeToken() {
+function createCaptureTheFlagResumeToken() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID().replace(/-/g, "");
   }
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
 }
 
-function getCoreHeistResumeToken() {
-  if (typeof window === "undefined") return createCoreHeistResumeToken();
+function getCaptureTheFlagResumeToken() {
+  if (typeof window === "undefined") return createCaptureTheFlagResumeToken();
 
   try {
-    const existing = String(window.sessionStorage.getItem(CORE_HEIST_RESUME_STORAGE_KEY) || "").trim();
+    const existing = String(window.sessionStorage.getItem(CAPTURE_THE_FLAG_RESUME_STORAGE_KEY) || "").trim();
     if (/^[A-Za-z0-9_-]{20,160}$/.test(existing)) return existing;
 
-    const next = createCoreHeistResumeToken();
-    window.sessionStorage.setItem(CORE_HEIST_RESUME_STORAGE_KEY, next);
+    const next = createCaptureTheFlagResumeToken();
+    window.sessionStorage.setItem(CAPTURE_THE_FLAG_RESUME_STORAGE_KEY, next);
     return next;
   } catch {
-    return createCoreHeistResumeToken();
+    return createCaptureTheFlagResumeToken();
   }
 }
 
-function clearCoreHeistResumeToken() {
+function clearCaptureTheFlagResumeToken() {
   if (typeof window === "undefined") return;
   try {
-    window.sessionStorage.removeItem(CORE_HEIST_RESUME_STORAGE_KEY);
+    window.sessionStorage.removeItem(CAPTURE_THE_FLAG_RESUME_STORAGE_KEY);
   } catch {
     // Storage can be unavailable in private-browser modes. The server-side
     // explicit leave still removes the resumable seat in that case.
@@ -1401,26 +1407,26 @@ function clearCoreHeistResumeToken() {
 // It is deliberately independent from the reconnect token: after EXIT TO MENU
 // the server can deny this participant from the abandoned room even though the
 // resumable seat/token has been deleted.
-function getCoreHeistParticipantId() {
-  if (typeof window === "undefined") return createCoreHeistResumeToken();
+function getCaptureTheFlagParticipantId() {
+  if (typeof window === "undefined") return createCaptureTheFlagResumeToken();
 
   try {
-    const existing = String(window.sessionStorage.getItem(CORE_HEIST_PARTICIPANT_STORAGE_KEY) || "").trim();
+    const existing = String(window.sessionStorage.getItem(CAPTURE_THE_FLAG_PARTICIPANT_STORAGE_KEY) || "").trim();
     if (/^[A-Za-z0-9_-]{20,160}$/.test(existing)) return existing;
 
-    const next = createCoreHeistResumeToken();
-    window.sessionStorage.setItem(CORE_HEIST_PARTICIPANT_STORAGE_KEY, next);
+    const next = createCaptureTheFlagResumeToken();
+    window.sessionStorage.setItem(CAPTURE_THE_FLAG_PARTICIPANT_STORAGE_KEY, next);
     return next;
   } catch {
-    return createCoreHeistResumeToken();
+    return createCaptureTheFlagResumeToken();
   }
 }
 
-function getCoreHeistDepartedRoom() {
+function getCaptureTheFlagDepartedRoom() {
   if (typeof window === "undefined") return null;
 
   try {
-    const raw = window.sessionStorage.getItem(CORE_HEIST_DEPARTED_ROOM_STORAGE_KEY);
+    const raw = window.sessionStorage.getItem(CAPTURE_THE_FLAG_DEPARTED_ROOM_STORAGE_KEY);
     if (!raw) return null;
     const value = JSON.parse(raw);
     const roomId = String(value?.roomId || "").trim();
@@ -1438,11 +1444,11 @@ function getCoreHeistDepartedRoom() {
   }
 }
 
-function rememberCoreHeistDepartedRoom({ roomId, roundId, participantId, resumeToken }) {
+function rememberCaptureTheFlagDepartedRoom({ roomId, roundId, participantId, resumeToken }) {
   if (typeof window === "undefined" || !roomId || !participantId) return;
   try {
     window.sessionStorage.setItem(
-      CORE_HEIST_DEPARTED_ROOM_STORAGE_KEY,
+      CAPTURE_THE_FLAG_DEPARTED_ROOM_STORAGE_KEY,
       JSON.stringify({ roomId, roundId: roundId || null, participantId, resumeToken: resumeToken || null }),
     );
   } catch {
@@ -1451,136 +1457,13 @@ function rememberCoreHeistDepartedRoom({ roomId, roundId, participantId, resumeT
   }
 }
 
-function clearCoreHeistDepartedRoom() {
+function clearCaptureTheFlagDepartedRoom() {
   if (typeof window === "undefined") return;
   try {
-    window.sessionStorage.removeItem(CORE_HEIST_DEPARTED_ROOM_STORAGE_KEY);
+    window.sessionStorage.removeItem(CAPTURE_THE_FLAG_DEPARTED_ROOM_STORAGE_KEY);
   } catch {
     // no-op
   }
-}
-
-function getCoreHeistTeamLabel(team) {
-  return String(team || "cyan") === "orange" ? "RED" : "BLUE";
-}
-
-function getCoreHeistFlagLabel(team) {
-  return `${getCoreHeistTeamLabel(team)} FLAG`;
-}
-
-function resolveCoreHeistPlayerName(flag, state = {}) {
-  const directName = String(
-    flag?.carrierName ||
-    flag?.lastCarrierName ||
-    flag?.playerName ||
-    "",
-  ).trim();
-
-  if (directName) return directName;
-
-  const carrierId = String(flag?.carrierId || flag?.lastCarrierId || "");
-  if (!carrierId) return "A PLAYER";
-
-  const candidates = [
-    state?.you,
-    state?.spectatingPlayer,
-    ...(Array.isArray(state?.players) ? state.players : []),
-    ...(Array.isArray(state?.leaderboard) ? state.leaderboard : []),
-  ];
-
-  const matched = candidates.find(
-    (player) => String(player?.id || "") === carrierId,
-  );
-
-  return String(matched?.username || matched?.name || "A PLAYER");
-}
-
-function createCoreHeistFlagHistory(heist, state = {}) {
-  const flags = Array.isArray(heist?.flags) ? heist.flags : [];
-
-  return new Map(
-    flags.map((flag) => {
-      const id = String(flag?.id || flag?.team || Math.random());
-      return [
-        id,
-        {
-          id,
-          team: String(flag?.team || "cyan"),
-          status: String(flag?.status || "home"),
-          carrierId: String(flag?.carrierId || ""),
-          carrierName: resolveCoreHeistPlayerName(flag, state),
-        },
-      ];
-    }),
-  );
-}
-
-
-function buildCoreHeistAnnouncement(rawEvent = {}) {
-  const type = String(rawEvent?.type || rawEvent?.kind || "").trim().toLowerCase();
-  if (!["taken", "dropped", "returned", "captured"].includes(type)) return null;
-
-  const flagTeam = String(rawEvent?.flagTeam || rawEvent?.flag?.team || "cyan") === "orange"
-    ? "orange"
-    : "cyan";
-  const actorTeam = String(rawEvent?.actorTeam || rawEvent?.team || "") === "orange"
-    ? "orange"
-    : "cyan";
-  const scoringTeam = String(rawEvent?.scoreTeam || rawEvent?.team || actorTeam) === "orange"
-    ? "orange"
-    : "cyan";
-  const actorName = String(rawEvent?.actorName || rawEvent?.playerName || "A PLAYER").trim() || "A PLAYER";
-  const flagLabel = getCoreHeistFlagLabel(flagTeam);
-  const score = {
-    cyan: Math.max(0, Number(rawEvent?.score?.cyan || 0)),
-    orange: Math.max(0, Number(rawEvent?.score?.orange || 0)),
-  };
-  const targetScore = Math.max(1, Number(rawEvent?.targetScore || 3));
-
-  if (type === "taken") {
-    return {
-      id: String(rawEvent?.id || `heist-taken-${Date.now()}-${Math.random()}`),
-      kind: "taken",
-      team: actorTeam,
-      title: `${actorName} TOOK THE ${flagLabel}`,
-      detail: `${getCoreHeistTeamLabel(actorTeam)} TEAM IS RUNNING THE FLAG`,
-      duration: 4300,
-    };
-  }
-
-  if (type === "dropped") {
-    return {
-      id: String(rawEvent?.id || `heist-dropped-${Date.now()}-${Math.random()}`),
-      kind: "dropped",
-      team: actorTeam,
-      title: `${actorName} DROPPED THE ${flagLabel}`,
-      detail: `THE FLAG IS ON THE GROUND — SECURE IT`,
-      duration: 4300,
-    };
-  }
-
-  if (type === "returned") {
-    const returnedBy = actorName === "SYSTEM" ? "THE BASE" : actorName;
-    return {
-      id: String(rawEvent?.id || `heist-returned-${Date.now()}-${Math.random()}`),
-      kind: "returned",
-      team: flagTeam,
-      title: `${returnedBy} RETURNED THE ${flagLabel}`,
-      detail: `${getCoreHeistTeamLabel(flagTeam)} FLAG IS SAFE AT HOME`,
-      duration: 4300,
-    };
-  }
-
-  return {
-    id: String(rawEvent?.id || `heist-captured-${Date.now()}-${Math.random()}`),
-    kind: "capture",
-    team: scoringTeam,
-    title: `${actorName} CAPTURED THE ${flagLabel}`,
-    detail: `${getCoreHeistTeamLabel(scoringTeam)} SCORE: ${score[scoringTeam]} / ${targetScore}  •  ${getCoreHeistTeamLabel(
-      scoringTeam === "cyan" ? "orange" : "cyan",
-    )}: ${score[scoringTeam === "cyan" ? "orange" : "cyan"]} / ${targetScore}`,
-    duration: 5200,
-  };
 }
 
 function FlyingAttackDrone({ projectile }) {
@@ -1629,13 +1512,13 @@ function toZoneBinaryArrayBuffer(payload) {
   return null;
 }
 
-function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
+function CapturetheFlag({ user, onExitToMenu, graphicsQuality = "normal" }) {
   // The Dashboard can recreate `user` while its own HUD refreshes. Networking
   // must not treat that render as a new arena or emit a leave event.
   const userRef = useRef(user);
   userRef.current = user;
-  const resumeTokenRef = useRef(getCoreHeistResumeToken());
-  const participantIdRef = useRef(getCoreHeistParticipantId());
+  const resumeTokenRef = useRef(getCaptureTheFlagResumeToken());
+  const participantIdRef = useRef(getCaptureTheFlagParticipantId());
   const intentionalExitRef = useRef(false);
   const explicitLeaveSentRef = useRef(false);
   const explicitExitFinishedRef = useRef(false);
@@ -1723,20 +1606,6 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   // Last authoritative self snapshot. This is visual-only fallback state for
   // the same instant WebGL combat feedback used by Battle Royale.
   const selfCombatSnapshotRef = useRef(null);
-  // Objective events are intentionally local HUD state. World state remains
-  // entirely server-authoritative; this only turns the replicated flag changes
-  // into one clear, cinematic announcement in the middle of the screen.
-  const heistEventHistoryRef = useRef({
-    roomId: null,
-    initialized: false,
-    score: { cyan: 0, orange: 0 },
-    flags: new Map(),
-  });
-  const heistAnnouncementTimerRef = useRef(null);
-  // Objective events travel on a reliable socket lane. Keep their ids briefly
-  // so the same event arriving later inside a state snapshot cannot replay.
-  const heistAnnouncementSeenIdsRef = useRef(new Map());
-  const showHeistAnnouncementRef = useRef(() => {});
 
   const mobileMoveRef = useRef({ x: 0, y: 0, active: false });
   const joystickPointerRef = useRef(null);
@@ -1757,8 +1626,8 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     playerCount: 0,
     realPlayerCount: 0,
     matchmakingPlayerCount: 0,
-    minPlayers: 3,
-    maxPlayers: 60,
+    minPlayers: 1,
+    maxPlayers: 8,
     countdown: null,
     coreDropCountdown: null,
     winnerId: null,
@@ -1768,7 +1637,6 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     safeZoneRadius: ZONE_RADIUS_FALLBACK,
     you: null,
     players: [],
-    heistTeammates: [],
     spectatingPlayer: null,
     orbs: [],
     minimapOrbs: [],
@@ -1780,7 +1648,6 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     // Server sends these short-lived events; Pixi animates them in world space.
     combatEvents: [],
     leaderboard: [],
-    heist: null,
   });
 
   const predictedYouRef = useRef(null);
@@ -1811,35 +1678,6 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const [mobileAttackActive, setMobileAttackActive] = useState(false);
   const [mobileShieldActive, setMobileShieldActive] = useState(false);
   const [battleBeginFlashUntil, setBattleBeginFlashUntil] = useState(0);
-  const [heistAnnouncement, setHeistAnnouncement] = useState(null);
-
-  showHeistAnnouncementRef.current = (rawEvent = {}) => {
-    const announcement = buildCoreHeistAnnouncement(rawEvent);
-    if (!announcement) return;
-
-    const now = Date.now();
-    const seen = heistAnnouncementSeenIdsRef.current;
-    for (const [id, seenAt] of seen.entries()) {
-      if (now - Number(seenAt || 0) > 30000) seen.delete(id);
-    }
-
-    if (announcement.id && seen.has(announcement.id)) return;
-    if (announcement.id) seen.set(announcement.id, now);
-
-    setHeistAnnouncement({
-      ...announcement,
-      id: `${announcement.id}-${now}`,
-    });
-
-    if (heistAnnouncementTimerRef.current) {
-      window.clearTimeout(heistAnnouncementTimerRef.current);
-    }
-
-    heistAnnouncementTimerRef.current = window.setTimeout(() => {
-      setHeistAnnouncement(null);
-      heistAnnouncementTimerRef.current = null;
-    }, Number(announcement.duration || 4300));
-  };
 
   useEffect(() => {
     // Zone PvP uses direct WebSocket. Polling can queue HTTP packets behind
@@ -1883,7 +1721,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const confirmedPlayerId = confirmation?.playerId || confirmation?.you?.id;
       if (confirmedPlayerId && socket.id && String(confirmedPlayerId) !== String(socket.id)) return;
 
-      const departedRoom = getCoreHeistDepartedRoom();
+      const departedRoom = getCaptureTheFlagDepartedRoom();
       const confirmedRoomId = String(confirmation?.roomId || confirmation?.room?.id || "");
       if (departedRoom && confirmedRoomId) {
         if (confirmedRoomId === String(departedRoom.roomId)) {
@@ -1892,7 +1730,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           leaveZoneSilentlyToMenu();
           return;
         }
-        clearCoreHeistDepartedRoom();
+        clearCaptureTheFlagDepartedRoom();
       }
 
       zoneJoinAcceptedRef.current = true;
@@ -1902,7 +1740,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     const getZoneJoinPayload = () => {
       const currentUser = userRef.current;
-      const departedRoom = getCoreHeistDepartedRoom();
+      const departedRoom = getCaptureTheFlagDepartedRoom();
       const sameParticipant =
         departedRoom &&
         String(departedRoom.participantId || "") === String(participantIdRef.current || "");
@@ -1917,9 +1755,6 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         guestStatsKey: isGuest ? getGuestStatsKey() : null,
         username: getDisplayName(currentUser),
         skin: getSelectedSkin(currentUser),
-        // Same robust Zone socket lane, but server creates/joins an isolated
-        // Capture the Flag room rather than a shrinking-zone battle royale room.
-        mode: "core-heist",
         resumeToken: resumeTokenRef.current,
         participantId: participantIdRef.current,
         // The backend marks this old room as departed before selecting any
@@ -1933,7 +1768,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     const requestZoneJoin = () => {
       if (disposed || intentionalExitRef.current || zoneJoinAcceptedRef.current || !socket.connected) return;
 
-      socket.emit("zone-pvp:join", getZoneJoinPayload());
+      socket.emit("capture-the-flag:join", getZoneJoinPayload());
       const attempt = zoneJoinAttemptRef.current;
       zoneJoinAttemptRef.current = attempt + 1;
       clearZoneJoinRetry();
@@ -1947,8 +1782,8 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     };
 
     const resetZoneAfterExpiredSession = () => {
-      clearCoreHeistResumeToken();
-      resumeTokenRef.current = getCoreHeistResumeToken();
+      clearCaptureTheFlagResumeToken();
+      resumeTokenRef.current = getCaptureTheFlagResumeToken();
       allowFreshZoneRoomRef.current = true;
       zoneJoinAcceptedRef.current = false;
       zoneJoinAttemptRef.current = 0;
@@ -1970,13 +1805,6 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       zoneEntityMetaRef.current.clear();
       zoneProjectileMetaRef.current.clear();
       combatEventMapRef.current.clear();
-      heistEventHistoryRef.current = {
-        roomId: null,
-        initialized: false,
-        score: { cyan: 0, orange: 0 },
-        flags: new Map(),
-      };
-      setHeistAnnouncement(null);
       stableOrbMapRef.current.clear();
       stableEnergyMapRef.current.clear();
       stableMinimapOrbMapRef.current.clear();
@@ -1998,7 +1826,6 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         countdown: null,
         you: null,
         players: [],
-        heistTeammates: [],
         spectatingPlayer: null,
         orbs: [],
         minimapOrbs: [],
@@ -2041,8 +1868,8 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         zoneForcedReconnectTimer = null;
       }
       setConnectionError("");
-      clearCoreHeistResumeToken();
-      resumeTokenRef.current = createCoreHeistResumeToken();
+      clearCaptureTheFlagResumeToken();
+      resumeTokenRef.current = createCaptureTheFlagResumeToken();
       socket.disconnect();
       window.setTimeout(() => {
         if (!disposed) onExitToMenu?.();
@@ -2064,7 +1891,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       // A connected transport may have skipped volatile packets under CPU load.
       // Ask for a reliable state only; do not disconnect/recreate the room.
-      socket.emit("zone-pvp:resync");
+      socket.emit("capture-the-flag:resync");
     };
 
     const verifyZoneSession = () => {
@@ -2076,7 +1903,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       if (zoneSessionCheckInFlight) return;
 
       zoneSessionCheckInFlight = true;
-      socket.emit("zone-pvp:session-check", { resumeToken: resumeTokenRef.current });
+      socket.emit("capture-the-flag:session-check", { resumeToken: resumeTokenRef.current });
       zoneSessionCheckTimer = window.setTimeout(() => {
         if (!zoneSessionCheckInFlight) return;
         zoneSessionCheckInFlight = false;
@@ -2108,7 +1935,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         return;
       }
 
-      // core-heist:joined and the following authoritative state both prove that
+      // capture-the-flag:joined and the following authoritative state both prove that
       // this socket is in a room. Stop the idempotent mobile join retry loop.
       markZoneJoinAccepted(state);
 
@@ -2274,13 +2101,13 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
             ? Number(state.battleBeginFlashUntil)
             : localBattlePrepareUntilRef.current + 1800;
         } else if (state.matchStartedAt) {
-          const localPrepareUntil = Number(state.matchStartedAt) + CORE_HEIST_OPENING_LOCK_DURATION;
+          const localPrepareUntil = Number(state.matchStartedAt) + BATTLE_PREPARE_DURATION;
           if (localPrepareUntil > nowWall) {
             localBattlePrepareUntilRef.current = Math.max(localBattlePrepareUntilRef.current || 0, localPrepareUntil);
             localBattleBeginFlashUntilRef.current = Math.max(localBattleBeginFlashUntilRef.current || 0, localPrepareUntil + 1800);
           }
         } else if (lastArenaStatusRef.current !== "playing" && !localBattlePrepareUntilRef.current) {
-          localBattlePrepareUntilRef.current = nowWall + CORE_HEIST_OPENING_LOCK_DURATION;
+          localBattlePrepareUntilRef.current = nowWall + BATTLE_PREPARE_DURATION;
           localBattleBeginFlashUntilRef.current = localBattlePrepareUntilRef.current + 1800;
         }
       } else if (state?.status === "waiting" || state?.status === "countdown") {
@@ -2333,11 +2160,6 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         safeZoneRadius: state.safeZoneRadius || ZONE_RADIUS_FALLBACK,
         you: state.you || worldRef.current.you,
         players: Array.isArray(state.players) ? state.players.map((p) => ({ ...p, __seenAt: now })) : worldRef.current.players,
-        // Full friendly squad is sent by Core Heist separately from viewport
-        // entities, so the tactical map never loses teammates off-screen.
-        heistTeammates: Array.isArray(state.heistTeammates)
-          ? state.heistTeammates.map((p) => ({ ...p, __seenAt: now }))
-          : worldRef.current.heistTeammates,
         spectatingPlayer: state.spectatingPlayer
           ? { ...state.spectatingPlayer, __seenAt: now }
           : state.spectatingPlayer === null
@@ -2517,7 +2339,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       clearZoneSessionCheck();
 
       // Preserve all live world data. A transport loss is not a player action;
-      // reconnect will call handleConnect -> core-heist:join with the same token.
+      // reconnect will call handleConnect -> capture-the-flag:join with the same token.
       if (!disposed && !intentionalExitRef.current) {
         setConnectionError("");
         lastZoneServerPacketAtRef.current = Date.now();
@@ -2574,7 +2396,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       lastZoneServerPacketAtRef.current = Date.now();
 
       if (result?.active) {
-        socket.emit("zone-pvp:resync");
+        socket.emit("capture-the-flag:resync");
         return;
       }
 
@@ -2817,29 +2639,6 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       consumeMovementFrame(packet);
     };
 
-    const applyCoreHeistHeartbeat = (packet = {}) => {
-      const packetRoomId = String(packet?.roomId || "");
-      const currentRoomId = String(zonePhaseRef.current?.roomId || worldRef.current?.roomId || "");
-      if (packetRoomId && currentRoomId && packetRoomId !== currentRoomId) return;
-      if (String(worldRef.current?.mode || "") !== "core-heist") return;
-
-      lastZoneServerPacketAtRef.current = Date.now();
-      updateServerClockOffset(packet?.serverNow);
-      const current = worldRef.current;
-      const previousHeist = current?.heist || {};
-      const nextHeist = {
-        ...previousHeist,
-        matchEndsAt: Number(packet?.matchEndsAt || previousHeist?.matchEndsAt || 0),
-        remainingMs: Math.max(0, Number(packet?.remainingMs ?? previousHeist?.remainingMs ?? 0)),
-      };
-      worldRef.current = {
-        ...current,
-        serverNow: Number(packet?.serverNow || current?.serverNow || 0),
-        status: packet?.status || current?.status,
-        heist: nextHeist,
-      };
-    };
-
     // Legacy binary packets are intentionally ignored. The JSON transform lane
     // now contains complete entities, so bots never wait for separate metadata.
     const applyBinaryTransforms = () => {};
@@ -3005,53 +2804,6 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
     };
 
-    const applyCoreHeistEvent = (event = {}) => {
-      if (!event || disposed || intentionalExitRef.current) return;
-
-      lastZoneServerPacketAtRef.current = Date.now();
-
-      // Score becomes visible immediately from the reliable objective lane;
-      // the following full state remains the authoritative reconciliation.
-      if (event?.score && typeof event.score === "object") {
-        const nextScore = {
-          cyan: Math.max(0, Number(event.score.cyan || 0)),
-          orange: Math.max(0, Number(event.score.orange || 0)),
-        };
-
-        worldRef.current = {
-          ...worldRef.current,
-          heist: {
-            ...(worldRef.current.heist || {}),
-            score: nextScore,
-            targetScore: Number(event.targetScore || worldRef.current.heist?.targetScore || 3),
-            latestEvent: event,
-          },
-        };
-
-        setHudData((previous) => ({
-          ...previous,
-          heist: {
-            ...(previous?.heist || {}),
-            score: nextScore,
-            targetScore: Number(event.targetScore || previous?.heist?.targetScore || 3),
-            latestEvent: event,
-          },
-        }));
-
-        setRenderData((previous) => ({
-          ...previous,
-          heist: {
-            ...(previous?.heist || {}),
-            score: nextScore,
-            targetScore: Number(event.targetScore || previous?.heist?.targetScore || 3),
-            latestEvent: event,
-          },
-        }));
-      }
-
-      showHeistAnnouncementRef.current(event);
-    };
-
     const applyEntityRemoved = (event = {}) => {
       const currentRoomId = String(zonePhaseRef.current?.roomId || worldRef.current?.roomId || "");
       const eventRoomId = String(event?.roomId || "");
@@ -3138,24 +2890,22 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       setHudData({ ...worldRef.current, you: predictedYouRef.current || worldRef.current.you, fps: fpsRef.current.value });
     };
 
-    socket.on("zone-pvp:joined", applyState);
-    socket.on("zone-pvp:join-confirmed", handleJoinConfirmed);
-    socket.on("zone-pvp:session-check:result", handleZoneSessionCheckResult);
-    socket.on("zone-pvp:resume-missing", handleZoneResumeMissing);
-    socket.on("zone-pvp:round-closed", handleZoneRoundClosed);
-    socket.on("zone-pvp:state", applyState);
-    socket.on("zone-pvp:movement", applyMovementFrame);
-    socket.on("zone-pvp:heartbeat", applyCoreHeistHeartbeat);
+    socket.on("capture-the-flag:joined", applyState);
+    socket.on("capture-the-flag:join-confirmed", handleJoinConfirmed);
+    socket.on("capture-the-flag:session-check:result", handleZoneSessionCheckResult);
+    socket.on("capture-the-flag:resume-missing", handleZoneResumeMissing);
+    socket.on("capture-the-flag:round-closed", handleZoneRoundClosed);
+    socket.on("capture-the-flag:state", applyState);
+    socket.on("capture-the-flag:movement", applyMovementFrame);
     // The former binary lane is intentionally not subscribed. It could produce
     // incomplete entity definitions on mobile and make bots disappear.
-    socket.on("zone-pvp:collision", applyZoneCollisionImpulse);
-    socket.on("zone-pvp:combat", applyPrivateCombatEvent);
-    socket.on("zone-pvp:heist-event", applyCoreHeistEvent);
-    socket.on("zone-pvp:collect", applyCollectSync);
-    socket.on("zone-pvp:world-delta", applyWorldItemDelta);
-    socket.on("zone-pvp:entity-removed", applyEntityRemoved);
-    socket.on("zone-pvp:eliminated", applyEliminated);
-    socket.on("zone-pvp:error", () => {
+    socket.on("capture-the-flag:collision", applyZoneCollisionImpulse);
+    socket.on("capture-the-flag:combat", applyPrivateCombatEvent);
+    socket.on("capture-the-flag:collect", applyCollectSync);
+    socket.on("capture-the-flag:world-delta", applyWorldItemDelta);
+    socket.on("capture-the-flag:entity-removed", applyEntityRemoved);
+    socket.on("capture-the-flag:eliminated", applyEliminated);
+    socket.on("capture-the-flag:error", () => {
       // Game-state errors are soft/recoverable. Keep the current world and let
       // the reliable resync/reconnect path repair it; never redirect the player.
       if (!intentionalExitRef.current) forceZoneTransportReconnect();
@@ -3177,9 +2927,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       // live transport merely because one frame burst was skipped.
       if (
         Date.now() - Number(lastZoneServerPacketAtRef.current || 0) >
-        (String(worldRef.current?.mode || "") === "core-heist"
-          ? CORE_HEIST_PACKET_SILENCE_BEFORE_CHECK_MS
-          : ZONE_PACKET_SILENCE_BEFORE_CHECK_MS)
+        ZONE_PACKET_SILENCE_BEFORE_CHECK_MS
       ) {
         verifyZoneSession();
       }
@@ -3199,26 +2947,22 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const mouse = mouseRef.current;
       const mouseWorldX = you ? you.x + (mouse.x - window.innerWidth / 2) : 0;
       const mouseWorldY = you ? you.y + (mouse.y - window.innerHeight / 2) : 0;
-      const rawMobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
-      const battleLocked = isBattlePrepareLocked(worldRef.current);
-      const roleRevealLocked = isCoreHeistRoleRevealLocked(worldRef.current);
-      const mobileMove = roleRevealLocked
-        ? { x: 0, y: 0, active: false }
-        : rawMobileMove;
+      const mobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
+      const battleLocked = isBattlePrepareLocked(worldRef.current) || isRoleRevealLocked(worldRef.current) || String(worldRef.current?.status || "") !== "playing";
 
       const input = {
         seq: inputSeqRef.current + 1,
         dt: Math.min(50, Math.max(1, elapsed)),
         clientSentAt: now,
-        w: !roleRevealLocked && Boolean(keysRef.current.w || keysRef.current.arrowup || (mobileMove.active && mobileMove.y < -0.22)),
-        a: !roleRevealLocked && Boolean(keysRef.current.a || keysRef.current.arrowleft || (mobileMove.active && mobileMove.x < -0.22)),
-        s: !roleRevealLocked && Boolean(keysRef.current.s || keysRef.current.arrowdown || (mobileMove.active && mobileMove.y > 0.22)),
-        d: !roleRevealLocked && Boolean(keysRef.current.d || keysRef.current.arrowright || (mobileMove.active && mobileMove.x > 0.22)),
+        w: Boolean(keysRef.current.w || keysRef.current.arrowup || (mobileMove.active && mobileMove.y < -0.22)),
+        a: Boolean(keysRef.current.a || keysRef.current.arrowleft || (mobileMove.active && mobileMove.x < -0.22)),
+        s: Boolean(keysRef.current.s || keysRef.current.arrowdown || (mobileMove.active && mobileMove.y > 0.22)),
+        d: Boolean(keysRef.current.d || keysRef.current.arrowright || (mobileMove.active && mobileMove.x > 0.22)),
         moveX: mobileMove.active ? mobileMove.x : 0,
         moveY: mobileMove.active ? mobileMove.y : 0,
         mobileMove: Boolean(mobileMove.active),
-        attacking: !battleLocked && !roleRevealLocked && Boolean(keysRef.current.mouseDown),
-        shield: !battleLocked && !roleRevealLocked && Boolean(keysRef.current.rightMouseDown),
+        attacking: !battleLocked && Boolean(keysRef.current.mouseDown),
+        shield: !battleLocked && Boolean(keysRef.current.rightMouseDown),
         mouseX: mouseWorldX,
         mouseY: mouseWorldY,
       };
@@ -3242,17 +2986,12 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       // Inputs are latest-wins. Reliable input at 50 Hz can form a TCP queue on
       // mobile and makes *other* drones appear seconds behind. A reliable STOP
       // packet handles release, while active held input is volatile and current.
-      // EXCEPTION: on mobile with active movement, use reliable emit so the server
-      // always receives the moving state and correctly drains energy.
       const sendStop = !hasActiveControl && hadActiveControlRef.current;
       hadActiveControlRef.current = hasActiveControl;
       if (sendStop) {
-        socket.emit("zone-pvp:input-stop", { seq: input.seq });
-      } else if (input.mobileMove && hasActiveControl) {
-        // Mobile movement: reliable so energy drain is not blocked by dropped packets
-        socket.emit("zone-pvp:input", input);
+        socket.emit("capture-the-flag:input-stop", { seq: input.seq });
       } else {
-        socket.volatile.emit("zone-pvp:input", input);
+        socket.volatile.emit("capture-the-flag:input", input);
       }
     };
 
@@ -3286,184 +3025,32 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       socket.off("connect", handleConnect);
       socket.off("connect_error", handleConnectError);
       socket.off("disconnect", handleDisconnect);
-      socket.off("zone-pvp:joined", applyState);
-      socket.off("zone-pvp:join-confirmed", handleJoinConfirmed);
-      socket.off("zone-pvp:session-check:result", handleZoneSessionCheckResult);
-      socket.off("zone-pvp:resume-missing", handleZoneResumeMissing);
-      socket.off("zone-pvp:round-closed", handleZoneRoundClosed);
-      socket.off("zone-pvp:state", applyState);
-      socket.off("zone-pvp:movement", applyMovementFrame);
-      socket.off("zone-pvp:heartbeat", applyCoreHeistHeartbeat);
-      socket.off("zone-pvp:collision", applyZoneCollisionImpulse);
-      socket.off("zone-pvp:combat", applyPrivateCombatEvent);
-      socket.off("zone-pvp:heist-event", applyCoreHeistEvent);
-      socket.off("zone-pvp:collect", applyCollectSync);
-      socket.off("zone-pvp:world-delta", applyWorldItemDelta);
-      socket.off("zone-pvp:entity-removed", applyEntityRemoved);
-      socket.off("zone-pvp:left");
+      socket.off("capture-the-flag:joined", applyState);
+      socket.off("capture-the-flag:join-confirmed", handleJoinConfirmed);
+      socket.off("capture-the-flag:session-check:result", handleZoneSessionCheckResult);
+      socket.off("capture-the-flag:resume-missing", handleZoneResumeMissing);
+      socket.off("capture-the-flag:round-closed", handleZoneRoundClosed);
+      socket.off("capture-the-flag:state", applyState);
+      socket.off("capture-the-flag:movement", applyMovementFrame);
+      socket.off("capture-the-flag:collision", applyZoneCollisionImpulse);
+      socket.off("capture-the-flag:combat", applyPrivateCombatEvent);
+      socket.off("capture-the-flag:collect", applyCollectSync);
+      socket.off("capture-the-flag:world-delta", applyWorldItemDelta);
+      socket.off("capture-the-flag:entity-removed", applyEntityRemoved);
+      socket.off("capture-the-flag:left");
       clearExplicitExitTimer();
       // Only an explicit EXIT TO MENU permanently removes the seat. Component
       // remounts, StrictMode, background recovery and connection changes keep
       // the resumable player in the same live room.
       if (intentionalExitRef.current && !explicitLeaveSentRef.current) {
         explicitLeaveSentRef.current = true;
-        socket.emit("zone-pvp:leave");
+        socket.emit("capture-the-flag:leave");
       }
       socket.disconnect();
       socketRef.current = null;
       sendInputRef.current = () => {};
     };
   }, []);
-
-  useEffect(() => {
-    return () => {
-      if (heistAnnouncementTimerRef.current) {
-        window.clearTimeout(heistAnnouncementTimerRef.current);
-        heistAnnouncementTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    const source = hudData?.heist || renderData?.heist;
-    if (!source) return;
-
-    const roomId = String(hudData?.roomId || renderData?.roomId || "");
-    const history = heistEventHistoryRef.current;
-    const nextScore = {
-      cyan: Number(source?.score?.cyan || 0),
-      orange: Number(source?.score?.orange || 0),
-    };
-    const nextFlags = createCoreHeistFlagHistory(source, hudData?.heist ? hudData : renderData);
-
-    // The direct `zone-pvp:heist-event` socket event is the instant path.
-    // State retains the latest events too, so a reconnect or one dropped socket
-    // packet still produces the same visible objective message.
-    const retainedEvents = Array.isArray(source?.events)
-      ? source.events
-      : source?.latestEvent
-        ? [source.latestEvent]
-        : [];
-    const latestRetainedEvent = retainedEvents.length
-      ? retainedEvents[retainedEvents.length - 1]
-      : null;
-
-    if (latestRetainedEvent?.id) {
-      showHeistAnnouncementRef.current(latestRetainedEvent);
-    }
-
-    // The initial state is a snapshot, not a new action. It must establish a
-    // baseline silently so reconnecting/spectating never plays fake alerts.
-    if (!history.initialized || (roomId && history.roomId && history.roomId !== roomId)) {
-      history.roomId = roomId || history.roomId || null;
-      history.initialized = true;
-      history.score = nextScore;
-      history.flags = nextFlags;
-      return;
-    }
-
-    if (latestRetainedEvent?.id) {
-      history.roomId = roomId || history.roomId || null;
-      history.initialized = true;
-      history.score = nextScore;
-      history.flags = nextFlags;
-      return;
-    }
-
-    const showAnnouncement = (event) => {
-      if (!event?.title) return;
-      const next = {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        team: event.team === "orange" ? "orange" : "cyan",
-        kind: event.kind || "objective",
-        title: event.title,
-        detail: event.detail || "",
-      };
-
-      setHeistAnnouncement(next);
-      if (heistAnnouncementTimerRef.current) {
-        window.clearTimeout(heistAnnouncementTimerRef.current);
-      }
-      heistAnnouncementTimerRef.current = window.setTimeout(() => {
-        setHeistAnnouncement(null);
-        heistAnnouncementTimerRef.current = null;
-      }, event.duration || 3900);
-    };
-
-    const targetScore = Math.max(1, Number(source?.targetScore || 3));
-    const cyanDelta = nextScore.cyan - Number(history.score?.cyan || 0);
-    const orangeDelta = nextScore.orange - Number(history.score?.orange || 0);
-    let event = null;
-
-    // A capture is the highest-priority objective event. The previous carried
-    // state keeps the scorer's name even though the server resets the flag home.
-    if (cyanDelta > 0 || orangeDelta > 0) {
-      const scoringTeam = cyanDelta > 0 ? "cyan" : "orange";
-      const capturedFlag = [...history.flags.values()].find(
-        (flag) =>
-          String(flag?.team || "") !== scoringTeam &&
-          String(flag?.status || "") === "carried",
-      );
-      const scorer = String(capturedFlag?.carrierName || "A PLAYER");
-      const score = nextScore[scoringTeam];
-      event = {
-        kind: "capture",
-        team: scoringTeam,
-        title: `${scorer} CAPTURED THE ${getCoreHeistFlagLabel(capturedFlag?.team || (scoringTeam === "cyan" ? "orange" : "cyan"))}`,
-        detail: `${getCoreHeistTeamLabel(scoringTeam)} TEAM SCORES  ${score} / ${targetScore}`,
-        duration: 4700,
-      };
-    }
-
-    if (!event) {
-      for (const [flagId, current] of nextFlags.entries()) {
-        const previous = history.flags.get(flagId);
-        if (!previous) continue;
-
-        const flagLabel = getCoreHeistFlagLabel(current.team);
-        const carrierChanged =
-          current.status === "carried" &&
-          (previous.status !== "carried" || current.carrierId !== previous.carrierId);
-
-        if (carrierChanged) {
-          event = {
-            kind: "taken",
-            team: current.team === "cyan" ? "orange" : "cyan",
-            title: `${current.carrierName} TOOK THE ${flagLabel}`,
-            detail: `STOP THE CARRIER BEFORE THEY REACH THEIR BASE`,
-          };
-          break;
-        }
-
-        if (previous.status === "carried" && current.status === "dropped") {
-          event = {
-            kind: "dropped",
-            team: current.team,
-            title: `${previous.carrierName || "A PLAYER"} DROPPED THE ${flagLabel}`,
-            detail: `THE FLAG IS ON THE GROUND — SECURE IT`,
-          };
-          break;
-        }
-
-        if (previous.status === "dropped" && current.status === "home") {
-          event = {
-            kind: "returned",
-            team: current.team,
-            title: `${flagLabel} RETURNED`,
-            detail: `THE HOME BASE IS SECURE AGAIN`,
-          };
-          break;
-        }
-      }
-    }
-
-    if (event) showAnnouncement(event);
-
-    history.roomId = roomId || history.roomId || null;
-    history.initialized = true;
-    history.score = nextScore;
-    history.flags = nextFlags;
-  }, [hudData?.heist, renderData?.heist, hudData?.roomId, renderData?.roomId]);
 
   useEffect(() => {
     let rafId = 0;
@@ -3486,21 +3073,18 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
       if (data.you) {
         const current = predictedYouRef.current || { ...data.you };
-        const rawMobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
-        const roleRevealLocked = isCoreHeistRoleRevealLocked(data);
-        const mobileMove = roleRevealLocked
-          ? { x: 0, y: 0, active: false }
-          : rawMobileMove;
+        const mobileMove = mobileMoveRef.current || { x: 0, y: 0, active: false };
+        const matchInputUnlocked = String(data.status || "") === "playing" && !isRoleRevealLocked(data);
         const input = {
-          w: !roleRevealLocked && Boolean(keysRef.current.w || keysRef.current.arrowup || (mobileMove.active && mobileMove.y < -0.22)),
-          a: !roleRevealLocked && Boolean(keysRef.current.a || keysRef.current.arrowleft || (mobileMove.active && mobileMove.x < -0.22)),
-          s: !roleRevealLocked && Boolean(keysRef.current.s || keysRef.current.arrowdown || (mobileMove.active && mobileMove.y > 0.22)),
-          d: !roleRevealLocked && Boolean(keysRef.current.d || keysRef.current.arrowright || (mobileMove.active && mobileMove.x > 0.22)),
-          moveX: mobileMove.active ? mobileMove.x : 0,
-          moveY: mobileMove.active ? mobileMove.y : 0,
-          mobileMove: Boolean(mobileMove.active),
-          attacking: !roleRevealLocked && !isBattlePrepareLocked(worldRef.current) && Boolean(keysRef.current.mouseDown),
-          shield: !roleRevealLocked && !isBattlePrepareLocked(worldRef.current) && Boolean(keysRef.current.rightMouseDown),
+          w: matchInputUnlocked && Boolean(keysRef.current.w || keysRef.current.arrowup || (mobileMove.active && mobileMove.y < -0.22)),
+          a: matchInputUnlocked && Boolean(keysRef.current.a || keysRef.current.arrowleft || (mobileMove.active && mobileMove.x < -0.22)),
+          s: matchInputUnlocked && Boolean(keysRef.current.s || keysRef.current.arrowdown || (mobileMove.active && mobileMove.y > 0.22)),
+          d: matchInputUnlocked && Boolean(keysRef.current.d || keysRef.current.arrowright || (mobileMove.active && mobileMove.x > 0.22)),
+          moveX: matchInputUnlocked && mobileMove.active ? mobileMove.x : 0,
+          moveY: matchInputUnlocked && mobileMove.active ? mobileMove.y : 0,
+          mobileMove: matchInputUnlocked && Boolean(mobileMove.active),
+          attacking: matchInputUnlocked && !isBattlePrepareLocked(worldRef.current) && Boolean(keysRef.current.mouseDown),
+          shield: matchInputUnlocked && !isBattlePrepareLocked(worldRef.current) && Boolean(keysRef.current.rightMouseDown),
           mouseX: current.x + (mouseRef.current.x - window.innerWidth / 2),
           mouseY: current.y + (mouseRef.current.y - window.innerHeight / 2),
         };
@@ -3531,9 +3115,10 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         if (
           data.status === "playing" &&
           !isBattlePrepareLocked(data) &&
+          !isRoleRevealLocked(data) &&
           wantsToAttack &&
           predicted?.alive !== false &&
-          (Number(predicted?.drones || 0) > 0 || canCoreHeistTankFireWithoutEscort(predicted)) &&
+          (predicted?.drones || 0) > 0 &&
           now - lastLocalProjectileAtRef.current >= localCooldown
         ) {
           const mouseWorldX = predicted.x + (mouseRef.current.x - window.innerWidth / 2);
@@ -3603,10 +3188,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
           motions.delete(id);
           continue;
         }
-        const remoteStaleTimeout = String(data?.mode || "") === "core-heist"
-          ? 15000
-          : REMOTE_STALE_TIMEOUT_MS;
-        if (now - Number(motion?.lastSeenAt || now) > remoteStaleTimeout) {
+        if (now - Number(motion?.lastSeenAt || now) > REMOTE_STALE_TIMEOUT_MS) {
           motions.delete(id);
           continue;
         }
@@ -3726,15 +3308,11 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const liveCameraY = liveCameraSubject ? viewport.height / 2 - liveCameraSubject.y * liveCameraScale : 0;
 
       const liveBounds = getViewportBounds(liveCameraX, liveCameraY, viewport, 980, liveCameraScale);
-      // Core Heist has a denser server economy. These are render caps only:
-      // the server remains authoritative for every orb and energy cell.
-      // Core Heist has only eight participants. Keep a generous pickup
-      // budget so energy cells and orbs are visible in the actual world.
       const renderLimits = mobilePerformanceRef.current
-        ? { detailed: 6, total: 60, orbs: 88, energy: 36, cores: 4, projectiles: 5, simpleProjectiles: 30 }
+        ? { detailed: 6, total: 60, orbs: 56, energy: 14, cores: 4, projectiles: 5, simpleProjectiles: 30 }
         : constrainedDesktopRef.current
-          ? { detailed: 7, total: 60, orbs: 160, energy: 64, cores: 6, projectiles: 10, simpleProjectiles: 34 }
-          : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 360, energy: 140, cores: 9, projectiles: 36, simpleProjectiles: 45 };
+          ? { detailed: 7, total: 60, orbs: 112, energy: 26, cores: 6, projectiles: 10, simpleProjectiles: 34 }
+          : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 210, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
       // Map insertion order is not distance order. On a good desktop we keep
       // the existing per-frame sort. On a weak desktop, only the *membership*
@@ -3861,14 +3439,15 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         // so every GPU budget goes to drone/projectile transforms.
         // Zone PvP shares the same premium space background as the good-desktop
         // profile. Pixi hides it only temporarily if emergency frame pressure is measured.
-        worldTheme: "premium-space-battle",
-        // Pixi's actual world layer receives a separate visual budget.
-        staticItemBudget: mobilePerformanceRef.current ? 92 : 240,
-        safeZoneRadius: zoneRadius,
-        // Core Heist has no shrinking zone. Keeping Zone's huge radius active
-        // wasted a world-layer draw and could cover objective graphics.
+        worldTheme: "capture-the-flag-starfield",
+        staticItemBudget: mobilePerformanceRef.current ? 78 : 245,
+        safeZoneRadius: null,
         showZone: false,
-        heistObjectives: data.heist || null,
+        bases: data.ctf?.bases || [],
+        flags: data.ctf?.flags || [],
+        // Pixi reads this live object every frame, therefore this must live
+        // here (not only as a component prop) for CTF team/HP bars to render.
+        showTeamHealthBars: true,
         coreColorMap: coreColorMapRef.current,
         otherPlayerSize: 112,
         otherPlayerQuality: 0,
@@ -4273,10 +3852,10 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const cameraY = cameraSubject ? viewport.height / 2 - cameraSubject.y * cameraScale : 0;
   const bounds = getViewportBounds(cameraX, cameraY, viewport, 720, cameraScale);
   const reactiveRenderLimits = isMobileControls
-    ? { detailed: 6, total: 50, orbs: 88, energy: 36, cores: 4, projectiles: 5, simpleProjectiles: 26 }
+    ? { detailed: 6, total: 50, orbs: 76, energy: 16, cores: 4, projectiles: 5, simpleProjectiles: 26 }
     : constrainedDesktopRef.current
-      ? { detailed: 10, total: 60, orbs: 160, energy: 64, cores: 7, projectiles: 14, simpleProjectiles: 42 }
-      : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 340, energy: 136, cores: 9, projectiles: 36, simpleProjectiles: 45 };
+      ? { detailed: 10, total: 60, orbs: 170, energy: 34, cores: 7, projectiles: 14, simpleProjectiles: 42 }
+      : { detailed: 34, total: MAX_VISIBLE_REMOTE_PLAYERS, orbs: 285, energy: 50, cores: 9, projectiles: 36, simpleProjectiles: 45 };
 
   const visibleOrbs = collectVisible(renderData.orbs || [], (orb) => isVisible(orb, bounds, 40), reactiveRenderLimits.orbs);
   const visibleEnergyCells = collectVisible(renderData.energyCells || [], (cell) => isVisible(cell, bounds, 60), reactiveRenderLimits.energy);
@@ -4324,6 +3903,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const rendererBots = rendererDetailedUnits.filter((player) => player.isBot);
 
   const activeBadges = useMemo(() => getActiveEffectBadges(hudYou), [hudYou]);
+  const leaderboard = hudData.leaderboard || renderData.leaderboard || [];
   const renderStatus = renderData.status || "connecting";
   const hudStatus = hudData.status || "connecting";
   const status = getZoneStatusRank(renderStatus) >= getZoneStatusRank(hudStatus)
@@ -4333,35 +3913,22 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const isCountdown = status === "countdown";
   const isMatchmaking = isWaiting || isCountdown;
   const isFinished = status === "finished";
-
-  // Server sends the countdown end-time; this lightweight UI tick updates
-  // 5 → 4 → 3 → 2 → 1 locally even if one volatile state packet is delayed.
-  const [, setCountdownPaint] = useState(0);
-  useEffect(() => {
-    if (status !== "countdown") return undefined;
-    const timer = window.setInterval(() => setCountdownPaint((value) => value + 1), 120);
-    return () => window.clearInterval(timer);
-  }, [status]);
-
   const playersAlive = Math.max(
     Number(hudData.playerCount || 0),
     Number(renderData.playerCount || 0),
     status === "playing" ? 1 : 0,
   );
-  const minPlayers = hudData.minPlayers || renderData.minPlayers || 3;
+  const minPlayers = hudData.minPlayers || renderData.minPlayers || 1;
+  const maxPlayers = hudData.maxPlayers || renderData.maxPlayers || 8;
   const matchmakingPlayerCount = Math.min(
-    minPlayers,
+    maxPlayers,
     Math.max(
       Number(hudData.matchmakingPlayerCount ?? hudData.realPlayerCount ?? 0),
       Number(renderData.matchmakingPlayerCount ?? renderData.realPlayerCount ?? 0),
       0,
     ),
   );
-  const maxPlayers = hudData.maxPlayers || renderData.maxPlayers || 60;
-  const countdownEndsAt = Number(hudData.countdownEndsAt || renderData.countdownEndsAt || 0);
-  const countdown = isCountdown && countdownEndsAt > Date.now()
-    ? Math.max(1, Math.ceil((countdownEndsAt - Date.now()) / 1000))
-    : hudData.countdown || renderData.countdown || 5;
+  const countdown = hudData.countdown || renderData.countdown || 10;
   const winnerName = hudData.winnerName || renderData.winnerName;
   const coreDropCountdown = hudData.coreDropCountdown || renderData.coreDropCountdown;
   const battlePrepareSource = hudData.status ? hudData : renderData;
@@ -4370,6 +3937,13 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const battlePrepareRemainingMs = Math.max(serverBattlePrepareRemainingMs, localBattlePrepareRemainingMs);
   const isBattlePrepare = status === "playing" && !isFinished && battlePrepareRemainingMs > 0;
   const battlePrepareSeconds = Math.max(0, Math.ceil(battlePrepareRemainingMs / 1000));
+  const roleRevealSource = hudData.status ? hudData : renderData;
+  const roleRevealRemainingMs = Math.max(
+    getRoleRevealRemainingMs(roleRevealSource),
+    getRoleRevealRemainingMs(renderData),
+  );
+  const isRoleReveal = status === "playing" && !isFinished && roleRevealRemainingMs > 0;
+  const roleRevealSeconds = Math.max(0, Math.ceil(roleRevealRemainingMs / 1000));
   const showBattleBeginFlash = !isMatchmaking && !isFinished && !isBattlePrepare && (
     getBattleBeginFlashActive(battlePrepareSource) ||
     ((localBattleBeginFlashUntilRef.current || 0) > Date.now()) ||
@@ -4408,7 +3982,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       const until = Date.now() + 1600;
       localBattleBeginFlashUntilRef.current = until;
       setBattleBeginFlashUntil(until);
-    }, Math.max(60, Math.min(CORE_HEIST_OPENING_LOCK_DURATION + 250, battlePrepareRemainingMs + 40)));
+    }, Math.max(60, Math.min(BATTLE_PREPARE_DURATION + 250, battlePrepareRemainingMs + 40)));
 
     return () => {
       if (battleBeginTimerRef.current) {
@@ -4436,7 +4010,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
     // packet, the next mount still tells the backend to permanently deny this
     // participant from the old room.
     if (departingRoomId) {
-      rememberCoreHeistDepartedRoom({
+      rememberCaptureTheFlagDepartedRoom({
         roomId: departingRoomId,
         roundId: departingRoundId || null,
         participantId: departingParticipantId,
@@ -4446,8 +4020,8 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
 
     intentionalExitRef.current = true;
     zoneJoinAcceptedRef.current = true;
-    clearCoreHeistResumeToken();
-    resumeTokenRef.current = createCoreHeistResumeToken();
+    clearCaptureTheFlagResumeToken();
+    resumeTokenRef.current = createCaptureTheFlagResumeToken();
 
     const socket = socketRef.current;
     const finishExit = () => {
@@ -4460,9 +4034,9 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       }
 
       if (socket) {
-        socket.off("zone-pvp:left", finishExit);
+        socket.off("capture-the-flag:left", finishExit);
         // The backend has already removed the player when it sends
-        // `zone-pvp:left`. Disconnect now so a reconnect cannot restore the
+        // `capture-the-flag:left`. Disconnect now so a reconnect cannot restore the
         // old room while Dashboard is rendering.
         socket.disconnect();
       }
@@ -4475,7 +4049,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       return;
     }
 
-    socket.once("zone-pvp:left", finishExit);
+    socket.once("capture-the-flag:left", finishExit);
     if (!explicitLeaveSentRef.current) {
       explicitLeaveSentRef.current = true;
       const leavePayload = {
@@ -4486,123 +4060,141 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
       // The ACK and the event are both accepted. The longer timeout gives the
       // server enough time to remove the drone first; the persisted departure
       // marker remains the final guard if the transport drops mid-leave.
-      socket.timeout(2500).emit("zone-pvp:leave", leavePayload, () => finishExit());
+      socket.timeout(2500).emit("capture-the-flag:leave", leavePayload, () => finishExit());
     }
 
     explicitExitTimerRef.current = window.setTimeout(finishExit, 2800);
   };
 
-  const matchStartedAt = hudData.matchStartedAt || renderData.matchStartedAt;
-  const zoneShrinkDuration = hudData.zoneShrinkDuration || renderData.zoneShrinkDuration || 600000;
 
-  const zoneRemainingMs = matchStartedAt ? Math.max(0, zoneShrinkDuration - (Date.now() - matchStartedAt)) : zoneShrinkDuration;
-  const zoneRemainingMinutes = Math.floor(zoneRemainingMs / 60000);
-  const zoneRemainingSeconds = Math.floor((zoneRemainingMs % 60000) / 1000).toString().padStart(2, "0");
+  const hp = hudYou?.hp ?? 100;
+  const maxHp = hudYou?.maxHp ?? 100;
+  const energy = hudYou?.energy ?? 100;
+  const progress = hudYou?.progress ?? 0;
+  const nextDroneAt = hudYou?.nextDroneAt ?? 5;
 
-  // Server combat can use fractional values internally; the HUD must always
-  // present clean whole numbers to the player.
-  const hp = Math.max(0, Math.round(Number(hudYou?.hp ?? 100)));
-  const maxHp = Math.max(1, Math.round(Number(hudYou?.maxHp ?? 100)));
-  const energy = Math.max(0, Math.min(100, Math.round(Number(hudYou?.energy ?? 100))));
-  const progress = Math.max(0, Math.round(Number(hudYou?.progress ?? 0)));
-  const nextDroneAt = Math.max(1, Math.round(Number(hudYou?.nextDroneAt ?? 5)));
-
-  const heist = hudData.heist || renderData.heist || null;
-  const heistScore = heist?.score || { cyan: 0, orange: 0 };
-  const heistTargetScore = Number(heist?.targetScore || 3);
-  const heistTeam = String(heist?.team || hudYou?.team || "cyan");
-  const enemyHeistTeam = heistTeam === "orange" ? "cyan" : "orange";
-  const teamLabel = heistTeam === "orange" ? "RED" : "BLUE";
-  const enemyTeamLabel = enemyHeistTeam === "orange" ? "RED" : "BLUE";
-  const heistFlags = Array.isArray(heist?.flags) ? heist.flags : [];
-  const ownFlag = heistFlags.find((flag) => String(flag?.team || "cyan") === heistTeam) || null;
-  const enemyFlag = heistFlags.find((flag) => String(flag?.team || "cyan") === enemyHeistTeam) || null;
-  const carriedFlag = heistFlags.find((flag) => String(flag?.carrierId || "") === String(hudYou?.id || "")) || null;
-  const heistRemainingMs = Math.max(0, Number(heist?.remainingMs || (heist?.matchEndsAt ? Number(heist.matchEndsAt) - Date.now() : 0)));
-  const heistMinutes = Math.floor(heistRemainingMs / 60000);
-  const heistSeconds = Math.floor((heistRemainingMs % 60000) / 1000).toString().padStart(2, "0");
-  const respawnRemainingMs = Math.max(0, Number(hudYou?.respawnAt || renderData.you?.respawnAt || 0) - Date.now());
-  const respawnSeconds = Math.max(0, Math.ceil(respawnRemainingMs / 1000));
-  const heistDeaths = Math.max(0, Number(hudYou?.heistDeaths || renderData.you?.heistDeaths || 0));
-  const heistPermanentElimination = Boolean(hudYou?.heistPermanentElimination || renderData.you?.heistPermanentElimination);
-  const heistRole = String(hudYou?.heistRole || renderData.you?.heistRole || "attacker");
-  const heistRoleMeta = CORE_HEIST_ROLE_META[heistRole] || CORE_HEIST_ROLE_META.attacker;
-  const heistRoleRevealUntil = Math.max(
-    Number(hudData?.heistRoleRevealUntil || 0),
-    Number(renderData?.heistRoleRevealUntil || 0),
-  );
-  const heistRoleRevealRemainingMs = Math.max(
-    0,
-    Number(hudData?.heistRoleRevealRemainingMs || 0),
-    Number(renderData?.heistRoleRevealRemainingMs || 0),
-    heistRoleRevealUntil > 0 ? heistRoleRevealUntil - Date.now() : 0,
-  );
-  const showHeistRoleReveal =
-    status === "playing" &&
-    !isFinished &&
-    !isMatchmaking &&
-    heistRoleRevealRemainingMs > 0 &&
-    Boolean(hudYou?.id || renderData?.you?.id);
-  const heistRoleRevealSeconds = Math.max(0, Math.ceil(heistRoleRevealRemainingMs / 1000));
-  const [, setRoleRevealPaint] = useState(0);
-  useEffect(() => {
-    if (!showHeistRoleReveal) return undefined;
-    const timer = window.setInterval(() => setRoleRevealPaint((value) => value + 1), 80);
-    return () => window.clearInterval(timer);
-  }, [showHeistRoleReveal]);
-
-  // Bazele sunt repere permanente pe mini-map. `isOwnBase` decide culoarea:
-  // baza ta este albastra, iar baza echipei adverse este rosie.
-  const heistMiniMapBases = useMemo(() => {
-    const rawBases = Array.isArray(heist?.bases) ? heist.bases : [];
-
-    return rawBases
-      .filter(
-        (base) =>
-          base &&
-          Number.isFinite(Number(base.x)) &&
-          Number.isFinite(Number(base.y))
-      )
-      .map((base) => {
-        const baseTeam = String(base.team || "cyan");
-
-        return {
-          id: `heist-base-${String(base.id || baseTeam)}`,
-          team: baseTeam,
-          x: Number(base.x || 0),
-          y: Number(base.y || 0),
-          perimeterRadius: Number(base.perimeterRadius || base.radius || 520),
-          isOwnBase: baseTeam === heistTeam,
-        };
-      });
-  }, [heist?.bases, heistTeam]);
-
-  const heistMiniMapFlags = useMemo(() => {
-    return heistFlags
-      .filter((flag) => flag && ["home", "dropped", "carried"].includes(String(flag?.status || "")))
-      .map((flag) => ({
-        id: `heist-flag-${String(flag.id || flag.team)}`,
-        team: String(flag?.team || "cyan"),
-        x: Number(flag?.x || 0),
-        y: Number(flag?.y || 0),
-        status: String(flag?.status || "home"),
-        isOwnFlag: String(flag?.team || "cyan") === heistTeam,
-      }));
-  }, [heistFlags, heistTeam]);
+  const ctf = hudData.ctf || renderData.ctf || null;
+  const ctfScore = ctf?.score || { cyan: 0, orange: 0 };
+  const ctfTargetScore = Number(ctf?.targetScore || 3);
+  const ctfTeam = String(ctf?.team || hudYou?.team || "cyan") === "orange" ? "orange" : "cyan";
+  const enemyTeam = ctfTeam === "orange" ? "cyan" : "orange";
+  const teamLabel = ctfTeam === "orange" ? "RED" : "BLUE";
+  const enemyTeamLabel = enemyTeam === "orange" ? "RED" : "BLUE";
+  const ctfFlags = Array.isArray(ctf?.flags) ? ctf.flags : [];
+  const ctfBases = Array.isArray(ctf?.bases) ? ctf.bases : [];
+  const ownFlag = ctfFlags.find((flag) => String(flag?.team || "") === ctfTeam) || null;
+  const enemyFlag = ctfFlags.find((flag) => String(flag?.team || "") === enemyTeam) || null;
+  const carriedFlag = ctfFlags.find((flag) => String(flag?.carrierId || "") === String(hudYou?.id || "")) || null;
+  const ctfEvent = ctf?.latestEvent || null;
+  const carrierName = enemyFlag?.carrierName || ownFlag?.carrierName || null;
+  const ownRoleLabel = getCaptureTheFlagRoleLabel(hudYou?.ctfRole, hudYou?.ctfRoleLabel || "PILOT");
+  const ownRoleVariant = String(hudYou?.ctfRoleVariant || "");
+  const roleOrder = { "attack-alpha": 0, "attack-bravo": 1, tank: 2, defense: 3 };
+  const roleRevealUnits = [hudYou, ...(renderData.players || [])]
+    .filter((unit, index, list) => unit?.id && list.findIndex((candidate) => String(candidate?.id || "") === String(unit.id)) === index)
+    .filter((unit) => unit?.ctfRole)
+    .sort((left, right) => {
+      const leftTeam = String(left?.team || "cyan") === "orange" ? 1 : 0;
+      const rightTeam = String(right?.team || "cyan") === "orange" ? 1 : 0;
+      if (leftTeam !== rightTeam) return leftTeam - rightTeam;
+      return Number(roleOrder[String(left?.ctfRole || "")] ?? 99) - Number(roleOrder[String(right?.ctfRole || "")] ?? 99);
+    });
+  const roleRevealBlueUnits = roleRevealUnits.filter((unit) => String(unit?.team || "cyan") !== "orange");
+  const roleRevealRedUnits = roleRevealUnits.filter((unit) => String(unit?.team || "cyan") === "orange");
+  const ctfMatchEndsAt = Number(ctf?.matchEndsAt || hudData.matchEndsAt || renderData.matchEndsAt || 0);
+  const serverMatchRemainingMs = Number(ctf?.matchRemainingMs || hudData.matchRemainingMs || renderData.matchRemainingMs || 0);
+  const matchRemainingMs = isFinished
+    ? 0
+    : ctfMatchEndsAt > 0
+      ? Math.max(0, ctfMatchEndsAt - Date.now())
+      : Math.max(0, serverMatchRemainingMs);
+  const matchMinutes = Math.floor(matchRemainingMs / 60000).toString().padStart(2, "0");
+  const matchSeconds = Math.floor((matchRemainingMs % 60000) / 1000).toString().padStart(2, "0");
+  const matchTimeLabel = `${matchMinutes}:${matchSeconds}`;
+  const finishReason = String(ctf?.finishReason || hudData.finishReason || renderData.finishReason || "");
+  const isDraw = isFinished && !ctf?.winnerTeam && finishReason === "time-limit";
+  const deathCount = Number(hudYou?.deathCount ?? you?.deathCount ?? 0);
+  const permanentSpectator = Boolean(hudYou?.spectatorOnly || you?.spectatorOnly || deathCount >= 2);
+  const respawnAt = Number(hudYou?.respawnAt ?? you?.respawnAt ?? 0);
+  const respawnSeconds = Math.max(0, Math.ceil((respawnAt - Date.now()) / 1000));
 
   return (
-    <div className={`game-arena core-heist-dom-arena ${isMobileControls ? `is-mobile is-mobile-device ${viewport.width > viewport.height ? "is-mobile-landscape" : "is-mobile-portrait"}` : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""} ${isBattlePrepare ? "is-battle-prepare" : ""}`}>
+    <div className={`game-arena pvp-dom-arena normal-pvp-dom-arena capture-the-flag-dom-arena ${isMobileControls ? "is-mobile-device is-mobile-portrait" : ""} ${mobileAttackActive ? "is-mobile-attacking" : ""}`}>
       {isMatchmaking && !connectionError && (
-        <div className="core-heist-matchmaking-screen">
-          <div className="core-heist-matchmaking-card">
-            <div className="core-heist-loader" />
-            <h1>{isCountdown ? "MATCH STARTING" : "MATCHMAKING SEARCH"}</h1>
-            <strong>{isCountdown ? countdown : `${matchmakingPlayerCount} / ${minPlayers} REAL PLAYER`}</strong>
+        <div className="capture-the-flag-matchmaking-screen">
+          <div className="capture-the-flag-matchmaking-card">
+            <div className="capture-the-flag-loader" />
+            <h1>{isCountdown ? "4V4 MATCHMAKING" : "MATCHMAKING SEARCH"}</h1>
+            <strong>{isCountdown ? `${countdown}s` : `${matchmakingPlayerCount} / ${maxPlayers}`}</strong>
             <p>
               {isCountdown
-                ? `Meciul începe în ${countdown}. Restul locurilor sunt completate cu boți.`
-                : "Este nevoie de minimum un jucător real. După countdown intră automat 7 boți."}
+                ? `${matchmakingPlayerCount} / ${maxPlayers} real pilots connected. Teams and roles are assigned randomly when matchmaking closes.`
+                : "Waiting for the first real pilot. The lobby stays open for 10 seconds, then remaining seats become AI."}
             </p>
+          </div>
+        </div>
+      )}
+
+      {isRoleReveal && (
+        <div className="capture-the-flag-role-reveal" aria-live="polite">
+          <div className="capture-the-flag-role-reveal-card">
+            <span className="capture-the-flag-role-reveal-kicker">TEAM DEPLOYMENT LOCK · {roleRevealSeconds}s</span>
+            <strong>CLASS ASSIGNMENTS</strong>
+            <div className="capture-the-flag-role-reveal-grid">
+              <section className="capture-the-flag-role-team-group team-cyan">
+                <header>
+                  <span className="capture-the-flag-role-team-signal" />
+                  <b>BLUE TEAM</b>
+                </header>
+                <div className="capture-the-flag-role-team-cards">
+                  {roleRevealBlueUnits.map((unit) => {
+                    const role = String(unit?.ctfRole || "");
+                    const isCurrentPilot = String(unit?.id || "") === String(hudYou?.id || you?.id || "");
+                    return (
+                      <div
+                        key={unit.id}
+                        className={`capture-the-flag-role-card team-cyan role-${role} ${isCurrentPilot ? "is-current-pilot" : ""}`}
+                      >
+                        {isCurrentPilot && <i className="capture-the-flag-role-you-marker">YOU</i>}
+                        <span>BLUE TEAM</span>
+                        <strong>{unit?.username || "UNKNOWN PILOT"}</strong>
+                        <b>{getCaptureTheFlagRoleLabel(role, unit?.ctfRoleLabel || "PILOT")}</b>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <div className="capture-the-flag-team-divider" aria-hidden="true">
+                <i />
+                <span>VS</span>
+                <i />
+              </div>
+
+              <section className="capture-the-flag-role-team-group team-orange">
+                <header>
+                  <span className="capture-the-flag-role-team-signal" />
+                  <b>RED TEAM</b>
+                </header>
+                <div className="capture-the-flag-role-team-cards">
+                  {roleRevealRedUnits.map((unit) => {
+                    const role = String(unit?.ctfRole || "");
+                    const isCurrentPilot = String(unit?.id || "") === String(hudYou?.id || you?.id || "");
+                    return (
+                      <div
+                        key={unit.id}
+                        className={`capture-the-flag-role-card team-orange role-${role} ${isCurrentPilot ? "is-current-pilot" : ""}`}
+                      >
+                        {isCurrentPilot && <i className="capture-the-flag-role-you-marker">YOU</i>}
+                        <span>RED TEAM</span>
+                        <strong>{unit?.username || "UNKNOWN PILOT"}</strong>
+                        <b>{getCaptureTheFlagRoleLabel(role, unit?.ctfRoleLabel || "PILOT")}</b>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            </div>
           </div>
         </div>
       )}
@@ -4614,7 +4206,7 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         simpleBots={rendererSimpleUnits}
         orbs={visibleOrbs}
         energyCells={visibleEnergyCells}
-        cores={visibleCores}
+        cores={[]}
         projectiles={visibleProjectiles}
         simpleProjectiles={visibleSimpleProjectiles}
         combatEvents={(renderData.combatEvents || []).filter(
@@ -4633,239 +4225,186 @@ function CoreHeistArena({ user, onExitToMenu, graphicsQuality = "normal" }) {
         otherPlayerSize={112}
         otherPlayerQuality={0}
         liveDataRef={pixiLiveRef}
-        // Weak laptops start with the premium desktop visuals. Pixi measures
-        // real frame time and lowers only far details if sustained pressure occurs.
         forceLowQuality={graphicsQuality === "low" || isMobileControls}
         worldWidth={worldWidth}
         worldHeight={worldHeight}
-        worldTheme="premium-space-battle"
-        staticItemBudget={isRealMobileDevice() ? 92 : 240}
-        heistObjectives={hudData.heist || renderData.heist || null}
+        // Same starfield / nebula WebGL terrain used by Battle Royale and Zone PvP.
+        worldTheme="capture-the-flag-starfield"
+        staticItemBudget={isRealMobileDevice() ? 78 : 245}
         safeZoneRadius={null}
         showZone={false}
+        bases={ctfBases}
+        flags={ctfFlags}
+        showTeamHealthBars
       />
 
+      <div className={`fps-counter ${renderData.fps < 50 ? "fps-low" : ""}`}>FPS: {renderData.fps || 60}</div>
 
+      <div className="capture-the-flag-left-hud">
+        <div className="hp-panel capture-the-flag-hp-panel">
+          <span>DRONE HP</span>
+          <strong>{hp} / {maxHp}</strong>
+          <div className="hp-bar"><i style={{ width: `${Math.max(0, Math.min(100, (hp / maxHp) * 100))}%` }} /></div>
+          <div className="energy-row">
+            <span>DRONE ENERGY</span>
+            <strong>{energy}</strong>
+            <div className="energy-bar"><i style={{ width: `${Math.max(0, Math.min(100, energy))}%` }} /></div>
+          </div>
+        </div>
 
-      {/* Attack drone is the only combat visual. The old cyan aim circle/arrow
-          looked like a second launched drone, so it stays disabled in PvP. */}
-      {false && you && !isDead && (!isMobileControls || mobileAttackActive) && (
-        <svg className={`aim-svg ${isMobileControls ? "mobile-aim-svg" : ""}`} aria-hidden="true">
-          <line className="aim-svg-line" ref={mobileAimLineRef} x1={viewport.width / 2} y1={viewport.height / 2} x2={mouseRef.current.x} y2={mouseRef.current.y} />
-          <circle className="aim-svg-circle" ref={mobileAimCircleRef} cx={mouseRef.current.x} cy={mouseRef.current.y} r="34" />
-          <g
-            className="aim-svg-arrow"
-            ref={mobileAimArrowRef}
-            transform={`translate(${mouseRef.current.x}, ${mouseRef.current.y}) rotate(${(Math.atan2(mouseRef.current.y - viewport.height / 2, mouseRef.current.x - viewport.width / 2) * 180) / Math.PI})`}
-          >
-            <path d="M -15 -11 L 18 0 L -15 11 L -7 0 Z" />
-          </g>
-        </svg>
-      )}
-
-      <div className={`core-heist-fps ${renderData.fps < 50 ? "is-low" : ""}`}>FPS: {renderData.fps || 60}</div>
-
-      <div className="core-heist-status-panel">
-        <span>DRONE HP</span>
-        <strong>{hp} / {maxHp}</strong>
-        <div className="core-heist-hp-bar"><i style={{ width: `${Math.max(0, Math.min(100, (hp / maxHp) * 100))}%` }} /></div>
-
-        <div className="core-heist-energy-row">
-          <span>DRONE ENERGY</span>
-          <strong>{energy}</strong>
-          <div className="core-heist-energy-bar"><i style={{ width: `${Math.max(0, Math.min(100, energy))}%` }} /></div>
+        <div className="collect-counter capture-the-flag-collect-counter">
+          <span>ORB COUNT</span>
+          <strong>{progress} / {nextDroneAt}</strong>
+          <small>Total: {hudYou?.totalCollected ?? 0}</small>
+          <small>Kills: {hudYou?.kills ?? 0}</small>
         </div>
       </div>
 
-      <div className="core-heist-economy-panel">
-        <span>ORB COUNT</span>
-        <strong>{progress} / {nextDroneAt}</strong>
-        <small>Total collected: {hudYou?.totalCollected ?? 0}</small>
-        <small>Kills: {hudYou?.kills ?? 0}</small>
-        <div className="core-heist-active-cores">
-          <b>ACTIVE CORES</b>
-          {activeBadges.length === 0 ? (
-            <em>NO ACTIVE CORES</em>
-          ) : (
-            activeBadges.map((badge) => (
-              <em key={badge.key} className={`core-heist-core-badge core-heist-core-badge-${badge.className}`}>
-                {badge.label}{badge.seconds !== null ? ` ${badge.seconds}s` : ""}
-              </em>
-            ))
-          )}
-        </div>
-      </div>
-
-      {heist && !isMatchmaking && (
-      <div className="core-heist-team-panel">
-        <strong>{teamLabel} TEAM · {heistRoleMeta.label}</strong>
-        <span>{playersAlive} DRONES ONLINE · {Math.max(0, 2 - heistDeaths)} LIVES LEFT · MAX {maxPlayers}</span>
-      </div>
-      )}
-
-      {heist && !isFinished && !isMatchmaking && (
-        <div className="core-heist-match-timer">
-          <span>MATCH TIME</span>
-          <strong>{heistMinutes}:{heistSeconds}</strong>
-        </div>
-      )}
-
-      {heist && !isMatchmaking && (
-      <div className="core-heist-scoreboard" aria-label="Capture the Flag score">
-        <div className={`core-heist-score-side cyan ${heistTeam === "cyan" ? "is-your-team" : ""}`}>
+      <div className="capture-the-flag-scoreboard" aria-label="Capture the Flag score">
+        <div className={`capture-the-flag-score-side cyan ${ctfTeam === "cyan" ? "is-your-team" : ""}`}>
           <span>BLUE</span>
-          <strong><b>{heistScore.cyan || 0}</b><small>/{heistTargetScore}</small></strong>
+          <strong>{ctfScore.cyan || 0}<small> / {ctfTargetScore}</small></strong>
         </div>
-        <div className="core-heist-score-middle">
+        <div className="capture-the-flag-score-middle">
           <b>CAPTURE THE FLAG</b>
-          <small>FIRST TO {heistTargetScore}</small>
+          <small className="capture-the-flag-match-timer">TIME {matchTimeLabel}</small>
         </div>
-        <div className={`core-heist-score-side orange ${heistTeam === "orange" ? "is-your-team" : ""}`}>
-          <strong><b>{heistScore.orange || 0}</b><small>/{heistTargetScore}</small></strong>
+        <div className={`capture-the-flag-score-side orange ${ctfTeam === "orange" ? "is-your-team" : ""}`}>
+          <strong>{ctfScore.orange || 0}<small> / {ctfTargetScore}</small></strong>
           <span>RED</span>
         </div>
       </div>
+
+      {isBattlePrepare && !isRoleReveal && !isMatchmaking && !isFinished && (
+        <div className="capture-the-flag-peace-countdown">
+          <strong>PREPARE PHASE</strong>
+          <b>{battlePrepareSeconds}</b>
+          <span>COLLECT ORBS · COMBAT AND FLAGS ARE LOCKED</span>
+        </div>
       )}
 
-      {heistAnnouncement && !isMatchmaking && !isFinished && (
-        <div
-          key={heistAnnouncement.id}
-          className={`core-heist-live-event team-${heistAnnouncement.team} ${heistAnnouncement.kind}`}
-          role="status"
-          aria-live="polite"
-        >
+      {showBattleBeginFlash && (
+        <div className="capture-the-flag-begin-flash">BATTLE BEGIN</div>
+      )}
+
+      {!isRoleReveal && !isMatchmaking && !isFinished && (
+        <div className="capture-the-flag-objective-panel">
+          <b>
+            {isBattlePrepare
+              ? "PREPARE PHASE · BUILD YOUR DRONE SQUAD"
+              : carriedFlag
+                ? `YOU CARRY THE ${String(carriedFlag.team || "") === "orange" ? "RED" : "BLUE"} FLAG`
+                : enemyFlag?.status === "carried"
+                  ? `${enemyFlag?.carrierName || "A TEAMMATE"} HAS THE ${enemyTeamLabel} FLAG`
+                  : ownFlag?.status === "carried"
+                    ? `${ownFlag?.carrierName || "AN ENEMY"} STOLE YOUR ${teamLabel} FLAG`
+                    : ownFlag?.status === "dropped"
+                      ? `RETURN THE DROPPED ${teamLabel} FLAG`
+                      : enemyFlag?.status === "dropped"
+                        ? `RECOVER THE DROPPED ${enemyTeamLabel} FLAG`
+                        : `STEAL THE ${enemyTeamLabel} FLAG`}
+          </b>
           <span>
-            {heistAnnouncement.kind === "capture"
-              ? "FLAG CAPTURED"
-              : heistAnnouncement.kind === "taken"
-                ? "ENEMY FLAG TAKEN"
-                : heistAnnouncement.kind === "dropped"
-                  ? "FLAG DROPPED"
-                  : "FLAG RETURNED"}
+            {isBattlePrepare
+              ? `Collect orbs. Combat and flag capture unlock in ${battlePrepareSeconds}s.`
+              : carriedFlag
+                ? `Bring it inside the ${teamLabel} base perimeter to score.`
+                : "Collect orbs, protect your base and escort the flag carrier."}
           </span>
-          <strong>{heistAnnouncement.title}</strong>
-          <small>{heistAnnouncement.detail}</small>
+        </div>
+      )}
+
+      {ctfEvent && !isRoleReveal && !isMatchmaking && !isFinished && (
+        <div key={ctfEvent.id} className={`capture-the-flag-live-event team-${ctfEvent.team || "cyan"} ${ctfEvent.kind || "taken"}`}>
+          <span>
+            {ctfEvent.kind === "capture"
+              ? "FLAG CAPTURED"
+              : ctfEvent.kind === "dropped"
+                ? "FLAG DROPPED"
+                : ctfEvent.kind === "returned"
+                  ? "FLAG RETURNED"
+                  : ctfEvent.kind === "roles" || ctfEvent.kind === "start"
+                    ? "TEAM DEPLOYMENT"
+                    : "FLAG TAKEN"}
+          </span>
+          <strong>{ctfEvent.title || carrierName || "OBJECTIVE UPDATE"}</strong>
+          <small>{ctfEvent.detail || "The flag objective has changed."}</small>
         </div>
       )}
 
       {cameraSubject && (
-        <div className="core-heist-minimap-frame" aria-label="World map">
+        <div className="capture-the-flag-minimap-frame">
           <MiniMap
-            mode="core-heist"
             player={cameraSubject}
             worldWidth={worldWidth}
             worldHeight={worldHeight}
-            orbs={renderData.minimapOrbs || []}
-            energyCells={renderData.minimapEnergyCells || renderData.energyCells || []}
-            cores={renderData.minimapCores || renderData.cores || []}
+            orbs={[]}
+            energyCells={[]}
+            cores={[]}
             safeZoneRadius={null}
-            players={renderData.heistTeammates || renderData.players || []}
-            bases={heistMiniMapBases}
-            flags={heistMiniMapFlags}
+            players={renderData.players || []}
+            bases={ctfBases}
+            flags={ctfFlags}
+            mode="capture-the-flag"
           />
         </div>
       )}
 
-      {showHeistRoleReveal && (
-        <div
-          className={`core-heist-role-reveal accent-${heistRoleMeta.accent}`}
-          role="status"
-          aria-live="assertive"
-        >
-          <div className="core-heist-role-reveal-sigil" aria-hidden="true"><i /><i /><i /></div>
-          <span>TACTICAL ROLE ASSIGNED</span>
-          <strong>{heistRoleMeta.title}</strong>
-          <b>{heistRoleMeta.label}</b>
-          <small>{heistRoleMeta.short}</small>
-          <em>{heistRoleRevealSeconds}s</em>
-        </div>
-      )}
-
-      {isBattlePrepare && !showHeistRoleReveal && (
-        <div className="core-heist-peace-countdown">
-          <strong>PREPARE PHASE</strong>
-          <b>{battlePrepareSeconds}s</b>
-          <span>Attack, shield and collision damage are locked.</span>
-        </div>
-      )}
-
-      {showBattleBeginFlash && !isBattlePrepare && (
-        <div className="core-heist-begin-flash">BATTLE BEGIN</div>
-      )}
-
-      {/* Zone PvP intentionally has no Connection lost/error overlay. A closed
-          transport returns to the hangar and never resumes this room. */}
-
       {isDead && !isFinished && (
-        <div className="core-heist-redeploy-panel">
-          <div className="core-heist-redeploy-card">
-            <strong>{heistPermanentElimination ? "OUT OF LIVES" : "DRONE DOWN"}</strong>
-            <b>{heistPermanentElimination ? "SPECTATING YOUR TEAM" : `REDEPLOYING ${respawnSeconds}s`}</b>
+        <div className="capture-the-flag-redeploy-panel">
+          <div className={`capture-the-flag-redeploy-card ${permanentSpectator ? "is-spectator" : ""}`}>
+            <strong>{permanentSpectator ? "SPECTATOR MODE" : "DRONE DOWN"}</strong>
+            <b>{permanentSpectator ? "SECOND LOSS" : `REDEPLOY IN ${respawnSeconds}`}</b>
             <span>
-              {heistPermanentElimination
-                ? "You used both lives. Follow your surviving teammates."
-                : `Death ${heistDeaths} / 2 — redeploying inside your ${teamLabel} base.`}
+              {permanentSpectator
+                ? "You have used your one redeploy. Follow a surviving teammate until the match ends."
+                : `First loss only: your drone relaunches from the ${teamLabel} base in ${respawnSeconds}s.`}
             </span>
           </div>
         </div>
       )}
 
       {isFinished && (
-        <div className="core-heist-finished-screen">
-          <h1>{winnerName ? `${winnerName} WINS` : "MATCH FINISHED"}</h1>
-          <p>{winnerName || "Capture the Flag complete."}</p>
-          <p className="core-heist-finished-auto-exit">Final score: CYAN {heistScore.cyan || 0} · ORANGE {heistScore.orange || 0}</p>
+        <div className="game-over-screen pvp-finished-screen capture-the-flag-finished-screen">
+          <h1>{isDraw ? "MATCH DRAW" : winnerName ? `${winnerName} WINS` : "MATCH FINISHED"}</h1>
+          <p>
+            {isDraw
+              ? "Time expired with both teams level."
+              : finishReason === "time-limit"
+                ? (hudYou?.team === (ctf?.winnerTeam || "") ? "Time expired — your team leads on captures." : "Time expired — the opposing team leads on captures.")
+                : (hudYou?.team === (ctf?.winnerTeam || "") ? "Your team captured the objective." : "Capture the Flag complete.")}
+          </p>
+          <p className="capture-the-flag-finished-score">BLUE {ctfScore.cyan || 0} · RED {ctfScore.orange || 0}</p>
           <button onClick={handleZoneExitToMenu}>EXIT TO MENU</button>
         </div>
       )}
 
       {isMobileControls && !isDead && !isMatchmaking && (
-      <div className="core-heist-mobile-controls" aria-label="Mobile PvP controls">
-        <div
-          className={`core-heist-mobile-joystick ${mobileJoystick.active ? "is-active" : ""}`}
-          onPointerDown={onJoystickPointerDown}
-          onPointerMove={onJoystickPointerMove}
-          onPointerUp={stopJoystick}
-          onPointerCancel={stopJoystick}
-        >
-          <div className="core-heist-mobile-joystick-ring" />
+        <div className="pvp-mobile-controls" aria-label="Mobile Capture the Flag controls">
           <div
-            ref={joystickKnobRef}
-            className="core-heist-mobile-joystick-knob"
-            style={{
-              transform: `translate(calc(-50% + ${mobileJoystick.knobX}px), calc(-50% + ${mobileJoystick.knobY}px))`,
-            }}
-          />
-        </div>
-
-        <div className="core-heist-mobile-buttons">
-          <button
-            type="button"
-            className={`core-heist-mobile-action core-heist-mobile-shield ${mobileShieldActive ? "is-active" : ""} ${isBattlePrepare ? "is-locked" : ""}`}
-            onPointerDown={onShieldPointerDown}
-            onPointerUp={stopMobileShield}
-            onPointerCancel={stopMobileShield}
+            className={`pvp-mobile-joystick ${mobileJoystick.active ? "is-active" : ""}`}
+            onPointerDown={onJoystickPointerDown}
+            onPointerMove={onJoystickPointerMove}
+            onPointerUp={stopJoystick}
+            onPointerCancel={stopJoystick}
           >
-            SHIELD
-          </button>
-
-          <button
-            type="button"
-            className={`core-heist-mobile-action core-heist-mobile-attack ${mobileAttackActive ? "is-active" : ""} ${isBattlePrepare ? "is-locked" : ""}`}
-            onPointerDown={onAttackPointerDown}
-            onPointerMove={onAttackPointerMove}
-            onPointerUp={stopMobileAttack}
-            onPointerCancel={stopMobileAttack}
-          >
-            ATTACK
-          </button>
+            <div className="pvp-mobile-joystick-ring" />
+            <div
+              ref={joystickKnobRef}
+              className="pvp-mobile-joystick-knob"
+              style={{ transform: `translate(calc(-50% + ${mobileJoystick.knobX}px), calc(-50% + ${mobileJoystick.knobY}px))` }}
+            />
+          </div>
+          <div className="pvp-mobile-buttons">
+            <button type="button" className={`pvp-mobile-action pvp-mobile-shield ${mobileShieldActive ? "is-active" : ""}`} onPointerDown={onShieldPointerDown} onPointerUp={stopMobileShield} onPointerCancel={stopMobileShield}>SHIELD</button>
+            <button type="button" className={`pvp-mobile-action pvp-mobile-attack ${mobileAttackActive ? "is-active" : ""}`} onPointerDown={onAttackPointerDown} onPointerMove={onAttackPointerMove} onPointerUp={stopMobileAttack} onPointerCancel={stopMobileAttack}>ATTACK</button>
+          </div>
         </div>
-      </div>
       )}
 
-      <button className="core-heist-exit-btn" onClick={handleZoneExitToMenu}>EXIT TO MENU</button>
+      <button className="pvp-exit-btn" onClick={handleZoneExitToMenu}>EXIT TO MENU</button>
     </div>
   );
 }
 
-export default CoreHeistArena;
+export default CapturetheFlag;

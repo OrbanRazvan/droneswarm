@@ -3,7 +3,7 @@ import { io } from "socket.io-client";
 import NormalPvpArena from "../NormalPvpArena/NormalPvpArena";
 import BattleRoyale from "../BattleRoyaleMode/BattleRoyaleMode";
 import ZonePvpArena from "../ZonePvpArena/ZonePvpArena";
-import CoreHeistArena from "../CoreHeistArena/CoreHeistArena";
+import CapturetheFlag from "../CapturetheFlag/CapturetheFlag";
 import PixiArenaRenderer from "../PixiArenaRenderer/PixiArenaRenderer";
 import "./Dashboard.css";
 
@@ -645,9 +645,9 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
             onExitToMenu={handleExitToHangar}
             graphicsQuality={graphicsQuality}
           />
-        ) : selectedMode === "core-heist" ? (
-          <CoreHeistArena
-            key={`core-heist-${arenaSessionId}`}
+        ) : selectedMode === "capture-the-flag" ? (
+          <CapturetheFlag
+            key={`capture-the-flag-${arenaSessionId}`}
             user={arenaUser}
             onExitToMenu={handleExitToHangar}
             graphicsQuality={graphicsQuality}
@@ -768,8 +768,8 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
           </button>
 
           <button
-            className="secondary-wide core-heist-wide"
-            onClick={() => launchArena("core-heist")}
+            className="secondary-wide capture-the-flag-wide"
+            onClick={() => launchArena("capture-the-flag")}
           >
             Capture The Flag · 4v4
           </button>

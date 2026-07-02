@@ -76,13 +76,13 @@ function MiniMap({
   const safeZoneRadiusRef = useRef(safeZoneRadius);
   const worldWidthRef = useRef(worldWidth);
   const worldHeightRef = useRef(worldHeight);
-  const isCoreHeistRef = useRef(false);
+  const isObjectiveTeamModeRef = useRef(false);
   const viewerTeamRef = useRef("cyan");
   const lastOrbsUpdateRef = useRef(0);
   const lastEnergyCellsUpdateRef = useRef(0);
 
-  const isCoreHeist = mode === "core-heist";
-  isCoreHeistRef.current = isCoreHeist;
+  const isObjectiveTeamMode = mode === "core-heist" || mode === "capture-the-flag";
+  isObjectiveTeamModeRef.current = isObjectiveTeamMode;
   safeZoneRadiusRef.current = safeZoneRadius;
   worldWidthRef.current = worldWidth;
   worldHeightRef.current = worldHeight;
@@ -91,7 +91,7 @@ function MiniMap({
   viewerTeamRef.current = viewerTeam;
   const viewerId = String(player?.id || "");
 
-  basesRef.current = isCoreHeist && Array.isArray(bases)
+  basesRef.current = isObjectiveTeamMode && Array.isArray(bases)
     ? bases.filter(
       (base) =>
         base &&
@@ -100,7 +100,7 @@ function MiniMap({
     )
     : [];
 
-  flagsRef.current = isCoreHeist && Array.isArray(flags)
+  flagsRef.current = isObjectiveTeamMode && Array.isArray(flags)
     ? flags.filter(
       (flag) =>
         flag &&
@@ -109,7 +109,7 @@ function MiniMap({
     )
     : [];
 
-  if (isCoreHeist && Array.isArray(players)) {
+  if (isObjectiveTeamMode && Array.isArray(players)) {
     const now = performance.now();
     const teammateMap = teammateMapRef.current;
 
@@ -162,7 +162,7 @@ function MiniMap({
   );
 
   useEffect(() => {
-    if (isCoreHeist) {
+    if (isObjectiveTeamMode) {
       // Core Heist tactical policy: no resource, core or safe-zone data is
       // retained or painted on the mini-map.
       stableOrbsRef.current = [];
@@ -200,7 +200,7 @@ function MiniMap({
     stableCoresRef.current = Array.isArray(cores)
       ? cores.filter((core) => core && !core.pending)
       : [];
-  }, [isCoreHeist, limitedOrbs, limitedEnergyCells, cores]);
+  }, [isObjectiveTeamMode, limitedOrbs, limitedEnergyCells, cores]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -211,8 +211,11 @@ function MiniMap({
 
     const drawBase = (base, currentWorldWidth, currentWorldHeight, width, height) => {
       const point = mapPoint(base, currentWorldWidth, currentWorldHeight, width, height, 12);
-      const isOwnBase = Boolean(base?.isOwnBase);
-      const color = isOwnBase ? "#00eaff" : "#ff4658";
+      const team = String(base?.team || "cyan").toLowerCase() === "orange" ? "orange" : "cyan";
+      const isOwnBase = team === viewerTeamRef.current;
+      const color = isOwnBase ? "#00d8ff" : "#ff425a";
+      const light = isOwnBase ? "#dbfbff" : "#ffe0e4";
+      const dark = isOwnBase ? "#07235a" : "#3a0a18";
       const radiusInWorld = Number(base?.perimeterRadius || base?.radius || 520);
       const scale = Math.min(
         width / Math.max(1, Number(currentWorldWidth) || 1),
@@ -224,70 +227,80 @@ function MiniMap({
       ctx.globalAlpha = 1;
       ctx.beginPath();
       ctx.arc(point.x, point.y, perimeterRadius, 0, Math.PI * 2);
-      ctx.fillStyle = isOwnBase ? "rgba(0, 234, 255, 0.10)" : "rgba(255, 70, 88, 0.10)";
+      ctx.fillStyle = isOwnBase ? "rgba(0, 216, 255, 0.08)" : "rgba(255, 66, 90, 0.08)";
       ctx.fill();
-      ctx.strokeStyle = isOwnBase ? "rgba(0, 234, 255, 0.92)" : "rgba(255, 70, 88, 0.92)";
-      ctx.lineWidth = 1.45;
+      ctx.strokeStyle = isOwnBase ? "rgba(0, 216, 255, 0.65)" : "rgba(255, 66, 90, 0.65)";
+      ctx.lineWidth = 1.35;
       ctx.stroke();
 
       ctx.shadowBlur = 12;
       ctx.shadowColor = color;
+      const boxSize = 8.6;
       ctx.beginPath();
-      ctx.moveTo(point.x, point.y - 5.7);
-      ctx.lineTo(point.x + 5.7, point.y);
-      ctx.lineTo(point.x, point.y + 5.7);
-      ctx.lineTo(point.x - 5.7, point.y);
-      ctx.closePath();
+      ctx.roundRect(point.x - boxSize / 2, point.y - boxSize / 2, boxSize, boxSize, 2.5);
+      ctx.fillStyle = dark;
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 2.15, 0, Math.PI * 2);
       ctx.fillStyle = color;
       ctx.fill();
 
-      ctx.shadowBlur = 0;
       ctx.beginPath();
-      ctx.arc(point.x, point.y, 1.75, 0, Math.PI * 2);
-      ctx.fillStyle = "#ffffff";
+      ctx.arc(point.x, point.y, 0.95, 0, Math.PI * 2);
+      ctx.fillStyle = light;
       ctx.fill();
       ctx.restore();
     };
 
     const drawFlag = (flag, currentWorldWidth, currentWorldHeight, width, height) => {
       const point = mapPoint(flag, currentWorldWidth, currentWorldHeight, width, height, 10);
-      const isOwnFlag = Boolean(flag?.isOwnFlag);
-      const color = isOwnFlag ? "#00eaff" : "#ff4d5f";
+      const team = String(flag?.team || "cyan").toLowerCase() === "orange" ? "orange" : "cyan";
+      const isOwnFlag = team === viewerTeamRef.current;
+      const color = isOwnFlag ? "#00d8ff" : "#ff425a";
+      const light = isOwnFlag ? "#e9fcff" : "#ffe7ea";
       const status = String(flag?.status || "home");
 
       ctx.save();
       ctx.translate(point.x, point.y);
-      ctx.globalAlpha = status === "carried" ? 1 : 0.96;
+      ctx.globalAlpha = status === "carried" ? 1 : 0.98;
 
-      if (status === "carried") {
+      if (status === "carried" || status === "dropped") {
         ctx.beginPath();
-        ctx.arc(0, 0, 7.2, 0, Math.PI * 2);
-        ctx.strokeStyle = isOwnFlag ? "rgba(0, 234, 255, 0.38)" : "rgba(255, 77, 95, 0.38)";
-        ctx.lineWidth = 1.4;
+        ctx.arc(0, 0, status === "carried" ? 7.4 : 6.4, 0, Math.PI * 2);
+        ctx.strokeStyle = isOwnFlag ? "rgba(0, 216, 255, 0.34)" : "rgba(255, 66, 90, 0.34)";
+        ctx.lineWidth = 1.35;
         ctx.stroke();
       }
 
       ctx.beginPath();
-      ctx.moveTo(-1.5, 5.8);
-      ctx.lineTo(-1.5, -6.6);
-      ctx.strokeStyle = "rgba(255,255,255,0.98)";
-      ctx.lineWidth = 1.65;
+      ctx.moveTo(-1.25, 6.2);
+      ctx.lineTo(-1.25, -7.2);
+      ctx.strokeStyle = "#ffd66b";
+      ctx.lineWidth = 1.75;
       ctx.stroke();
 
       ctx.beginPath();
-      ctx.moveTo(-1.4, -6.3);
-      ctx.lineTo(6.6, -3.9);
-      ctx.lineTo(-1.4, -1.3);
+      ctx.moveTo(-0.8, -6.8);
+      ctx.lineTo(7.9, -4.4);
+      ctx.lineTo(5.6, -1.0);
+      ctx.lineTo(8.0, 2.0);
+      ctx.lineTo(-0.8, 4.0);
       ctx.closePath();
       ctx.fillStyle = color;
       ctx.fill();
 
-      if (status === "dropped") {
-        ctx.beginPath();
-        ctx.arc(0, 3.25, 1.8, 0, Math.PI * 2);
-        ctx.fillStyle = "#ffffff";
-        ctx.fill();
-      }
+      ctx.beginPath();
+      ctx.moveTo(2.0, -3.5);
+      ctx.lineTo(4.25, -1.2);
+      ctx.lineTo(2.0, 1.1);
+      ctx.lineTo(-0.2, -1.2);
+      ctx.closePath();
+      ctx.fillStyle = light;
+      ctx.fill();
 
       ctx.restore();
     };
@@ -336,7 +349,7 @@ function MiniMap({
       const currentWorldWidth = worldWidthRef.current;
       const currentWorldHeight = worldHeightRef.current;
       const currentSafeZoneRadius = safeZoneRadiusRef.current;
-      const coreHeistOnly = isCoreHeistRef.current;
+      const objectiveTeamOnly = isObjectiveTeamModeRef.current;
       const rect = canvas.getBoundingClientRect();
       const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
       const dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1 : 1.5);
@@ -354,7 +367,7 @@ function MiniMap({
       const mapWidth = rect.width;
       const mapHeight = rect.height;
 
-      if (!coreHeistOnly) {
+      if (!objectiveTeamOnly) {
         const shouldDrawZone =
           Number(currentSafeZoneRadius) > 0 &&
           Number(currentSafeZoneRadius) < Math.min(Number(currentWorldWidth) || 0, Number(currentWorldHeight) || 0) / 2;
