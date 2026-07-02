@@ -48,6 +48,14 @@ const ALLOWED_DRONES = [
     'electric-indigo',
     'dark-emerald',
 ];
+const DEFAULT_CTF_PACK_ID = 'ctf-pack-starter-command';
+const ALLOWED_CTF_PACK_IDS = [
+    'ctf-pack-starter-command',
+    'ctf-pack-galactic-command',
+    'ctf-pack-medieval-forge',
+    'ctf-pack-military-prototype',
+    'ctf-pack-dark-galactic',
+];
 let AuthService = class AuthService {
     constructor(prisma, jwtService) {
         this.prisma = prisma;
@@ -64,8 +72,17 @@ let AuthService = class AuthService {
             .replace(/\s+/g, '-');
         return clean || 'basic';
     }
+    normalizeCtfPackId(ctfPackId) {
+        const clean = String(ctfPackId || '')
+            .trim()
+            .toLowerCase()
+            .replace(/_/g, '-')
+            .replace(/\s+/g, '-');
+        return clean || DEFAULT_CTF_PACK_ID;
+    }
     safeUser(user) {
         const selectedDrone = user.selectedDrone || 'basic';
+        const selectedCtfPackId = user.selectedCtfPackId || DEFAULT_CTF_PACK_ID;
         return {
             id: user.id,
             firstName: user.firstName,
@@ -74,6 +91,7 @@ let AuthService = class AuthService {
             email: user.email,
             selectedDrone,
             selectedSkin: selectedDrone === 'basic' ? 'cyan' : selectedDrone,
+            selectedCtfPackId,
             avatar: user.avatar || null,
         };
     }
@@ -129,6 +147,7 @@ let AuthService = class AuthService {
                 activationCode: code,
                 isVerified: false,
                 selectedDrone: 'basic',
+                selectedCtfPackId: DEFAULT_CTF_PACK_ID,
             },
         });
         let emailSent = true;
@@ -220,6 +239,7 @@ let AuthService = class AuthService {
                     isVerified: true,
                     activationCode: null,
                     selectedDrone: 'basic',
+                    selectedCtfPackId: DEFAULT_CTF_PACK_ID,
                     avatar: profile.avatar || null,
                     username: null,
                 },
@@ -275,6 +295,25 @@ let AuthService = class AuthService {
             },
         });
         return {
+            user: this.safeUser(user),
+        };
+    }
+    async selectCtfPack(userId, ctfPackId) {
+        if (!userId) {
+            throw new common_1.BadRequestException('UserId lipseste.');
+        }
+        const cleanPackId = this.normalizeCtfPackId(ctfPackId);
+        if (!ALLOWED_CTF_PACK_IDS.includes(cleanPackId)) {
+            throw new common_1.BadRequestException('Pachetul Capture The Flag este invalid.');
+        }
+        const user = await this.prisma.gameUser.update({
+            where: { id: Number(userId) },
+            data: {
+                selectedCtfPackId: cleanPackId,
+            },
+        });
+        return {
+            selectedCtfPackId: user.selectedCtfPackId,
             user: this.safeUser(user),
         };
     }

@@ -159,6 +159,16 @@ const DRONE_SKIN_THEMES = {
   "electric-indigo": ["#4f46e5", "#93c5fd", "#0b102f", "#eef2ff", "rgba(79, 70, 229, 0.82)"],
   "dark-emerald": ["#047857", "#34d399", "#001f16", "#d1fae5", "rgba(4, 120, 87, 0.82)"],
 
+  // Free Starter Command Pack. These match the role-specific Pixi hulls.
+  "ctf-blue-attack-alpha-basic-scout": ["#00b9d7", "#9af6ff", "#04212e", "#f4feff", "rgba(0, 185, 215, 0.82)"],
+  "ctf-blue-attack-bravo-basic-wingman": ["#3977e8", "#a9c8ff", "#081b40", "#f5f9ff", "rgba(57, 119, 232, 0.82)"],
+  "ctf-blue-tank-basic-bastion": ["#2166cf", "#9bc8ff", "#081735", "#f2f8ff", "rgba(33, 102, 207, 0.82)"],
+  "ctf-blue-defense-basic-sentinel": ["#00a994", "#a5fff0", "#002a28", "#f1fffc", "rgba(0, 169, 148, 0.82)"],
+  "ctf-red-attack-alpha-basic-scout": ["#f05258", "#ffc1c6", "#35030c", "#fff7f8", "rgba(240, 82, 88, 0.82)"],
+  "ctf-red-attack-bravo-basic-wingman": ["#ef7a3d", "#ffd3a8", "#401602", "#fffbf4", "rgba(239, 122, 61, 0.82)"],
+  "ctf-red-tank-basic-bastion": ["#c94058", "#ffa5b3", "#34000b", "#fff4f6", "rgba(201, 64, 88, 0.82)"],
+  "ctf-red-defense-basic-sentinel": ["#bf3f8c", "#ffb9e2", "#35001f", "#fff2fa", "rgba(191, 63, 140, 0.82)"],
+
   // CTF premium randomized class collection – same palettes as the WebGL hulls.
   "ctf-blue-attack-alpha-raptor": ["#00ddff", "#9dfff8", "#00192d", "#f2ffff", "rgba(0, 221, 255, 0.82)"],
   "ctf-blue-attack-alpha-comet": ["#38f5ff", "#b8fcff", "#062b42", "#ffffff", "rgba(56, 245, 255, 0.82)"],
@@ -1299,10 +1309,61 @@ function getCaptureTheFlagRoleLabel(role, fallback = "PILOT") {
   return fallback;
 }
 
+const DEFAULT_CTF_PACK_ID = "ctf-pack-starter-command";
+
+const CTF_EQUIPPED_PACK_VARIANTS = Object.freeze({
+  "ctf-pack-starter-command": {
+    "attack-alpha": "basic-scout",
+    "attack-bravo": "basic-wingman",
+    tank: "basic-bastion",
+    defense: "basic-sentinel",
+  },
+  "ctf-pack-galactic-command": {
+    "attack-alpha": "raptor",
+    "attack-bravo": "phantom",
+    tank: "bastion",
+    defense: "aegis",
+  },
+  "ctf-pack-medieval-forge": {
+    "attack-alpha": "viper",
+    "attack-bravo": "scythe",
+    tank: "juggernaut",
+    defense: "warden",
+  },
+  "ctf-pack-military-prototype": {
+    "attack-alpha": "talon",
+    "attack-bravo": "eclipse",
+    tank: "atlas",
+    defense: "bulwark",
+  },
+  "ctf-pack-dark-galactic": {
+    "attack-alpha": "dark-voidfang",
+    "attack-bravo": "dark-voidfang",
+    tank: "dark-voidfang",
+    defense: "dark-voidfang",
+  },
+});
+
+function getEquippedCaptureTheFlagSkin(user, unit) {
+  const packId = String(user?.ctfSelectedPackId || DEFAULT_CTF_PACK_ID).trim() || DEFAULT_CTF_PACK_ID;
+  const role = String(unit?.ctfRole || "").trim().toLowerCase();
+  const variant = CTF_EQUIPPED_PACK_VARIANTS[packId]?.[role];
+
+  if (!variant || !role) return null;
+
+  const team = String(unit?.team || unit?.ctfTeam || "cyan").toLowerCase() === "orange"
+    ? "red"
+    : "blue";
+
+  return `ctf-${team}-${role}-${variant}`;
+}
+
 function getCaptureTheFlagSkinFamilyLabel(family) {
   const normalized = String(family || "").trim().toUpperCase();
+  if (normalized === "STARTER") return "STARTER COMMAND";
   if (normalized === "MEDIEVAL") return "MEDIEVAL FORGE";
   if (normalized === "MILITARY") return "MILITARY PROTOTYPE";
+  if (normalized === "DARK GALACTIC") return "DARK GALACTIC";
   return "GALACTIC OPERA";
 }
 
@@ -1755,6 +1816,13 @@ function CapturetheFlag({ user, onExitToMenu, graphicsQuality = "normal" }) {
         guestStatsKey: isGuest ? getGuestStatsKey() : null,
         username: getDisplayName(currentUser),
         skin: getSelectedSkin(currentUser),
+        // Persisted account selection. The server applies the matching class
+        // hull only after it randomly assigns the player's team and role.
+        // Guest pilots always receive the free Starter Command Pack.
+        // Signed-in pilots pass their saved CTF pack preference.
+        ctfSelectedPackId: isGuest
+          ? DEFAULT_CTF_PACK_ID
+          : currentUser?.selectedCtfPackId || DEFAULT_CTF_PACK_ID,
         resumeToken: resumeTokenRef.current,
         participantId: participantIdRef.current,
         // The backend marks this old room as departed before selecting any
@@ -3880,13 +3948,21 @@ function CapturetheFlag({ user, onExitToMenu, graphicsQuality = "normal" }) {
   const rendererPlayer = isDead && spectatorTarget
     ? {
         ...spectatorTarget,
-        skin: normalizeSkin(spectatorTarget.skin || getSelectedSkin(user)),
+        skin: normalizeSkin(
+          getEquippedCaptureTheFlagSkin(user, spectatorTarget) ||
+          spectatorTarget.skin ||
+          getSelectedSkin(user),
+        ),
         isSpectatorTarget: true,
       }
     : you?.alive !== false
       ? {
           ...you,
-          skin: normalizeSkin(you?.skin || getSelectedSkin(user)),
+          skin: normalizeSkin(
+            getEquippedCaptureTheFlagSkin(user, you) ||
+            you?.skin ||
+            getSelectedSkin(user),
+          ),
         }
       : null;
 

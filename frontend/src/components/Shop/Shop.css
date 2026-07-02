@@ -1,188 +1,506 @@
+/* =========================================================
+   DRONE SWARM STORE — static drone cards / no WebGL
+========================================================= */
+
 .shop-page {
   display: grid;
-  gap: 22px;
+  gap: 42px;
+  padding: 4px 0 24px;
 }
 
-.shop-hero {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 22px;
-  padding: 26px;
-  border-radius: 18px;
-  background:
-    radial-gradient(circle at 70% 50%, rgba(0, 220, 245, 0.16), transparent 42%),
-    rgba(0, 0, 0, 0.24);
-  border: 1px solid rgba(0, 220, 245, 0.16);
-}
-
-.shop-kicker {
-  display: inline-flex;
-  padding: 8px 12px;
-  border-radius: 999px;
-  color: #00dff5;
-  background: rgba(0, 220, 245, 0.09);
-  border: 1px solid rgba(0, 220, 245, 0.18);
-  font-weight: 900;
-  font-size: 12px;
-}
-
-.shop-hero h2 {
-  margin: 14px 0 8px;
-  color: #ffffff;
-  font-size: 32px;
-}
-
-.shop-hero p {
-  max-width: 720px;
-  color: rgba(255, 255, 255, 0.64);
-  line-height: 1.55;
-}
-
-.shop-price-badge {
-  min-width: 150px;
-  min-height: 118px;
-  border-radius: 20px;
-  display: grid;
-  place-items: center;
-  text-align: center;
-  background: linear-gradient(135deg, rgba(0, 220, 245, 0.16), rgba(102, 232, 157, 0.1));
-  border: 1px solid rgba(0, 220, 245, 0.26);
-  box-shadow: 0 0 24px rgba(0, 220, 245, 0.13);
-}
-
-.shop-price-badge span {
-  display: block;
-  color: rgba(255, 255, 255, 0.54);
-  font-size: 12px;
-  font-weight: 900;
-  letter-spacing: 1.4px;
-}
-
-.shop-price-badge strong {
-  display: block;
-  color: #66e89d;
-  font-size: 30px;
-  font-weight: 1000;
-}
-
-.shop-pack-grid {
+.store-collection-section {
   display: grid;
   gap: 18px;
 }
 
-.shop-pack-grid-two {
-  grid-template-columns: repeat(2, minmax(280px, 1fr));
+.store-section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 2px;
 }
 
-.shop-pack-card {
-  padding: 22px;
-  border-radius: 20px;
-  background:
-    radial-gradient(circle at 50% 0%, rgba(0, 220, 245, 0.08), transparent 48%),
-    rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(0, 220, 245, 0.16);
-  box-shadow: 0 0 26px rgba(0, 220, 245, 0.08);
-}
-
-.shop-pack-selected {
-  border-color: rgba(102, 232, 157, 0.62);
-  box-shadow:
-    0 0 28px rgba(102, 232, 157, 0.14),
-    inset 0 0 22px rgba(102, 232, 157, 0.035);
-}
-
-.shop-pack-preview {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-  min-height: 112px;
-  padding: 10px;
-  margin-bottom: 18px;
-  border-radius: 16px;
-  background: rgba(0, 0, 0, 0.24);
-  overflow: hidden;
-}
-
-.shop-preview-item {
-  position: relative;
-  border-radius: 14px;
-}
-
-.selected-preview-item::after {
-  content: "USED";
-  position: absolute;
-  left: 50%;
-  bottom: -2px;
-  transform: translateX(-50%);
-  padding: 3px 7px;
-  border-radius: 999px;
-  color: #06101d;
-  background: #66e89d;
-  font-size: 8px;
-  font-weight: 1000;
-  letter-spacing: 0.6px;
-}
-
-.shop-pack-copy span {
-  color: #00dff5;
+.store-section-heading span,
+.store-equipped-heading span {
+  display: block;
+  color: #72f6ff;
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 1000;
+  letter-spacing: 1.55px;
+}
+
+.store-section-heading h2 {
+  margin: 6px 0 0;
+  color: #f1fcff;
+  font-size: clamp(28px, 3vw, 39px);
+  line-height: 1;
+  letter-spacing: -0.7px;
+}
+
+.store-section-heading p {
+  max-width: 540px;
+  margin: 0;
+  color: #9eb3c8;
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: right;
+}
+
+.store-pack-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.store-pack-card {
+  position: relative;
+  display: flex;
+  min-height: 438px;
+  flex-direction: column;
+  padding: 20px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 220, 245, 0.24);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 14% 0%, rgba(0, 234, 255, 0.11), transparent 32%),
+    radial-gradient(circle at 92% 100%, rgba(91, 255, 175, 0.06), transparent 35%),
+    linear-gradient(145deg, rgba(255,255,255,0.025), transparent 42%),
+    rgba(1, 9, 20, 0.76);
+  box-shadow:
+    inset 0 0 28px rgba(0, 220, 245, 0.035),
+    0 12px 28px rgba(0, 0, 0, 0.13);
+}
+
+.store-pack-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(118deg, transparent 24%, rgba(255,255,255,0.035) 48%, transparent 74%);
+}
+
+.store-pack-card.is-ctf {
+  border-color: rgba(109, 255, 177, 0.34);
+  background:
+    radial-gradient(circle at 12% 4%, rgba(109, 255, 177, 0.13), transparent 32%),
+    radial-gradient(circle at 94% 100%, rgba(0, 220, 245, 0.075), transparent 38%),
+    rgba(1, 10, 20, 0.78);
+}
+
+.store-pack-card.is-selected {
+  border-color: rgba(109, 255, 177, 0.92);
+  box-shadow:
+    0 0 30px rgba(109, 255, 177, 0.15),
+    inset 0 0 28px rgba(109, 255, 177, 0.055);
+}
+
+/* Fresh class names prevent old Dashboard.css preview rules from hiding this. */
+.shop-page .store-pack-preview {
+  position: relative !important;
+  z-index: 1;
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: stretch;
+  min-height: 202px;
+  margin-bottom: 19px;
+  padding: 10px;
+  gap: 8px;
+  visibility: visible !important;
+  opacity: 1 !important;
+  overflow: hidden;
+  border: 1px solid rgba(171, 226, 255, 0.15);
+  border-radius: 17px;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(0, 220, 245, 0.12), transparent 44%),
+    rgba(0, 0, 0, 0.30);
+}
+
+.store-pack-card.is-ctf .store-pack-preview {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  min-height: 212px;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(109, 255, 177, 0.14), transparent 45%),
+    rgba(0, 0, 0, 0.30);
+}
+
+.shop-page .store-pack-preview::before {
+  content: "";
+  position: absolute;
+  inset: 15px;
+  border: 1px solid rgba(118, 246, 255, 0.15);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.store-drone-tile {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  min-width: 0;
+  min-height: 0;
+  place-items: center;
+  padding: 5px 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+}
+
+.store-drone-tile.is-selected {
+  border-color: rgba(109, 255, 177, 0.62);
+  background: rgba(109, 255, 177, 0.055);
+}
+
+.store-drone-art {
+  display: grid !important;
+  width: min(100%, 114px) !important;
+  aspect-ratio: 1;
+  min-height: 0;
+  place-items: center;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+
+.store-drone-art svg {
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: visible;
+  filter: drop-shadow(0 0 7px rgba(0, 234, 255, 0.27)) drop-shadow(0 0 14px rgba(0, 234, 255, 0.10));
+}
+
+.store-pack-card.is-ctf .store-drone-art svg {
+  filter: drop-shadow(0 0 7px rgba(109, 255, 177, 0.25)) drop-shadow(0 0 14px rgba(0, 220, 245, 0.08));
+}
+
+.store-drone-tile > span {
+  max-width: 100%;
+  overflow: hidden;
+  color: #dffbff;
+  font-size: 9px;
+  font-weight: 1000;
+  letter-spacing: 0.55px;
+  line-height: 1.1;
+  text-align: center;
+  text-overflow: ellipsis;
   text-transform: uppercase;
-  letter-spacing: 1px;
+  white-space: nowrap;
 }
 
-.shop-pack-copy h3 {
+.store-pack-card.is-ctf .store-drone-tile > span,
+.store-equipped-loadout .store-drone-tile > span {
+  color: #aefcdf;
+}
+
+.store-drone-tile > strong {
+  display: block;
+  max-width: 100%;
+  margin-top: 3px;
+  overflow: hidden;
+  color: #92a9bd;
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1.1;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.store-pack-copy {
+  position: relative;
+  z-index: 1;
+}
+
+.store-pack-type {
+  color: #73f5ff;
+  font-size: 11px;
+  font-weight: 1000;
+  letter-spacing: 1.1px;
+}
+
+.store-pack-card.is-ctf .store-pack-type {
+  color: #aefcdf;
+}
+
+.store-pack-copy h3 {
   margin: 8px 0;
-  font-size: 24px;
-  color: #ffffff;
+  color: #f4fdff;
+  font-size: 27px;
+  line-height: 1.05;
+  letter-spacing: -0.45px;
 }
 
-.shop-pack-copy p {
-  color: rgba(255, 255, 255, 0.62);
-  line-height: 1.45;
+.store-pack-copy p {
+  margin: 0;
+  color: #aabed0;
+  font-size: 15px;
+  line-height: 1.48;
 }
 
-.shop-pack-footer {
+.store-pack-footer {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 20px;
+  gap: 16px;
+  margin-top: auto;
+  padding-top: 20px;
 }
 
-.shop-pack-footer strong {
-  color: #66e89d;
-  font-size: 28px;
+.store-pack-footer strong {
+  color: #6dffb1;
+  font-size: 29px;
   font-weight: 1000;
+  letter-spacing: -0.8px;
 }
 
-.shop-pack-footer button {
-  border: none;
-  color: #06101d;
-  background: linear-gradient(90deg, #00dff5, #66e89d);
-  border-radius: 12px;
-  padding: 13px 18px;
+.store-pack-footer button {
+  border: 0;
+  border-radius: 13px;
+  padding: 13px 19px;
+  color: #031019;
+  background: linear-gradient(135deg, #00dff5, #67ffb1);
+  box-shadow: 0 0 18px rgba(0, 220, 245, 0.16);
+  font-size: 14px;
   font-weight: 1000;
   cursor: pointer;
-  box-shadow: 0 0 18px rgba(0, 220, 245, 0.2);
 }
 
-.shop-fallback-dot {
-  width: 44px;
-  height: 44px;
-  margin: auto;
-  border-radius: 50%;
-  background: #00dff5;
-  box-shadow: 0 0 18px #00dff5;
+.store-pack-footer button:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
 }
 
-@media (max-width: 950px) {
-  .shop-hero {
-    flex-direction: column;
-    align-items: stretch;
+.store-pack-footer button.is-view-only {
+  color: #dcecf8;
+  border: 1px solid rgba(166, 190, 210, 0.34);
+  background: rgba(3, 17, 32, 0.88);
+  box-shadow: none;
+}
+
+/* =========================================
+   Strong divider: everything under it belongs to Capture The Flag 4V4.
+========================================= */
+.store-ctf-divider {
+  display: grid;
+  grid-template-columns: minmax(44px, 1fr) auto minmax(44px, 1fr);
+  align-items: center;
+  gap: 20px;
+  padding: 6px 0 0;
+}
+
+.store-ctf-divider-line {
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgba(0, 234, 255, 0.50), rgba(109, 255, 177, 0.92));
+  box-shadow: 0 0 14px rgba(109, 255, 177, 0.22);
+}
+
+.store-ctf-divider-line:last-child {
+  background: linear-gradient(90deg, rgba(109, 255, 177, 0.92), rgba(0, 234, 255, 0.50), transparent);
+}
+
+.store-ctf-divider > div {
+  min-width: min(530px, 62vw);
+  padding: 16px 25px;
+  border: 1px solid rgba(109, 255, 177, 0.40);
+  border-radius: 18px;
+  text-align: center;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(109, 255, 177, 0.13), transparent 70%),
+    rgba(1, 12, 22, 0.84);
+  box-shadow: 0 0 24px rgba(109, 255, 177, 0.10), inset 0 0 22px rgba(0, 234, 255, 0.03);
+}
+
+.store-ctf-divider small {
+  display: block;
+  color: #aefcdf;
+  font-size: 10px;
+  font-weight: 1000;
+  letter-spacing: 1.65px;
+}
+
+.store-ctf-divider strong {
+  display: block;
+  margin-top: 4px;
+  color: #f3ffff;
+  font-size: clamp(21px, 2.4vw, 32px);
+  font-weight: 1000;
+  letter-spacing: 0.4px;
+  text-shadow: 0 0 16px rgba(109, 255, 177, 0.18);
+}
+
+.store-ctf-divider p {
+  margin: 5px 0 0;
+  color: #aabed0;
+  font-size: 12px;
+}
+
+.store-ctf-section {
+  gap: 22px;
+}
+
+/* The equipped block makes the four active drones explicit:
+   Arena drone for normal modes + Attack/Tank/Defender for 4V4. */
+.store-equipped-loadout {
+  position: relative;
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(109, 255, 177, 0.50);
+  border-radius: 21px;
+  background:
+    radial-gradient(circle at 8% 5%, rgba(0, 234, 255, 0.11), transparent 28%),
+    radial-gradient(circle at 92% 100%, rgba(109, 255, 177, 0.10), transparent 31%),
+    rgba(1, 11, 22, 0.80);
+  box-shadow: inset 0 0 28px rgba(109, 255, 177, 0.045), 0 0 24px rgba(109, 255, 177, 0.08);
+}
+
+.store-equipped-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.store-equipped-heading span {
+  color: #aefcdf;
+  font-size: 10px;
+}
+
+.store-equipped-heading h3 {
+  margin: 5px 0 0;
+  color: #f5fdff;
+  font-size: 23px;
+}
+
+.store-equipped-heading p {
+  max-width: 530px;
+  margin: 0;
+  color: #aabed0;
+  font-size: 13px;
+  line-height: 1.42;
+  text-align: right;
+}
+
+.store-equipped-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(178, 238, 255, 0.13);
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.store-equipped-grid .store-drone-tile {
+  min-height: 168px;
+  padding: 8px 5px 9px;
+  border-color: rgba(109, 255, 177, 0.19);
+  background: linear-gradient(155deg, rgba(255,255,255,0.02), rgba(109, 255, 177, 0.035));
+}
+
+.store-equipped-grid .store-drone-art {
+  width: min(100%, 136px) !important;
+}
+
+@media (max-width: 1120px) {
+  .store-pack-grid {
+    grid-template-columns: 1fr;
   }
 
-  .shop-pack-grid-two {
+  .store-equipped-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .shop-page {
+    gap: 30px;
+  }
+
+  .store-section-heading,
+  .store-equipped-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .store-section-heading h2 {
+    font-size: 29px;
+  }
+
+  .store-section-heading p,
+  .store-equipped-heading p {
+    text-align: left;
+  }
+
+  .store-ctf-divider {
     grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .store-ctf-divider-line {
+    display: none;
+  }
+
+  .store-ctf-divider > div {
+    min-width: 0;
+    padding: 15px 16px;
+  }
+
+  .store-pack-card {
+    min-height: 416px;
+  }
+}
+
+@media (max-width: 500px) {
+  .store-pack-card {
+    min-height: 370px;
+    padding: 14px;
+    border-radius: 17px;
+  }
+
+  .shop-page .store-pack-preview {
+    min-height: 160px;
+    gap: 3px;
+    padding: 7px 4px;
+  }
+
+  .store-pack-card.is-ctf .store-pack-preview {
+    min-height: 170px;
+  }
+
+  .store-drone-art {
+    width: min(100%, 86px) !important;
+  }
+
+  .store-drone-tile > span {
+    font-size: 7px;
+    letter-spacing: 0.18px;
+  }
+
+  .store-drone-tile > strong {
+    font-size: 6.5px;
+  }
+
+  .store-pack-copy h3 {
+    font-size: 22px;
+  }
+
+  .store-equipped-grid {
+    gap: 7px;
+    padding: 7px;
+  }
+
+  .store-equipped-grid .store-drone-tile {
+    min-height: 132px;
+    padding: 5px 2px;
+  }
+
+  .store-equipped-grid .store-drone-art {
+    width: min(100%, 84px) !important;
   }
 }

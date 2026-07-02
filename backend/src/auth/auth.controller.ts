@@ -27,6 +27,11 @@ export class AuthController {
     return this.authService.selectDrone(body.userId, body.drone);
   }
 
+  @Post('select-ctf-pack')
+  selectCtfPack(@Body() body: { userId: number; ctfPackId: string }) {
+    return this.authService.selectCtfPack(body.userId, body.ctfPackId);
+  }
+
   @Post('set-username')
   setUsername(@Body() body: { userId: number; username: string }) {
     return this.authService.setUsername(body.userId, body.username);

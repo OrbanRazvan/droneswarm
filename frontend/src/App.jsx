@@ -102,6 +102,18 @@ function App() {
     setScreen(user ? "profile" : "auth");
   };
 
+  const handleUserUpdated = (nextUser) => {
+    if (!nextUser || nextUser.isGuest) return;
+
+    const realUser = {
+      ...nextUser,
+      isGuest: false,
+    };
+
+    localStorage.setItem("user", JSON.stringify(realUser));
+    setUser(realUser);
+  };
+
   if (screen === "auth" || !user) {
     return <AuthPage onAuthSuccess={handleAuthSuccess} />;
   }
@@ -112,6 +124,7 @@ function App() {
       gameMode={gameMode}
       onExitToMenu={handleExitToMenu}
       onLogout={handleLogout}
+      onUserUpdated={handleUserUpdated}
     />
   );
 }

@@ -2959,3 +2959,781 @@
     linear-gradient(90deg, rgba(0, 234, 255, 0.24), rgba(255, 70, 88, 0.23)),
     rgba(2, 8, 18, 0.9) !important;
 }
+
+
+/* =========================================================
+   STATIC ARENA DRONE PREVIEWS — no Pixi, no canvas, no animation
+   The SVG uses the same base chassis / rotor coordinates as
+   PixiArenaRenderer and remains completely static in Hangar + Shop.
+========================================================= */
+
+.static-drone-preview {
+  --preview-size: 158px;
+  position: relative;
+  display: grid;
+  width: var(--preview-size);
+  aspect-ratio: 1;
+  place-items: center;
+  margin: 0 auto;
+  pointer-events: none;
+  isolation: isolate;
+}
+
+.static-drone-preview svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  filter:
+    drop-shadow(0 0 7px rgba(0, 234, 255, 0.27))
+    drop-shadow(0 0 16px rgba(0, 234, 255, 0.10));
+}
+
+.static-drone-preview-hero {
+  --preview-size: min(420px, 31vw);
+}
+
+.static-drone-preview-large {
+  --preview-size: 165px;
+}
+
+.static-drone-preview-modal {
+  --preview-size: 212px;
+}
+
+.static-drone-preview-tiny {
+  --preview-size: 102px;
+}
+
+.static-drone-preview.is-compact {
+  --preview-size: 98px;
+}
+
+.static-drone-preview-label {
+  position: absolute;
+  bottom: -5px;
+  left: 50%;
+  padding: 4px 7px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(125, 231, 255, 0.24);
+  border-radius: 999px;
+  color: #e6fbff;
+  background: rgba(2, 12, 24, 0.78);
+  font-size: 8px;
+  font-weight: 1000;
+  letter-spacing: 0.7px;
+  white-space: nowrap;
+}
+
+.hero-drone-card {
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 510px) !important;
+}
+
+.hero-drone-visuals {
+  position: relative;
+  display: grid;
+  min-height: 400px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(125, 231, 255, 0.10);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 50% 48%, rgba(0, 234, 255, 0.07), transparent 35%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.012), transparent 38%),
+    rgba(0, 0, 0, 0.16);
+}
+
+.hero-drone-visuals::before,
+.hero-drone-visuals::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border: 1px solid rgba(125, 231, 255, 0.12);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.hero-drone-visuals::before {
+  width: min(320px, 75%);
+  aspect-ratio: 1;
+}
+
+.hero-drone-visuals::after {
+  width: min(405px, 92%);
+  aspect-ratio: 1;
+  border-color: rgba(125, 231, 255, 0.06);
+}
+
+.hero-drone-visuals > .static-drone-preview {
+  position: relative;
+  z-index: 1;
+}
+
+.hero-ctf-companion {
+  position: absolute;
+  z-index: 3;
+  right: 18px;
+  bottom: 15px;
+  display: grid;
+  min-width: 126px;
+  place-items: center;
+  padding: 9px 8px 8px;
+  border: 1px solid rgba(109, 255, 177, 0.24);
+  border-radius: 14px;
+  background: rgba(2, 13, 25, 0.82);
+  box-shadow: inset 0 0 16px rgba(109, 255, 177, 0.03);
+}
+
+.hero-ctf-companion > span {
+  color: #9dffca;
+  font-size: 8px;
+  font-weight: 1000;
+  letter-spacing: 0.75px;
+  white-space: nowrap;
+}
+
+.hero-ctf-companion small {
+  margin-top: -1px;
+  color: #92aabd;
+  font-size: 8px;
+  text-align: center;
+}
+
+.pack-modal {
+  border-color: rgba(0, 234, 255, 0.30);
+  background:
+    radial-gradient(circle at 80% 0%, rgba(0, 234, 255, 0.10), transparent 36%),
+    rgba(2, 10, 22, 0.96);
+}
+
+.pack-modal .modal-skin-card {
+  position: relative;
+  min-height: 282px;
+  border: 1px solid rgba(0, 234, 255, 0.18);
+  color: #effcff;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.pack-modal .modal-skin-card:hover:not(:disabled) {
+  border-color: rgba(125, 231, 255, 0.68);
+}
+
+.pack-modal .modal-skin-card:disabled {
+  cursor: default;
+  opacity: 0.78;
+}
+
+.pack-modal .modal-skin-card em {
+  display: inline-flex;
+  margin-top: 6px;
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #9dffca;
+  background: rgba(109, 255, 177, 0.08);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 1000;
+  letter-spacing: 0.7px;
+}
+
+.pack-modal .modal-skin-card.ctf-modal-skin-card {
+  border-color: rgba(109, 255, 177, 0.22);
+}
+
+.modal-ctf-skin-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+
+.ctf-pack-pill {
+  color: #9dffca;
+  border-color: rgba(109, 255, 177, 0.36);
+  background: rgba(109, 255, 177, 0.08);
+}
+
+.ctf-buy-button {
+  background: linear-gradient(135deg, #67ffb1, #00dff5) !important;
+}
+
+.buy-button.is-locked {
+  cursor: not-allowed;
+  opacity: 0.64;
+  filter: grayscale(0.18);
+}
+
+.dashboard-guest-mode .hangar-tabs button:nth-child(2),
+.dashboard-guest-mode .hangar-top-actions button:nth-child(2) {
+  opacity: 1;
+}
+
+@media (max-width: 1180px) {
+  .hero-drone-card {
+    grid-template-columns: 1fr !important;
+  }
+
+  .hero-drone-visuals {
+    min-height: 365px;
+  }
+
+  .static-drone-preview-hero {
+    --preview-size: min(370px, 70vw);
+  }
+}
+
+@media (max-width: 640px) {
+  .hero-drone-card {
+    padding: 18px !important;
+  }
+
+  .hero-drone-visuals {
+    min-height: 290px;
+  }
+
+  .static-drone-preview-hero {
+    --preview-size: min(285px, 72vw);
+  }
+
+  .hero-ctf-companion {
+    right: 10px;
+    bottom: 10px;
+    min-width: 106px;
+    padding: 6px;
+  }
+
+  .hero-ctf-companion .static-drone-preview {
+    --preview-size: 72px;
+  }
+
+  .modal-ctf-skin-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .pack-modal .modal-skin-card {
+    min-height: 230px;
+  }
+
+  .static-drone-preview-modal {
+    --preview-size: 175px;
+  }
+}
+
+/* ========================================================================
+   HANGAR DUAL LOADOUT — Arena Drone + CTF Attack Drone
+   Two equal, static showcase panels. This block intentionally sits last so
+   it overrides the old small floating CTF companion layout.
+   ======================================================================== */
+.hero-drone-card.hero-drone-card-dual {
+  grid-template-columns: minmax(310px, 0.92fr) minmax(620px, 1.32fr) !important;
+  align-items: stretch !important;
+  gap: 28px !important;
+}
+
+.hero-dual-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.hero-copy-loadout {
+  position: relative;
+}
+
+.hero-loadout-kicker {
+  display: inline-flex;
+  margin-bottom: 10px;
+  color: #78f7ff;
+  font-size: 10px;
+  font-weight: 1000;
+  letter-spacing: 1.45px;
+}
+
+.hero-loadout-kicker.is-ctf {
+  color: #9dffca;
+}
+
+.hero-loadout-title-row {
+  display: flex;
+  align-items: center;
+}
+
+.hero-dual-copy .pill {
+  margin-bottom: 0;
+}
+
+.hero-dual-copy h2 {
+  margin: 13px 0 11px !important;
+  font-size: clamp(31px, 2.7vw, 42px) !important;
+  line-height: 1.04;
+}
+
+.hero-copy-loadout-ctf h3 {
+  margin: 0 0 9px;
+  color: #f1fffb;
+  font-size: clamp(21px, 1.85vw, 29px);
+  line-height: 1.1;
+}
+
+.hero-dual-copy p {
+  max-width: 570px;
+  margin: 0;
+  color: #b9c9d9;
+  font-size: 15px;
+  line-height: 1.54;
+}
+
+.hero-copy-loadout-ctf p strong {
+  color: #9dffca;
+  font-size: 11px;
+  font-weight: 1000;
+  letter-spacing: 0.95px;
+}
+
+.hero-copy-separator {
+  width: 100%;
+  height: 1px;
+  margin: 23px 0;
+  background: linear-gradient(90deg, rgba(0, 234, 255, 0.36), rgba(109, 255, 177, 0.27), transparent);
+}
+
+.hero-dual-actions {
+  margin-top: 24px !important;
+}
+
+.hero-dual-visuals {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  min-height: 430px !important;
+  padding: 14px;
+  place-items: stretch !important;
+  overflow: visible !important;
+}
+
+.hero-dual-visuals::before,
+.hero-dual-visuals::after,
+.hero-dual-visuals > .static-drone-preview,
+.hero-dual-visuals .hero-ctf-companion {
+  display: none !important;
+}
+
+.hero-drone-showcase {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(125, 231, 255, 0.16);
+  border-radius: 17px;
+  background:
+    radial-gradient(circle at 50% 52%, rgba(0, 234, 255, 0.105), transparent 44%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.018), transparent 48%),
+    rgba(1, 8, 18, 0.70);
+}
+
+.hero-drone-showcase::before {
+  content: "";
+  position: absolute;
+  width: min(270px, 90%);
+  aspect-ratio: 1;
+  left: 50%;
+  top: 56%;
+  border: 1px solid rgba(125, 231, 255, 0.14);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.hero-ctf-showcase {
+  border-color: rgba(109, 255, 177, 0.24);
+  background:
+    radial-gradient(circle at 50% 52%, rgba(109, 255, 177, 0.10), transparent 44%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.018), transparent 48%),
+    rgba(1, 10, 19, 0.72);
+}
+
+.hero-ctf-showcase::before {
+  border-color: rgba(109, 255, 177, 0.16);
+}
+
+.hero-drone-showcase header {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  display: grid;
+  gap: 3px;
+  padding: 14px 14px 3px;
+  text-align: center;
+}
+
+.hero-drone-showcase header span {
+  color: #85f5ff;
+  font-size: 9px;
+  font-weight: 1000;
+  letter-spacing: 1.25px;
+}
+
+.hero-ctf-showcase header span {
+  color: #a8ffd0;
+}
+
+.hero-drone-showcase header strong {
+  overflow: hidden;
+  color: #edfaff;
+  font-size: 13px;
+  font-weight: 1000;
+  letter-spacing: 0.2px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hero-dual-visuals .static-drone-preview,
+.hero-dual-visuals .static-drone-preview.static-drone-preview-hero {
+  --preview-size: min(236px, 18vw) !important;
+  position: relative !important;
+  z-index: 1;
+  align-self: center;
+  margin: 0 auto !important;
+}
+
+@media (max-width: 1320px) {
+  .hero-drone-card.hero-drone-card-dual {
+    grid-template-columns: minmax(290px, 0.88fr) minmax(520px, 1.12fr) !important;
+    gap: 20px !important;
+  }
+
+  .hero-dual-visuals .static-drone-preview,
+  .hero-dual-visuals .static-drone-preview.static-drone-preview-hero {
+    --preview-size: min(220px, 18vw) !important;
+  }
+}
+
+@media (max-width: 1180px) {
+  .hero-drone-card.hero-drone-card-dual {
+    grid-template-columns: 1fr !important;
+  }
+
+  .hero-dual-visuals {
+    min-height: 370px !important;
+  }
+
+  .hero-dual-visuals .static-drone-preview,
+  .hero-dual-visuals .static-drone-preview.static-drone-preview-hero {
+    --preview-size: min(245px, 29vw) !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .hero-drone-card.hero-drone-card-dual {
+    gap: 17px !important;
+  }
+
+  .hero-dual-copy h2 {
+    font-size: 31px !important;
+  }
+
+  .hero-copy-loadout-ctf h3 {
+    font-size: 21px;
+  }
+
+  .hero-copy-separator {
+    margin: 18px 0;
+  }
+
+  .hero-dual-actions {
+    flex-wrap: wrap;
+    margin-top: 19px !important;
+  }
+
+  .hero-dual-visuals {
+    min-height: 268px !important;
+    gap: 8px;
+    padding: 8px;
+    border-radius: 14px;
+  }
+
+  .hero-drone-showcase {
+    border-radius: 13px;
+  }
+
+  .hero-drone-showcase header {
+    padding: 10px 7px 2px;
+  }
+
+  .hero-drone-showcase header span {
+    font-size: 7px;
+    letter-spacing: 0.72px;
+  }
+
+  .hero-drone-showcase header strong {
+    font-size: 10px;
+  }
+
+  .hero-dual-visuals .static-drone-preview,
+  .hero-dual-visuals .static-drone-preview.static-drone-preview-hero {
+    --preview-size: min(142px, 34vw) !important;
+  }
+}
+
+
+
+/* ==========================================================================
+   FINAL HANGAR LOADOUT — Arena + Attack + Tank + Defender
+   Shop only selects packs. The four active drones are displayed in Hangar.
+========================================================================== */
+.hero-drone-card.hangar-loadout-hero {
+  grid-template-columns: minmax(300px, 0.92fr) minmax(620px, 1.38fr) !important;
+  align-items: stretch !important;
+  gap: 26px !important;
+}
+
+.hangar-loadout-copy {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+}
+
+.hangar-loadout-copy h2 {
+  margin-bottom: 12px !important;
+}
+
+.hangar-ctf-summary {
+  display: grid;
+  gap: 6px;
+  margin-top: 24px;
+  padding: 16px 17px;
+  border: 1px solid rgba(109, 255, 177, 0.24);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(109, 255, 177, 0.10), transparent 42%),
+    rgba(3, 19, 25, 0.68);
+}
+
+.hangar-ctf-summary > span {
+  color: #9dffca;
+  font-size: 10px;
+  font-weight: 1000;
+  letter-spacing: 1.25px;
+}
+
+.hangar-ctf-summary > strong {
+  color: #f2fffa;
+  font-size: 19px;
+  line-height: 1.15;
+}
+
+.hangar-ctf-summary > small {
+  color: #a8bccc;
+  font-size: 12px;
+  line-height: 1.42;
+}
+
+.hangar-active-loadout-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px;
+  min-height: 458px;
+  padding: 13px;
+  overflow: hidden;
+  border: 1px solid rgba(125, 231, 255, 0.12);
+  border-radius: 19px;
+  background:
+    radial-gradient(circle at 50% 44%, rgba(0, 234, 255, 0.065), transparent 49%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.012), transparent 46%),
+    rgba(0, 0, 0, 0.15);
+}
+
+.hangar-loadout-drone-card {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-width: 0;
+  min-height: 0;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(125, 231, 255, 0.15);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 50% 55%, rgba(0, 234, 255, 0.10), transparent 42%),
+    rgba(1, 9, 20, 0.72);
+}
+
+.hangar-loadout-drone-card::before {
+  content: "";
+  position: absolute;
+  width: min(225px, 82%);
+  aspect-ratio: 1;
+  left: 50%;
+  top: 54%;
+  border: 1px solid rgba(125, 231, 255, 0.12);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.hangar-loadout-drone-card.ctf-card {
+  border-color: rgba(109, 255, 177, 0.23);
+  background:
+    radial-gradient(circle at 50% 55%, rgba(109, 255, 177, 0.10), transparent 42%),
+    rgba(1, 13, 21, 0.75);
+}
+
+.hangar-loadout-drone-card.role-tank {
+  border-color: rgba(255, 207, 80, 0.25);
+  background:
+    radial-gradient(circle at 50% 55%, rgba(255, 207, 80, 0.085), transparent 42%),
+    rgba(1, 12, 22, 0.75);
+}
+
+.hangar-loadout-drone-card.role-defender {
+  border-color: rgba(184, 137, 255, 0.25);
+  background:
+    radial-gradient(circle at 50% 55%, rgba(184, 137, 255, 0.09), transparent 42%),
+    rgba(1, 11, 23, 0.75);
+}
+
+.hangar-loadout-drone-card header {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  width: 100%;
+  gap: 3px;
+  padding: 13px 12px 0;
+  text-align: center;
+}
+
+.hangar-loadout-drone-card header span {
+  overflow: hidden;
+  color: #87f4ff;
+  font-size: 8px;
+  font-weight: 1000;
+  letter-spacing: 1.05px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hangar-loadout-drone-card.ctf-card header span {
+  color: #a6ffd0;
+}
+
+.hangar-loadout-drone-card.role-tank header span {
+  color: #ffe58c;
+}
+
+.hangar-loadout-drone-card.role-defender header span {
+  color: #d9adff;
+}
+
+.hangar-loadout-drone-card header strong {
+  overflow: hidden;
+  color: #effcff;
+  font-size: 12px;
+  font-weight: 1000;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hangar-loadout-drone-card .static-drone-preview,
+.hangar-loadout-drone-card .static-drone-preview.static-drone-preview-large {
+  --preview-size: min(160px, 12vw);
+  position: relative;
+  z-index: 1;
+  margin: 0 auto !important;
+}
+
+.hangar-loadout-drone-card small {
+  position: relative;
+  z-index: 2;
+  display: block;
+  min-height: 28px;
+  padding: 0 9px 10px;
+  color: #9fb4c4;
+  font-size: 9px;
+  line-height: 1.2;
+  text-align: center;
+}
+
+@media (max-width: 1320px) {
+  .hero-drone-card.hangar-loadout-hero {
+    grid-template-columns: minmax(280px, 0.86fr) minmax(520px, 1.14fr) !important;
+    gap: 20px !important;
+  }
+
+  .hangar-active-loadout-grid {
+    min-height: 420px;
+  }
+
+  .hangar-loadout-drone-card .static-drone-preview,
+  .hangar-loadout-drone-card .static-drone-preview.static-drone-preview-large {
+    --preview-size: min(138px, 12vw);
+  }
+}
+
+@media (max-width: 1180px) {
+  .hero-drone-card.hangar-loadout-hero {
+    grid-template-columns: 1fr !important;
+  }
+
+  .hangar-active-loadout-grid {
+    min-height: 470px;
+  }
+
+  .hangar-loadout-drone-card .static-drone-preview,
+  .hangar-loadout-drone-card .static-drone-preview.static-drone-preview-large {
+    --preview-size: min(175px, 20vw);
+  }
+}
+
+@media (max-width: 640px) {
+  .hero-drone-card.hangar-loadout-hero {
+    padding: 18px !important;
+    gap: 18px !important;
+  }
+
+  .hangar-ctf-summary {
+    margin-top: 18px;
+    padding: 14px;
+  }
+
+  .hangar-ctf-summary > strong {
+    font-size: 17px;
+  }
+
+  .hangar-active-loadout-grid {
+    gap: 8px;
+    min-height: 340px;
+    padding: 8px;
+    border-radius: 15px;
+  }
+
+  .hangar-loadout-drone-card {
+    border-radius: 12px;
+  }
+
+  .hangar-loadout-drone-card header {
+    padding: 9px 7px 0;
+  }
+
+  .hangar-loadout-drone-card header span {
+    font-size: 6.5px;
+    letter-spacing: 0.58px;
+  }
+
+  .hangar-loadout-drone-card header strong {
+    font-size: 9px;
+  }
+
+  .hangar-loadout-drone-card .static-drone-preview,
+  .hangar-loadout-drone-card .static-drone-preview.static-drone-preview-large {
+    --preview-size: min(116px, 26vw);
+  }
+
+  .hangar-loadout-drone-card small {
+    min-height: 23px;
+    padding: 0 6px 7px;
+    font-size: 7px;
+  }
+}

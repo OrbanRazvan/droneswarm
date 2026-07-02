@@ -6,6 +6,7 @@ export declare class AuthService {
     constructor(prisma: PrismaService, jwtService: JwtService);
     private generateCode;
     private normalizeDrone;
+    private normalizeCtfPackId;
     private safeUser;
     private sendActivationEmail;
     register(data: {
@@ -38,6 +39,7 @@ export declare class AuthService {
             email: any;
             selectedDrone: any;
             selectedSkin: any;
+            selectedCtfPackId: any;
             avatar: any;
         };
     }>;
@@ -57,6 +59,7 @@ export declare class AuthService {
             email: any;
             selectedDrone: any;
             selectedSkin: any;
+            selectedCtfPackId: any;
             avatar: any;
         };
     }>;
@@ -69,6 +72,21 @@ export declare class AuthService {
             email: any;
             selectedDrone: any;
             selectedSkin: any;
+            selectedCtfPackId: any;
+            avatar: any;
+        };
+    }>;
+    selectCtfPack(userId: number, ctfPackId: string): Promise<{
+        selectedCtfPackId: string;
+        user: {
+            id: any;
+            firstName: any;
+            lastName: any;
+            username: any;
+            email: any;
+            selectedDrone: any;
+            selectedSkin: any;
+            selectedCtfPackId: any;
             avatar: any;
         };
     }>;
@@ -83,6 +101,7 @@ export declare class AuthService {
             email: any;
             selectedDrone: any;
             selectedSkin: any;
+            selectedCtfPackId: any;
             avatar: any;
         };
     }>;

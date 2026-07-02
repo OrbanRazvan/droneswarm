@@ -32,6 +32,9 @@ let AuthController = class AuthController {
     selectDrone(body) {
         return this.authService.selectDrone(body.userId, body.drone);
     }
+    selectCtfPack(body) {
+        return this.authService.selectCtfPack(body.userId, body.ctfPackId);
+    }
     setUsername(body) {
         return this.authService.setUsername(body.userId, body.username);
     }
@@ -75,6 +78,13 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", void 0)
 ], AuthController.prototype, "selectDrone", null);
+__decorate([
+    (0, common_1.Post)('select-ctf-pack'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", void 0)
+], AuthController.prototype, "selectCtfPack", null);
 __decorate([
     (0, common_1.Post)('set-username'),
     __param(0, (0, common_1.Body)()),

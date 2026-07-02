@@ -42,6 +42,15 @@ const ALLOWED_DRONES = [
   'dark-emerald',
 ];
 
+const DEFAULT_CTF_PACK_ID = 'ctf-pack-starter-command';
+const ALLOWED_CTF_PACK_IDS = [
+  'ctf-pack-starter-command',
+  'ctf-pack-galactic-command',
+  'ctf-pack-medieval-forge',
+  'ctf-pack-military-prototype',
+  'ctf-pack-dark-galactic',
+];
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -63,8 +72,19 @@ export class AuthService {
     return clean || 'basic';
   }
 
+  private normalizeCtfPackId(ctfPackId: string) {
+    const clean = String(ctfPackId || '')
+      .trim()
+      .toLowerCase()
+      .replace(/_/g, '-')
+      .replace(/\s+/g, '-');
+
+    return clean || DEFAULT_CTF_PACK_ID;
+  }
+
   private safeUser(user: any) {
     const selectedDrone = user.selectedDrone || 'basic';
+    const selectedCtfPackId = user.selectedCtfPackId || DEFAULT_CTF_PACK_ID;
 
     return {
       id: user.id,
@@ -74,6 +94,7 @@ export class AuthService {
       email: user.email,
       selectedDrone,
       selectedSkin: selectedDrone === 'basic' ? 'cyan' : selectedDrone,
+      selectedCtfPackId,
       avatar: user.avatar || null,
     };
   }
@@ -143,6 +164,7 @@ export class AuthService {
         activationCode: code,
         isVerified: false,
         selectedDrone: 'basic',
+        selectedCtfPackId: DEFAULT_CTF_PACK_ID,
       },
     });
 
@@ -263,6 +285,7 @@ export class AuthService {
           isVerified: true,
           activationCode: null,
           selectedDrone: 'basic',
+          selectedCtfPackId: DEFAULT_CTF_PACK_ID,
           avatar: profile.avatar || null,
           username: null,
         },
@@ -332,6 +355,30 @@ export class AuthService {
     });
 
     return {
+      user: this.safeUser(user),
+    };
+  }
+
+  async selectCtfPack(userId: number, ctfPackId: string) {
+    if (!userId) {
+      throw new BadRequestException('UserId lipseste.');
+    }
+
+    const cleanPackId = this.normalizeCtfPackId(ctfPackId);
+
+    if (!ALLOWED_CTF_PACK_IDS.includes(cleanPackId)) {
+      throw new BadRequestException('Pachetul Capture The Flag este invalid.');
+    }
+
+    const user = await this.prisma.gameUser.update({
+      where: { id: Number(userId) },
+      data: {
+        selectedCtfPackId: cleanPackId,
+      },
+    });
+
+    return {
+      selectedCtfPackId: user.selectedCtfPackId,
       user: this.safeUser(user),
     };
   }

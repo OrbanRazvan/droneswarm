@@ -16,8 +16,9 @@ model GameUser {
   password       String
   isVerified     Boolean  @default(false)
   activationCode String?
-  selectedDrone  String   @default("basic")
-  avatar         String?
+  selectedDrone       String   @default("basic")
+  selectedCtfPackId    String   @default("ctf-pack-starter-command")
+  avatar               String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 }

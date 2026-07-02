@@ -4,7 +4,7 @@ import NormalPvpArena from "../NormalPvpArena/NormalPvpArena";
 import BattleRoyale from "../BattleRoyaleMode/BattleRoyaleMode";
 import ZonePvpArena from "../ZonePvpArena/ZonePvpArena";
 import CapturetheFlag from "../CapturetheFlag/CapturetheFlag";
-import PixiArenaRenderer from "../PixiArenaRenderer/PixiArenaRenderer";
+import Shop from "../Shop/Shop";
 import "./Dashboard.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
@@ -95,11 +95,11 @@ const ALL_SKINS = Object.keys(SKIN_THEMES).map((id) => ({
   rarity: id === "cyan" ? "Starter" : "Premium",
   price: id === "cyan" ? 0 : 3,
   owned: true,
-  tagline: id === "cyan" ? "Drona de start." : "Skin complet pentru arena.",
+  tagline: id === "cyan" ? "Standard issue arena chassis." : "Premium arena chassis configuration.",
   description:
     id === "cyan"
-      ? "Drona standard pentru arena. Are echilibru bun intre control, vizibilitate, atac si aparare."
-      : "Skin complet sincronizat cu jocul real: corp, elice, aura, mini drone si attack drone folosesc aceeasi tema de culoare.",
+      ? "A balanced all-purpose chassis engineered for precise control, clear battlefield visibility, reliable offense, and durable defense."
+      : "A fully synchronized arena skin package with a matching hull, rotor assembly, shield aura, mini-drone swarm, and attack-drone finish.",
   parts: {
     body: "Glossy Aero Shell",
     rotors: "Neon Rotor Set",
@@ -135,8 +135,8 @@ const PREMIUM_PACKS = (() => {
       price: "€3.00",
       subtitle:
         skins.length === 4
-          ? "4 skinuri complete pentru corp, elice, aura si mini drone."
-          : `${skins.length} skinuri ramase din colectia actuala.`,
+          ? "Four complete cosmetic configurations for the hull, rotor array, shield aura, and mini-drone swarm."
+          : `${skins.length} remaining skins from the current collection.`,
       skins,
     });
   }
@@ -170,25 +170,70 @@ function getInitialSelectedDrone(user) {
   return userValue;
 }
 
+const DEFAULT_CTF_PACK_ID = "ctf-pack-starter-command";
+
+function getCtfPackStorageKey(user) {
+  return `drone-swarm-ctf-pack-${user?.id || user?.email || user?.username || "player"}`;
+}
+
+function persistUserSnapshot(user, updates = {}) {
+  const nextUser = {
+    ...(user || {}),
+    ...updates,
+  };
+
+  try {
+    const savedUser = JSON.parse(localStorage.getItem("user") || "null");
+    const mergedUser = {
+      ...(savedUser || {}),
+      ...nextUser,
+    };
+
+    localStorage.setItem("user", JSON.stringify(mergedUser));
+    return mergedUser;
+  } catch {
+    return nextUser;
+  }
+}
+
 function persistSelectedDrone(user, skinId) {
   const selected = normalizeSkin(skinId);
 
   try {
     localStorage.setItem(getStorageKey(user), selected);
-
-    const savedUser = JSON.parse(localStorage.getItem("user") || "null");
-    const nextUser = {
-      ...(savedUser || user || {}),
-      selectedSkin: selected,
-      selectedDrone: selected,
-      selectedDroneSkin: selected,
-      skin: selected,
-    };
-
-    localStorage.setItem("user", JSON.stringify(nextUser));
   } catch {
-    // Nu blocam jocul daca browserul refuza localStorage.
+    // Browser storage is optional.
   }
+
+  return persistUserSnapshot(user, {
+    selectedSkin: selected,
+    selectedDrone: selected,
+    selectedDroneSkin: selected,
+    skin: selected,
+  });
+}
+
+function getInitialSelectedCtfPack(user) {
+  const accountValue = String(user?.selectedCtfPackId || "").trim();
+  if (accountValue) return accountValue;
+
+  try {
+    return localStorage.getItem(getCtfPackStorageKey(user)) || DEFAULT_CTF_PACK_ID;
+  } catch {
+    return DEFAULT_CTF_PACK_ID;
+  }
+}
+
+function persistSelectedCtfPack(user, packId) {
+  const selected = String(packId || DEFAULT_CTF_PACK_ID).trim() || DEFAULT_CTF_PACK_ID;
+
+  try {
+    localStorage.setItem(getCtfPackStorageKey(user), selected);
+  } catch {
+    // Browser storage is optional.
+  }
+
+  return persistUserSnapshot(user, { selectedCtfPackId: selected });
 }
 
 function getDisplayName(user) {
@@ -196,155 +241,343 @@ function getDisplayName(user) {
 }
 
 
-function PackPixiPreview({ skins = [] }) {
-  const viewWidth = 1600;
-  const viewHeight = 430;
-  const worldCenterX = 1000;
-  const worldCenterY = 1000;
 
-  const previewWorldScale = 1;
-  const previewSizeMultiplier = 0.58;
+/* -------------------------------------------------------------------------
+   STATIC HANGAR / SHOP PREVIEWS
+   These SVG previews reuse the same chassis coordinates, rotor positions and
+   CTF role silhouettes as PixiArenaRenderer, but are ordinary static DOM
+   vectors: no WebGL canvas, no ticker, no spinning animation.
+------------------------------------------------------------------------- */
 
-  const cameraX = viewWidth / 2 - worldCenterX * previewWorldScale;
-  const cameraY = viewHeight / 2 - worldCenterY * previewWorldScale;
+const CTF_PREVIEW_PACKS = [
+  {
+    id: "ctf-pack-starter-command",
+    kind: "ctf",
+    starter: true,
+    family: "Starter Command",
+    name: "Starter Command Pack",
+    price: "FREE",
+    subtitle: "The default CTF deployment set: a fast Cadet Scout, reinforced Cadet Bastion, and perimeter-ready Cadet Sentinel.",
+    skins: [
+      { id: "ctf-blue-attack-alpha-basic-scout", name: "Cadet Scout", role: "ATTACK", family: "starter", colors: ["#2f7fff", "#eaf7ff", "#061322", "#ffd166"] },
+      { id: "ctf-blue-tank-basic-bastion", name: "Cadet Bastion", role: "TANK", family: "starter", colors: ["#2f7fff", "#eaf7ff", "#061322", "#ffd166"] },
+      { id: "ctf-blue-defense-basic-sentinel", name: "Cadet Sentinel", role: "DEFENDER", family: "starter", colors: ["#2f7fff", "#eaf7ff", "#061322", "#ffd166"] },
+    ],
+  },
+  {
+    id: "ctf-pack-galactic-command",
+    kind: "ctf",
+    family: "Galactic Command",
+    name: "Galactic Command Pack",
+    price: "€3.00",
+    subtitle: "A three-unit command formation featuring an ion interceptor, armored flag carrier, and perimeter defense platform.",
+    skins: [
+      { id: "ctf-blue-attack-alpha-raptor", name: "Ion Raptor", role: "ATTACK", family: "galactic", colors: ["#00ddff", "#9dfff8", "#00192d", "#f2ffff"] },
+      { id: "ctf-blue-tank-bastion", name: "Bastion Core", role: "TANK", family: "galactic", colors: ["#2878ff", "#9ec6ff", "#07173d", "#eaf5ff"] },
+      { id: "ctf-blue-defense-aegis", name: "Aegis Grid", role: "DEFENDER", family: "galactic", colors: ["#00c4af", "#a8fff2", "#002b2b", "#f0fffc"] },
+    ],
+  },
+  {
+    id: "ctf-pack-medieval-forge",
+    kind: "ctf",
+    family: "Medieval Forge",
+    name: "Medieval Forge Pack",
+    price: "€3.00",
+    subtitle: "An arcane-forge trio built around rune plating, reinforced siege armor, and a warded defense core.",
+    skins: [
+      { id: "ctf-blue-attack-alpha-viper", name: "Rune Viper", role: "ATTACK", family: "medieval", colors: ["#31ffc8", "#b7ffea", "#002d27", "#f3fffa"] },
+      { id: "ctf-blue-tank-juggernaut", name: "Juggernaut Rune", role: "TANK", family: "medieval", colors: ["#00aeef", "#91e5ff", "#002c47", "#f1fdff"] },
+      { id: "ctf-blue-defense-warden", name: "Warden Crest", role: "DEFENDER", family: "medieval", colors: ["#3bb6ff", "#c7ecff", "#08264a", "#f8fdff"] },
+    ],
+  },
+  {
+    id: "ctf-pack-military-prototype",
+    kind: "ctf",
+    family: "Military Prototype",
+    name: "Military Prototype Pack",
+    price: "€3.00",
+    subtitle: "A tactical three-drone set with angular armor, active sensor arrays, and hardened objective control.",
+    skins: [
+      { id: "ctf-blue-attack-alpha-talon", name: "Talon Strike", role: "ATTACK", family: "military", colors: ["#16a7ff", "#8de2ff", "#03204f", "#f0fbff"] },
+      { id: "ctf-blue-tank-atlas", name: "Atlas Plate", role: "TANK", family: "military", colors: ["#147acb", "#a4e2ff", "#06233b", "#f5fcff"] },
+      { id: "ctf-blue-defense-bulwark", name: "Bulwark Node", role: "DEFENDER", family: "military", colors: ["#0bc5c1", "#b0fffa", "#003738", "#f1ffff"] },
+    ],
+  },
+  {
+    id: "ctf-pack-dark-galactic",
+    kind: "ctf",
+    family: "Dark Galactic",
+    name: "Dark Galactic Pack",
+    price: "€3.00",
+    subtitle: "A dark-galactic strike formation with void-reactor hulls, stealth geometry, and cold-ion systems.",
+    skins: [
+      { id: "ctf-blue-attack-alpha-dark-voidfang", name: "Voidfang", role: "ATTACK", family: "dark-galactic", colors: ["#203f8f", "#9cbef5", "#020511", "#56caf1"] },
+      { id: "ctf-blue-tank-dark-voidfang", name: "Voidfang Bastion", role: "TANK", family: "dark-galactic", colors: ["#0f3c68", "#9ad5f5", "#01050c", "#47cbf1"] },
+      { id: "ctf-blue-defense-dark-voidfang", name: "Voidfang Aegis", role: "DEFENDER", family: "dark-galactic", colors: ["#1a6367", "#a2f0f5", "#02090c", "#54f1d2"] },
+    ],
+  },
+];
 
-  const slots = [
-    { x: worldCenterX - 570, y: worldCenterY, mouseX: worldCenterX - 490, mouseY: worldCenterY - 118 },
-    { x: worldCenterX - 190, y: worldCenterY, mouseX: worldCenterX - 110, mouseY: worldCenterY - 118 },
-    { x: worldCenterX + 190, y: worldCenterY, mouseX: worldCenterX + 270, mouseY: worldCenterY - 118 },
-    { x: worldCenterX + 570, y: worldCenterY, mouseX: worldCenterX + 650, mouseY: worldCenterY - 118 },
-  ];
+function getPreviewColors(skin) {
+  if (Array.isArray(skin?.colors) && skin.colors.length >= 4) {
+    return skin.colors;
+  }
 
-  const previewUnits = skins.slice(0, 4).map((skin, index) => ({
-    id: `pack-preview-${skin.id}-${index}`,
-    username: skin.name,
-    x: slots[index]?.x || worldCenterX,
-    y: slots[index]?.y || worldCenterY,
-    mouseX: slots[index]?.mouseX || worldCenterX + 120,
-    mouseY: slots[index]?.mouseY || worldCenterY - 120,
-    moveX: 0,
-    moveY: 0,
-    skin: normalizeSkin(skin.id),
-    hp: 100,
-    energy: 100,
-    alive: true,
-    drones: 1,
-    attacking: false,
-    isBot: false,
-    previewSizeMultiplier,
-  }));
+  const current = typeof skin === "string" ? skin : skin?.id;
+  const colors = getColors(current || "cyan");
+  return [colors.primary, colors.secondary, colors.dark, colors.highlight];
+}
 
-  const mainUnit = previewUnits[0] || {
-    id: "pack-preview-empty",
-    username: "Preview",
-    x: worldCenterX,
-    y: worldCenterY,
-    mouseX: worldCenterX + 120,
-    mouseY: worldCenterY - 120,
-    moveX: 0,
-    moveY: 0,
-    skin: "cyan",
-    hp: 100,
-    energy: 100,
-    alive: true,
-    drones: 1,
-    attacking: false,
-    isBot: false,
-    previewSizeMultiplier,
-  };
+function getCtfRoleFromSkin(skin) {
+  if (skin?.role) return String(skin.role).toUpperCase();
+  const id = String(skin?.id || skin || "").toLowerCase();
+
+  if (id.includes("tank")) return "TANK";
+  if (id.includes("defense")) return "DEFENDER";
+  return id.startsWith("ctf-") ? "ATTACK" : "";
+}
+
+function getCtfFamilyFromSkin(skin) {
+  if (skin?.family) return String(skin.family).toLowerCase();
+  const id = String(skin?.id || skin || "").toLowerCase();
+  if (id.includes("basic-")) return "starter";
+  if (id.includes("dark-")) return "dark-galactic";
+  if (/(viper|valkyrie|scythe|helix|juggernaut|citadel|warden|oracle)/.test(id)) return "medieval";
+  if (/(talon|eclipse|atlas|bulwark)/.test(id)) return "military";
+  return "galactic";
+}
+
+function StaticRotor({ x, y, primary, secondary, dark, highlight, compact = false }) {
+  const r = compact ? 15 : 23;
+  const core = compact ? 3.7 : 5.5;
+  const blade = compact ? 9 : 14;
 
   return (
-    <div className="dashboard-pack-pixi-preview">
-      <div className="dashboard-pack-pixi-preview-inner">
-        <PixiArenaRenderer
-          player={mainUnit}
-          players={previewUnits.slice(1)}
-          bots={[]}
-          simpleBots={[]}
-          orbs={[]}
-          energyCells={[]}
-          cores={[]}
-          projectiles={[]}
-          simpleProjectiles={[]}
-          cameraX={cameraX}
-          cameraY={cameraY}
-          scale={previewWorldScale}
-          viewportWidth={viewWidth}
-          viewportHeight={viewHeight}
-          coreTypes={[]}
-          otherPlayerQuality={2}
-          staticPreview={true}
-        />
-      </div>
+    <g>
+      <circle cx={x} cy={y} r={r} fill={dark} stroke={secondary} strokeWidth={compact ? 1.8 : 2.8} />
+      <circle cx={x} cy={y} r={r - (compact ? 3 : 5)} fill="#020713" stroke={primary} strokeWidth={compact ? 1 : 1.4} opacity="0.92" />
+      <path d={`M ${x - blade} ${y - blade * 0.34} L ${x + blade} ${y + blade * 0.34}`} stroke={secondary} strokeWidth={compact ? 2.8 : 4.5} opacity="0.55" strokeLinecap="round" />
+      <path d={`M ${x - blade * 0.34} ${y + blade} L ${x + blade * 0.34} ${y - blade}`} stroke={primary} strokeWidth={compact ? 2.8 : 4.5} opacity="0.46" strokeLinecap="round" />
+      <circle cx={x} cy={y} r={core + 2} fill={dark} />
+      <circle cx={x} cy={y} r={core} fill={primary} />
+      <circle cx={x - core * 0.32} cy={y - core * 0.38} r={Math.max(1.1, core * 0.34)} fill={highlight} />
+    </g>
+  );
+}
+
+function StaticCtfSignature({ role, family, primary, secondary, dark, highlight }) {
+  if (!role) return null;
+
+  if (family === "starter") {
+    // Starter Command uses one disciplined academy palette per team: enamel
+    // blue/red, silver optics and gold command markings. Its class geometry is
+    // intentionally separate from the paid collections.
+    if (role === "ATTACK") {
+      return (
+        <g>
+          <path d="M 0 -70 L 14 -39 L 38 -16 L 27 5 L 17 42 L 0 59 L -17 42 L -27 5 L -38 -16 L -14 -39 Z" fill={dark} stroke={secondary} strokeWidth="2.35" />
+          <path d="M 0 -61 L 9 -34 L 29 -14 L 18 5 L 9 33 L 0 47 L -9 33 L -18 5 L -29 -14 L -9 -34 Z" fill={primary} />
+          <path d="M -57 -9 L -25 -9 L -17 8 L -54 29 Z" fill={dark} stroke={secondary} strokeWidth="1.8" />
+          <path d="M 57 -9 L 25 -9 L 17 8 L 54 29 Z" fill={dark} stroke={secondary} strokeWidth="1.8" />
+          <path d="M -44 -4 L -27 -4 L -22 6 L -45 19 Z" fill={highlight} opacity="0.95" />
+          <path d="M 44 -4 L 27 -4 L 22 6 L 45 19 Z" fill={highlight} opacity="0.95" />
+          <path d="M 0 -53 L 7 -24 L 5 2 L 0 15 L -5 2 L -7 -24 Z" fill={secondary} />
+        </g>
+      );
+    }
+    if (role === "TANK") {
+      return (
+        <g>
+          <rect x="-54" y="-45" width="108" height="90" rx="22" fill={dark} stroke={secondary} strokeWidth="2.8" />
+          <path d="M -43 -37 L 43 -37 L 49 -14 L 38 35 L 19 55 L -19 55 L -38 35 L -49 -14 Z" fill={primary} />
+          <rect x="-31" y="-29" width="62" height="20" rx="7" fill={dark} stroke={highlight} strokeWidth="1.8" />
+          {[-26, -8, 8, 26].map((x) => <rect key={x} x={x - 5} y="-23" width="10" height="7" rx="2" fill={highlight} />)}
+          <rect x="-59" y="-11" width="13" height="44" rx="5" fill={dark} stroke={highlight} strokeWidth="1.6" />
+          <rect x="46" y="-11" width="13" height="44" rx="5" fill={dark} stroke={highlight} strokeWidth="1.6" />
+        </g>
+      );
+    }
+    return (
+      <g>
+        <path d="M 0 -68 L 38 -45 L 59 -7 L 49 35 L 20 64 L -20 64 L -49 35 L -59 -7 L -38 -45 Z" fill={dark} stroke={secondary} strokeWidth="2.7" />
+        <path d="M 0 -57 L 30 -38 L 46 -5 L 37 26 L 15 52 L -15 52 L -37 26 L -46 -5 L -30 -38 Z" fill={primary} />
+        <path d="M 0 -42 L 17 -21 L 25 0 L 15 24 L 0 40 L -15 24 L -25 0 L -17 -21 Z" fill={dark} stroke={highlight} strokeWidth="2.1" />
+        <rect x="-64" y="-22" width="14" height="52" rx="5" fill={dark} stroke={highlight} strokeWidth="1.8" />
+        <rect x="50" y="-22" width="14" height="52" rx="5" fill={dark} stroke={highlight} strokeWidth="1.8" />
+        <path d="M -44 40 L 0 59 L 44 40" fill="none" stroke={highlight} strokeWidth="3.6" strokeLinecap="round" />
+      </g>
+    );
+  }
+
+  if (family === "dark-galactic") {    return (
+      <g>
+        <path d="M -78 -26 L -34 -31 L -18 -8 L -67 16 L -86 4 Z" fill={dark} stroke={secondary} strokeWidth="2.1" opacity="0.96" />
+        <path d="M 78 -26 L 34 -31 L 18 -8 L 67 16 L 86 4 Z" fill={dark} stroke={secondary} strokeWidth="2.1" opacity="0.96" />
+        <path d="M -70 -18 L -38 -20 L -28 -4 L -62 9 Z" fill={primary} opacity="0.62" />
+        <path d="M 70 -18 L 38 -20 L 28 -4 L 62 9 Z" fill={primary} opacity="0.62" />
+        <path d="M 0 -57 L 16 -14 L 10 31 L 0 46 L -10 31 L -16 -14 Z" fill={dark} stroke={secondary} strokeWidth="2.4" />
+        <path d="M 0 -39 L 8 -12 L 6 18 L 0 27 L -6 18 L -8 -12 Z" fill={highlight} opacity="0.96" />
+      </g>
+    );
+  }
+
+  if (role === "ATTACK") {
+    if (family === "medieval") {
+      return (
+        <g>
+          <path d="M 0 -70 L 13 -44 L 27 -31 L 13 -22 L 0 -34 L -13 -22 L -27 -31 L -13 -44 Z" fill={dark} stroke={secondary} strokeWidth="2.2" />
+          <path d="M -66 6 L -32 5 L -22 22 L -53 42 Z" fill={primary} stroke={highlight} strokeWidth="1.2" opacity="0.8" />
+          <path d="M 66 6 L 32 5 L 22 22 L 53 42 Z" fill={primary} stroke={highlight} strokeWidth="1.2" opacity="0.8" />
+        </g>
+      );
+    }
+    if (family === "military") {
+      return (
+        <g>
+          <path d="M -66 -20 L -34 -26 L -23 -3 L -58 18 Z" fill={dark} stroke={secondary} strokeWidth="1.8" />
+          <path d="M 66 -20 L 34 -26 L 23 -3 L 58 18 Z" fill={dark} stroke={secondary} strokeWidth="1.8" />
+          <path d="M -59 -16 L -37 -20 L -31 -5 L -53 10 Z" fill={primary} opacity="0.8" />
+          <path d="M 59 -16 L 37 -20 L 31 -5 L 53 10 Z" fill={primary} opacity="0.8" />
+        </g>
+      );
+    }
+    return (
+      <g>
+        <path d="M -66 -9 L -26 -20 L -15 -4 L -54 30 Z" fill={dark} stroke={secondary} strokeWidth="1.8" />
+        <path d="M 66 -9 L 26 -20 L 15 -4 L 54 30 Z" fill={dark} stroke={secondary} strokeWidth="1.8" />
+        <path d="M -58 -4 L -27 -10 L -21 1 L -50 22 Z" fill={primary} opacity="0.75" />
+        <path d="M 58 -4 L 27 -10 L 21 1 L 50 22 Z" fill={primary} opacity="0.75" />
+        <path d="M 0 -41 L 10 -7 L 0 19 L -10 -7 Z" fill={highlight} opacity="0.94" />
+      </g>
+    );
+  }
+
+  if (role === "TANK") {
+    if (family === "medieval") {
+      return (
+        <g>
+          <path d="M -49 -31 L -27 -49 L 27 -49 L 49 -31 L 45 38 L 22 54 L -22 54 L -45 38 Z" fill={dark} stroke={secondary} strokeWidth="4" />
+          <rect x="-24" y="-16" width="48" height="46" rx="13" fill={dark} opacity="0.72" />
+          <circle cx="0" cy="6" r="13" fill={highlight} opacity="0.9" />
+        </g>
+      );
+    }
+    if (family === "military") {
+      return (
+        <g>
+          <circle cx="0" cy="0" r="39" fill={dark} opacity="0.66" stroke={secondary} strokeWidth="4" />
+          <circle cx="0" cy="0" r="28" fill="none" stroke={highlight} strokeWidth="2.5" opacity="0.76" />
+          <path d="M -45 -28 L -60 16" stroke={primary} strokeWidth="9" opacity="0.72" strokeLinecap="round" />
+          <path d="M 45 -28 L 60 16" stroke={primary} strokeWidth="9" opacity="0.72" strokeLinecap="round" />
+        </g>
+      );
+    }
+    return (
+      <g>
+        <rect x="-55" y="-6" width="14" height="44" rx="6" fill={dark} stroke={secondary} strokeWidth="2" />
+        <rect x="41" y="-6" width="14" height="44" rx="6" fill={dark} stroke={secondary} strokeWidth="2" />
+        <path d="M -42 -25 L 42 -25 L 50 13 L 31 46 L -31 46 L -50 13 Z" fill={dark} stroke={highlight} strokeWidth="2.2" />
+        <path d="M -27 -32 L 27 -32 L 33 -17 L -33 -17 Z" fill={primary} opacity="0.85" />
+      </g>
+    );
+  }
+
+  if (family === "medieval") {
+    return (
+      <g>
+        <rect x="-50" y="-27" width="15" height="54" rx="6" fill={dark} stroke={secondary} strokeWidth="2" />
+        <rect x="35" y="-27" width="15" height="54" rx="6" fill={dark} stroke={secondary} strokeWidth="2" />
+        <circle cx="0" cy="0" r="35" fill="none" stroke={highlight} strokeWidth="3.3" opacity="0.8" />
+      </g>
+    );
+  }
+  if (family === "military") {
+    return (
+      <g>
+        <rect x="-57" y="-18" width="16" height="48" rx="7" fill={primary} stroke={highlight} strokeWidth="2" />
+        <rect x="41" y="-18" width="16" height="48" rx="7" fill={primary} stroke={highlight} strokeWidth="2" />
+        <path d="M -45 -39 L 0 -53 L 45 -39" fill="none" stroke={secondary} strokeWidth="5" strokeLinecap="round" />
+      </g>
+    );
+  }
+  return (
+    <g>
+      <circle cx="0" cy="0" r="55" fill="none" stroke={secondary} strokeWidth="4.2" opacity="0.85" />
+      <path d="M -46 -16 L -61 5 L -43 29" fill="none" stroke={highlight} strokeWidth="4" opacity="0.78" />
+      <path d="M 46 -16 L 61 5 L 43 29" fill="none" stroke={highlight} strokeWidth="4" opacity="0.78" />
+    </g>
+  );
+}
+
+function StaticDronePreview({ skin = BASIC_DRONE, drone, size = "large", compact = false, label = "" }) {
+  const item = drone || skin || BASIC_DRONE;
+  const [primary, secondary, dark, highlight] = getPreviewColors(item);
+  const role = getCtfRoleFromSkin(item);
+  const family = getCtfFamilyFromSkin(item);
+  const className = `static-drone-preview static-drone-preview-${size} ${compact ? "is-compact" : ""} ${role ? "is-ctf" : ""}`;
+  const title = item?.name || SKIN_NAMES[item?.id] || "Drone";
+
+  const compactRotor = size === "tiny";
+  return (
+    <div className={className} aria-label={`${title} static preview`} title={title}>
+      <svg viewBox="-130 -130 260 260" role="img" aria-hidden="true">
+        <circle cx="0" cy="0" r="105" fill="none" stroke={primary} strokeOpacity="0.22" strokeWidth="2" />
+        <circle cx="0" cy="0" r="85" fill={dark} fillOpacity="0.20" stroke={secondary} strokeOpacity="0.23" strokeWidth="1.2" />
+        <g opacity="0.98">
+          {[
+            [-59, -45],
+            [59, -45],
+            [-59, 45],
+            [59, 45],
+          ].map(([x, y]) => {
+            const fromX = x < 0 ? -21 : 21;
+            const fromY = y < 0 ? -17 : 17;
+            return (
+              <g key={`${x}-${y}`}>
+                <line x1={fromX} y1={fromY} x2={x} y2={y} stroke={dark} strokeWidth="12" strokeLinecap="round" />
+                <line x1={fromX} y1={fromY} x2={x} y2={y} stroke={primary} strokeWidth="6.4" strokeLinecap="round" opacity="0.82" />
+                <line x1={fromX} y1={fromY} x2={x} y2={y} stroke={secondary} strokeWidth="1.35" strokeLinecap="round" opacity="0.85" />
+              </g>
+            );
+          })}
+          <StaticCtfSignature role={role} family={family} primary={primary} secondary={secondary} dark={dark} highlight={highlight} />
+          {[
+            [-59, -45],
+            [59, -45],
+            [-59, 45],
+            [59, 45],
+          ].map(([x, y]) => (
+            <StaticRotor
+              key={`rotor-${x}-${y}`}
+              x={x}
+              y={y}
+              primary={primary}
+              secondary={secondary}
+              dark={dark}
+              highlight={highlight}
+              compact={compactRotor}
+            />
+          ))}
+          <path d="M 0 -52 L 23 -39 L 34 -8 L 30 24 L 17 47 L 0 56 L -17 47 L -30 24 L -34 -8 L -23 -39 Z" fill={dark} />
+          <path d="M 0 -47 L 17 -34 L 25 -7 L 22 21 L 12 40 L 0 47 L -12 40 L -22 21 L -25 -7 L -17 -34 Z" fill={primary} />
+          <path d="M 0 -41 L 7 -26 L 9 12 L 4 34 L 0 39 L -4 34 L -9 12 L -7 -26 Z" fill={dark} fillOpacity="0.56" />
+          <path d="M 0 -42 L 12 -29 L 11 -10 L 0 -2 L -11 -10 L -12 -29 Z" fill={secondary} fillOpacity="0.62" />
+          <path d="M 0 -38 L 6 -29 L 5 -17 L 0 -13 L -5 -17 L -6 -29 Z" fill={highlight} fillOpacity="0.78" />
+          <rect x="-24" y="8" width="8" height="18" rx="3" fill={dark} />
+          <rect x="16" y="8" width="8" height="18" rx="3" fill={dark} />
+          <rect x="-22" y="10" width="4" height="12" rx="2" fill={secondary} fillOpacity="0.52" />
+          <rect x="18" y="10" width="4" height="12" rx="2" fill={secondary} fillOpacity="0.52" />
+          <rect x="-8" y="29" width="16" height="13" rx="5" fill={dark} />
+          <rect x="-5" y="32" width="10" height="7" rx="3" fill={highlight} fillOpacity="0.94" />
+          <path d="M 0 -47 L 17 -34 L 25 -7 L 22 21 L 12 40 L 0 47 L -12 40 L -22 21 L -25 -7 L -17 -34 Z" fill="none" stroke={highlight} strokeOpacity="0.42" strokeWidth="1.7" />
+        </g>
+      </svg>
+      {label ? <span className="static-drone-preview-label">{label}</span> : null}
     </div>
   );
 }
 
-function DronePreview({ skin = BASIC_DRONE, size = "large", compact = false }) {
-  const previewSkin = normalizeSkin(skin?.id || skin);
-  const previewConfig = {
-    hero: { box: 430, scale: 1 },
-    modal: { box: 430, scale: 0.62 },
-    large: { box: 430, scale: 0.40 },
-    tiny: { box: 430, scale: 0.27 },
-  }[size] || { box: 430, scale: 0.40 };
-
-  const worldCenter = 1000;
-  const viewSize = 430;
-  const cameraX = viewSize / 2 - worldCenter;
-  const cameraY = viewSize / 2 - worldCenter;
-
-  const previewPlayer = {
-    id: `dashboard-preview-${previewSkin}`,
-    username: skin?.name || previewSkin,
-    x: worldCenter,
-    y: worldCenter,
-    mouseX: worldCenter + 120,
-    mouseY: worldCenter - 160,
-    moveX: 0,
-    moveY: 0,
-    skin: previewSkin,
-    hp: 100,
-    energy: 100,
-    alive: true,
-    drones: 1,
-    attacking: false,
-    isBot: false,
-  };
-
-  return (
-    <div
-      className={`dashboard-pixi-preview dashboard-pixi-preview-${size} ${compact ? "is-compact" : ""}`}
-      style={{ "--dash-preview-scale": previewConfig.scale }}
-    >
-      <div
-        className="dashboard-pixi-preview-inner"
-        style={{ width: previewConfig.box, height: previewConfig.box }}
-      >
-        <PixiArenaRenderer
-          player={previewPlayer}
-          players={[]}
-          bots={[]}
-          simpleBots={[]}
-          orbs={[]}
-          energyCells={[]}
-          cores={[]}
-          projectiles={[]}
-          simpleProjectiles={[]}
-          cameraX={cameraX}
-          cameraY={cameraY}
-          scale={1}
-          viewportWidth={viewSize}
-          viewportHeight={viewSize}
-          coreTypes={[]}
-          otherPlayerQuality={2}
-          staticPreview={true}
-        />
-      </div>
-    </div>
-  );
-}
-
+const CTF_PACKS = CTF_PREVIEW_PACKS;
 
 const GUEST_STATS_KEY_STORAGE = "drone-swarm-guest-leaderboard-key";
 
@@ -434,14 +667,14 @@ function GlobalRecordTable({ title, entries = [], showWins = false }) {
           </div>
         ))
       ) : (
-        <p className="global-record-empty">Nu exista inca recorduri salvate.</p>
+        <p className="global-record-empty">No records have been posted yet.</p>
       )}
     </article>
   );
 }
 
 
-function Dashboard({ user, gameMode, onExitToMenu }) {
+function Dashboard({ user, gameMode, onExitToMenu, onUserUpdated }) {
   const isGuestUser = Boolean(user?.isGuest);
   const guestDisplayName = getDisplayName(user);
   // Guest-ul are doar o cheie anonimă de sesiune pentru Top 10. Nu se creează
@@ -461,6 +694,9 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
     isGuestUser ? "cyan" : getInitialSelectedDrone(user)
   );
   const [openedPackId, setOpenedPackId] = useState(null);
+  const [equippedCtfPackId, setEquippedCtfPackId] = useState(() =>
+    isGuestUser ? DEFAULT_CTF_PACK_ID : getInitialSelectedCtfPack(user)
+  );
   const [gameStats, setGameStats] = useState(() => createEmptyGameStats());
   const [gameStatsLoading, setGameStatsLoading] = useState(false);
   const gameStatsSocketRef = useRef(null);
@@ -496,12 +732,6 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
 
     persistSelectedDrone(user, selectedDrone);
   }, [selectedDrone, user, isGuestUser]);
-
-  useEffect(() => {
-    if (isGuestUser && activeTab === "shop") {
-      setActiveTab("hangar");
-    }
-  }, [isGuestUser, activeTab]);
 
   // Recordurile sunt cerute doar în Hangar. Guest-ul primește exclusiv
   // clasamentele globale; recordurile personale/PvE rămân doar pentru conturi.
@@ -572,7 +802,7 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
   }, [guestStatsKey, isGuestUser, screen, user?.id, user?.userId]);
 
   const openedPack = useMemo(
-    () => PREMIUM_PACKS.find((pack) => pack.id === openedPackId),
+    () => [...PREMIUM_PACKS, ...CTF_PACKS].find((pack) => pack.id === openedPackId),
     [openedPackId]
   );
 
@@ -580,9 +810,38 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
     return ALL_SKINS.find((skin) => skin.id === normalizeSkin(selectedDrone)) || BASIC_DRONE;
   }, [selectedDrone]);
 
+  const selectedCtfPack = useMemo(() => {
+    return CTF_PACKS.find((pack) => pack.id === equippedCtfPackId) || CTF_PACKS[0];
+  }, [equippedCtfPackId]);
+
+  const ctfLoadoutSkins = useMemo(() => {
+    const byRole = (role) =>
+      selectedCtfPack?.skins?.find(
+        (skin) => String(skin?.role || "").toUpperCase() === role,
+      ) || null;
+
+    return [
+      byRole("ATTACK") || selectedCtfPack?.skins?.[0] || null,
+      byRole("TANK") || selectedCtfPack?.skins?.[1] || null,
+      byRole("DEFENDER") || selectedCtfPack?.skins?.[2] || null,
+    ].filter(Boolean);
+  }, [selectedCtfPack]);
+
   const ownedCount = isGuestUser ? 1 : ALL_SKINS.length;
 
-  const selectDrone = (skinId) => {
+  const syncSavedUser = (nextUser) => {
+    if (!nextUser || isGuestUser) return;
+
+    const normalizedUser = {
+      ...nextUser,
+      isGuest: false,
+    };
+
+    persistUserSnapshot(user, normalizedUser);
+    onUserUpdated?.(normalizedUser);
+  };
+
+  const selectDrone = async (skinId) => {
     if (isGuestUser) {
       setSelectedDrone("cyan");
       setOpenedPackId(null);
@@ -592,6 +851,65 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
     const normalized = normalizeSkin(skinId);
     setSelectedDrone(normalized);
     persistSelectedDrone(user, normalized);
+
+    try {
+      const response = await fetch(`${API_URL}/auth/select-drone`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: user?.userId || user?.id,
+          drone: normalized,
+        }),
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw new Error(payload?.message || "Unable to save the drone selection.");
+      }
+
+      if (payload?.user) syncSavedUser(payload.user);
+    } catch {
+      // The selection remains usable in this tab/local browser if the backend
+      // is temporarily unavailable; the next successful selection re-syncs it.
+    }
+  };
+
+  const selectCtfPack = async (packId) => {
+    if (isGuestUser) {
+      setEquippedCtfPackId(DEFAULT_CTF_PACK_ID);
+      setOpenedPackId(null);
+      return;
+    }
+
+    const next = CTF_PACKS.some((pack) => pack.id === packId)
+      ? packId
+      : DEFAULT_CTF_PACK_ID;
+
+    setEquippedCtfPackId(next);
+    persistSelectedCtfPack(user, next);
+
+    try {
+      const response = await fetch(`${API_URL}/auth/select-ctf-pack`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: user?.userId || user?.id,
+          ctfPackId: next,
+        }),
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw new Error(payload?.message || "Unable to save the CTF pack selection.");
+      }
+
+      if (payload?.user) syncSavedUser(payload.user);
+    } catch {
+      // Keep the choice locally for the active browser if the API is briefly
+      // offline. The server is retried on the next selection.
+    }
+
+    setOpenedPackId(null);
   };
 
   const arenaSelectedDrone = isGuestUser ? "cyan" : selectedDrone;
@@ -609,6 +927,9 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
     selectedSkin: arenaSelectedDrone,
     selectedDroneSkin: arenaSelectedDrone,
     skin: arenaSelectedDrone,
+    // Guest pilots always deploy with the free Starter Command Pack.
+    // Account pilots use their saved CTF loadout.
+    ctfSelectedPackId: isGuestUser ? DEFAULT_CTF_PACK_ID : equippedCtfPackId,
   };
 
   const launchArena = (mode) => {
@@ -672,14 +993,14 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
         <div>
           <h1>DRONE SWARM</h1>
           <p>
-            {isGuestUser ? "Guest mode pentru " : "Hangar pentru "}
+            {isGuestUser ? "Guest hangar for " : "Hangar for "}
             <strong>{getDisplayName(user)}</strong>
           </p>
         </div>
 
         <nav className="hangar-top-actions">
           <button onClick={() => setActiveTab("hangar")}>Hangar</button>
-          {!isGuestUser && <button onClick={() => setActiveTab("shop")}>Shop</button>}
+          <button onClick={() => setActiveTab("shop")}>Shop</button>
           <button
             className="logout-btn"
             onClick={() => {
@@ -710,7 +1031,7 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
           {isGuestUser ? (
             <div className="guest-profile-note">
               <strong>GUEST MODE</strong>
-              <span>Nu se creeaza cont sau profil. Doar un record care intra in Top 10 poate ramane afisat global.</span>
+              <span>No account or profile is created. A guest name appears globally only after reaching the Top 10.</span>
             </div>
           ) : (
             <p>{user?.email || "player@drone-swarm.com"}</p>
@@ -784,30 +1105,37 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
             >
               Hangar
             </button>
-            {!isGuestUser && (
-              <button
-                className={activeTab === "shop" ? "active" : ""}
-                onClick={() => setActiveTab("shop")}
-              >
-                Shop
-              </button>
-            )}
+            <button
+              className={activeTab === "shop" ? "active" : ""}
+              onClick={() => setActiveTab("shop")}
+            >
+              Shop
+            </button>
           </div>
 
           {activeTab === "hangar" && (
             <>
-              <section className="hero-drone-card">
-                <div className="hero-copy">
+              <section className="hero-drone-card hangar-loadout-hero">
+                <div className="hero-copy hangar-loadout-copy">
                   <span className={`pill ${selectedSkin.rarity === "Premium" ? "premium-pill" : ""}`}>
                     {selectedSkin.rarity}
                   </span>
                   <h2>{selectedSkin.name}</h2>
                   <p>{selectedSkin.description}</p>
 
+                  <div className="hangar-ctf-summary">
+                    <span>CAPTURE THE FLAG · 4V4 LOADOUT</span>
+                    <strong>{selectedCtfPack?.name || "Galactic Command Pack"}</strong>
+                    <small>
+                      The equipped pack provides one Attack drone, one Tank, and one Defender.
+                      Your team assignment and battlefield role remain randomized in every match.
+                    </small>
+                  </div>
+
                   <div className="hero-buttons">
                     {isGuestUser ? (
                       <div className="guest-locked-drone-note">
-                        Guest poate folosi doar Basic Drone. Skinurile premium si selectia de drone sunt disponibile doar cu Google.
+                        Guest pilots deploy with the Basic Drone and the free Starter Command Pack. Premium Arena skins and CTF loadouts require a Google account.
                       </div>
                     ) : (
                       <>
@@ -815,17 +1143,40 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
                           className="primary-action"
                           onClick={() => selectDrone(selectedSkin.id)}
                         >
-                          SELECT DRONE
+                          SELECT ARENA DRONE
                         </button>
                         <button className="dark-action" onClick={() => setActiveTab("shop")}>
-                          Shop
+                          OPEN SHOP
                         </button>
                       </>
                     )}
                   </div>
                 </div>
 
-                <DronePreview skin={selectedSkin} size="hero" />
+                <div className="hangar-active-loadout-grid">
+                  <article className="hangar-loadout-drone-card arena-card">
+                    <header>
+                      <span>ARENA MODES</span>
+                      <strong>{selectedSkin.name}</strong>
+                    </header>
+                    <StaticDronePreview skin={selectedSkin} size="large" />
+                    <small>Normal PvP · Battle Royale</small>
+                  </article>
+
+                  {ctfLoadoutSkins.map((skin) => (
+                    <article
+                      key={skin.id}
+                      className={`hangar-loadout-drone-card ctf-card role-${String(skin.role || "attack").toLowerCase()}`}
+                    >
+                      <header>
+                        <span>CTF · {skin.role}</span>
+                        <strong>{skin.name}</strong>
+                      </header>
+                      <StaticDronePreview skin={skin} size="large" compact />
+                      <small>Capture The Flag · 4v4</small>
+                    </article>
+                  ))}
+                </div>
               </section>
 
               <section className={`career-stats-section ${isGuestUser ? "guest-global-records" : ""}`}>
@@ -836,10 +1187,10 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
                   </div>
                   <p>
                     {gameStatsLoading
-                      ? "Se incarca recordurile..."
+                      ? "Loading records..."
                       : isGuestUser
-                        ? "Guest-ul nu are profil sau record personal. Numele lui apare doar daca intra in Top 10."
-                        : "Recordurile personale si clasamentele globale sunt salvate permanent."}
+                        ? "Guest pilots have no persistent profile or personal record. Their name appears only after reaching the global Top 10."
+                        : "Personal records and global standings are saved permanently."}
                   </p>
                 </div>
 
@@ -878,78 +1229,115 @@ function Dashboard({ user, gameMode, onExitToMenu }) {
             </>
           )}
 
-          {!isGuestUser && activeTab === "shop" && (
-            <section className="shop-section">
-              <div className="section-title-row">
-                <h3>Premium Packs</h3>
-                <p>Fiecare pachet va costa €3.00. Momentan poti selecta orice drona pentru test.</p>
-              </div>
-
-              <div className="pack-grid">
-                {PREMIUM_PACKS.map((pack) => (
-                  <article key={pack.id} className="premium-pack-card">
-                    <div className="pack-preview-strip pack-preview-strip-real-pixi">
-                      <PackPixiPreview skins={pack.skins} />
-                    </div>
-
-                    <div>
-                      <span className="pill premium-pill">Premium Pack</span>
-                      <h3>{pack.name}</h3>
-                      <p>{pack.subtitle}</p>
-                    </div>
-
-                    <div className="pack-actions">
-                      <strong>{pack.price}</strong>
-                      <button onClick={() => setOpenedPackId(pack.id)}>OPEN PACK</button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </section>
+          {activeTab === "shop" && (
+            <Shop
+              regularPacks={PREMIUM_PACKS}
+              ctfPacks={CTF_PACKS}
+              selectedDrone={selectedDrone}
+              equippedCtfPackId={equippedCtfPackId}
+              isGuest={isGuestUser}
+              onOpenPack={setOpenedPackId}
+              StaticDronePreview={StaticDronePreview}
+            />
           )}
         </section>
       </main>
 
-      {!isGuestUser && openedPack && (
+      {openedPack && (
         <div className="pack-modal-backdrop" onClick={() => setOpenedPackId(null)}>
           <div className="pack-modal" onClick={(event) => event.stopPropagation()}>
             <button className="modal-close" onClick={() => setOpenedPackId(null)}>
               ×
             </button>
 
-            <span className="pill premium-pill">Premium Pack</span>
+            <span className={`pill ${
+              openedPack.kind === "ctf"
+                ? openedPack.starter
+                  ? "starter-pack-pill"
+                  : "ctf-pack-pill"
+                : "premium-pill"
+            }`}>
+              {openedPack.kind === "ctf"
+                ? openedPack.starter
+                  ? "CTF STARTER LOADOUT"
+                  : "CTF ROLE PACK"
+                : "Premium Pack"}
+            </span>
             <h2>{openedPack.name}</h2>
             <p>{openedPack.subtitle}</p>
 
-            <div className="modal-skin-grid">
-              {openedPack.skins.map((skin) => (
-                <button
-                  key={skin.id}
-                  className={`modal-skin-card ${selectedDrone === skin.id ? "selected" : ""}`}
-                  onClick={() => selectDrone(skin.id)}
-                >
-                  <DronePreview skin={skin} size="modal" />
-                  <strong>{skin.name}</strong>
-                  <span>
-                    {selectedDrone === skin.id
-                      ? "Selected for arena"
-                      : "Click pentru selectie"}
-                  </span>
-                </button>
-              ))}
+            <div className={`modal-skin-grid ${openedPack.kind === "ctf" ? "modal-ctf-skin-grid" : ""}`}>
+              {openedPack.skins.map((skin) => {
+                const selected = openedPack.kind === "ctf"
+                  ? equippedCtfPackId === openedPack.id
+                  : selectedDrone === skin.id;
+
+                return (
+                  <button
+                    key={skin.id}
+                    className={`modal-skin-card ${selected ? "selected" : ""} ${openedPack.kind === "ctf" ? "ctf-modal-skin-card" : ""}`}
+                    onClick={() => {
+                      if (isGuestUser) return;
+                      if (openedPack.kind === "ctf") selectCtfPack(openedPack.id);
+                      else selectDrone(skin.id);
+                    }}
+                    disabled={isGuestUser}
+                  >
+                    <StaticDronePreview skin={skin} size="modal" compact={openedPack.kind === "ctf"} />
+                    {openedPack.kind === "ctf" && <em>{skin.role}</em>}
+                    <strong>{skin.name}</strong>
+                    <span>
+                      {isGuestUser
+                        ? openedPack.kind === "ctf" && openedPack.starter
+                          ? "Guest default loadout"
+                          : "Guest · view only"
+                        : openedPack.kind === "ctf"
+                          ? selected ? "Equipped for Capture the Flag" : "Click to equip for CTF"
+                          : selected ? "Selected for arena" : "Click to select"}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
 
-            <button
-              className="buy-button"
-              onClick={() => {
-                if (openedPack.skins[0]) selectDrone(openedPack.skins[0].id);
-              }}
-            >
-              SELECT PACK {openedPack.price}
-            </button>
+            {isGuestUser ? (
+              openedPack.kind === "ctf" && openedPack.starter ? (
+                <button className="buy-button ctf-buy-button" disabled>
+                  GUEST STARTER LOADOUT ACTIVE
+                </button>
+              ) : (
+                <button className="buy-button is-locked" disabled>
+                  SIGN IN WITH GOOGLE TO UNLOCK
+                </button>
+              )
+            ) : openedPack.kind === "ctf" ? (
+              <button
+                className="buy-button ctf-buy-button"
+                onClick={() => selectCtfPack(openedPack.id)}
+              >
+                {equippedCtfPackId === openedPack.id
+                  ? openedPack.starter
+                    ? "STARTER LOADOUT EQUIPPED"
+                    : "CTF PACK EQUIPPED"
+                  : openedPack.starter
+                    ? "EQUIP STARTER LOADOUT"
+                    : `EQUIP CTF PACK ${openedPack.price}`}
+              </button>
+            ) : (
+              <button
+                className="buy-button"
+                onClick={() => {
+                  if (openedPack.skins[0]) selectDrone(openedPack.skins[0].id);
+                  setOpenedPackId(null);
+                }}
+              >
+                SELECT PACK {openedPack.price}
+              </button>
+            )}
           </div>
         </div>
       )}
+
     </div>
   );
 }

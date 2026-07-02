@@ -22,6 +22,7 @@ export declare class AuthController {
             email: any;
             selectedDrone: any;
             selectedSkin: any;
+            selectedCtfPackId: any;
             avatar: any;
         };
     }>;
@@ -39,6 +40,24 @@ export declare class AuthController {
             email: any;
             selectedDrone: any;
             selectedSkin: any;
+            selectedCtfPackId: any;
+            avatar: any;
+        };
+    }>;
+    selectCtfPack(body: {
+        userId: number;
+        ctfPackId: string;
+    }): Promise<{
+        selectedCtfPackId: string;
+        user: {
+            id: any;
+            firstName: any;
+            lastName: any;
+            username: any;
+            email: any;
+            selectedDrone: any;
+            selectedSkin: any;
+            selectedCtfPackId: any;
             avatar: any;
         };
     }>;
@@ -54,6 +73,7 @@ export declare class AuthController {
             email: any;
             selectedDrone: any;
             selectedSkin: any;
+            selectedCtfPackId: any;
             avatar: any;
         };
     }>;

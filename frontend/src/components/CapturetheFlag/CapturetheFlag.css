@@ -2157,7 +2157,7 @@
     display: block !important;
     position: fixed !important;
     top: max(7px, env(safe-area-inset-top)) !important;
-    left: 62% !important;
+    left: 63% !important;
     right: auto !important;
     z-index: 10045 !important;
     transform: translateX(-50%) !important;
@@ -2184,5 +2184,352 @@
 
   .capture-the-flag-dom-arena .capture-the-flag-live-event {
     top: 86px !important;
+  }
+}
+
+/* ========================================================================
+   CTF — CURRENT PILOT PREMIUM HIGHLIGHT + CLEAN ORB COUNT
+   Added last so it overrides all older role/HUD rules.
+   ======================================================================== */
+
+/* Remove only the visual card behind ORB COUNT. The counter text stays next
+   to HP/Energy, but no longer has its own rectangle, border or shadow. */
+.capture-the-flag-left-hud .capture-the-flag-collect-counter {
+  min-width: 0 !important;
+  padding: 8px 4px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+}
+
+.capture-the-flag-left-hud .capture-the-flag-collect-counter::before,
+.capture-the-flag-left-hud .capture-the-flag-collect-counter::after {
+  display: none !important;
+  content: none !important;
+}
+
+.capture-the-flag-left-hud .capture-the-flag-collect-counter span {
+  color: rgba(181, 227, 246, 0.86) !important;
+  font-weight: 1000 !important;
+  letter-spacing: 0.9px !important;
+}
+
+.capture-the-flag-left-hud .capture-the-flag-collect-counter strong {
+  color: #ecfdff !important;
+  font-weight: 1000 !important;
+  text-shadow: 0 0 10px rgba(0, 234, 255, 0.32) !important;
+}
+
+.capture-the-flag-left-hud .capture-the-flag-collect-counter small {
+  color: rgba(166, 215, 237, 0.72) !important;
+}
+
+/* The player's own card in CLASS ASSIGNMENTS. */
+.capture-the-flag-role-card.is-current-pilot {
+  position: relative !important;
+  z-index: 8 !important;
+  overflow: visible !important;
+  transform: translateY(-3px) scale(1.055) !important;
+  border-width: 2px !important;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.18), transparent 56%),
+    linear-gradient(145deg, rgba(20, 38, 60, 0.98), rgba(2, 9, 22, 0.96)) !important;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.24),
+    0 0 20px rgba(255, 255, 255, 0.20),
+    0 0 34px rgba(0, 234, 255, 0.26),
+    inset 0 0 22px rgba(255, 255, 255, 0.08) !important;
+  animation: capture-the-flag-current-pilot-pulse 1.25s ease-in-out infinite !important;
+}
+
+.capture-the-flag-role-card.team-cyan.is-current-pilot {
+  border-color: #7df3ff !important;
+  box-shadow:
+    0 0 0 1px rgba(225, 254, 255, 0.78),
+    0 0 20px rgba(0, 234, 255, 0.70),
+    0 0 42px rgba(36, 166, 255, 0.44),
+    inset 0 0 24px rgba(0, 234, 255, 0.16) !important;
+}
+
+.capture-the-flag-role-card.team-orange.is-current-pilot {
+  border-color: #ffb1bd !important;
+  box-shadow:
+    0 0 0 1px rgba(255, 240, 243, 0.78),
+    0 0 20px rgba(255, 79, 105, 0.72),
+    0 0 42px rgba(255, 52, 87, 0.40),
+    inset 0 0 24px rgba(255, 70, 88, 0.15) !important;
+}
+
+.capture-the-flag-role-card.is-current-pilot::before {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  z-index: -1;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  pointer-events: none;
+  opacity: 0.72;
+  animation: capture-the-flag-current-pilot-ring 1.25s ease-out infinite;
+}
+
+.capture-the-flag-role-card.team-cyan.is-current-pilot::before {
+  border-color: rgba(89, 238, 255, 0.90);
+  box-shadow: 0 0 22px rgba(0, 234, 255, 0.72);
+}
+
+.capture-the-flag-role-card.team-orange.is-current-pilot::before {
+  border-color: rgba(255, 111, 130, 0.92);
+  box-shadow: 0 0 22px rgba(255, 70, 88, 0.72);
+}
+
+.capture-the-flag-role-card.is-current-pilot strong {
+  color: #ffffff !important;
+  font-size: 13px !important;
+  font-weight: 1000 !important;
+  letter-spacing: 0.48px !important;
+  text-shadow: 0 0 12px rgba(255, 255, 255, 0.62) !important;
+}
+
+.capture-the-flag-role-card.is-current-pilot b {
+  font-size: 12px !important;
+  font-weight: 1000 !important;
+  text-shadow: 0 0 10px currentColor !important;
+}
+
+.capture-the-flag-role-card.is-current-pilot > span {
+  color: rgba(238, 252, 255, 0.92) !important;
+  font-weight: 1000 !important;
+}
+
+.capture-the-flag-role-you-marker {
+  position: absolute !important;
+  top: -14px !important;
+  left: 50% !important;
+  z-index: 12 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-width: 46px !important;
+  min-height: 21px !important;
+  margin: 0 !important;
+  padding: 3px 9px !important;
+  transform: translateX(-50%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.80) !important;
+  border-radius: 999px !important;
+  background: linear-gradient(135deg, #ecfeff, #9ffaff 48%, #39bfff) !important;
+  color: #03111d !important;
+  font-size: 9px !important;
+  font-style: normal !important;
+  font-weight: 1000 !important;
+  letter-spacing: 1.1px !important;
+  line-height: 1 !important;
+  box-shadow: 0 0 14px rgba(0, 234, 255, 0.82), 0 3px 10px rgba(0, 0, 0, 0.36) !important;
+}
+
+.capture-the-flag-role-card.team-orange .capture-the-flag-role-you-marker {
+  background: linear-gradient(135deg, #fff2f4, #ffbdc8 48%, #ff4f69) !important;
+  box-shadow: 0 0 14px rgba(255, 70, 88, 0.82), 0 3px 10px rgba(0, 0, 0, 0.36) !important;
+}
+
+@keyframes capture-the-flag-current-pilot-pulse {
+  0%, 100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.16);
+  }
+}
+
+@keyframes capture-the-flag-current-pilot-ring {
+  0% {
+    opacity: 0.78;
+    transform: scale(0.96);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.12);
+  }
+}
+
+@media (max-width: 700px) {
+  .capture-the-flag-role-card.is-current-pilot {
+    transform: translateY(-2px) scale(1.025) !important;
+  }
+
+  .capture-the-flag-role-card.is-current-pilot strong {
+    font-size: 10px !important;
+  }
+
+  .capture-the-flag-role-card.is-current-pilot b {
+    font-size: 10px !important;
+  }
+
+  .capture-the-flag-role-you-marker {
+    top: -11px !important;
+    min-width: 38px !important;
+    min-height: 17px !important;
+    padding: 2px 7px !important;
+    font-size: 7px !important;
+  }
+}
+
+
+/* ========================================================================
+   CTF — ORB COUNT RESTORED
+   Orb Count is a separate card to the RIGHT of HP / Energy on desktop.
+   It stays inside the same flex HUD row, so it can never overlap HP/Energy.
+   ======================================================================== */
+.capture-the-flag-left-hud {
+  align-items: flex-start !important;
+}
+
+.capture-the-flag-left-hud .capture-the-flag-collect-counter {
+  position: relative !important;
+  flex: 0 0 146px !important;
+  width: 146px !important;
+  min-width: 146px !important;
+  min-height: 116px !important;
+  align-self: flex-start !important;
+  margin: 0 !important;
+  padding: 12px 13px 11px !important;
+  overflow: hidden !important;
+  border: 1px solid rgba(0, 234, 255, 0.42) !important;
+  border-radius: 13px !important;
+  background:
+    linear-gradient(145deg, rgba(6, 27, 47, 0.96), rgba(2, 9, 22, 0.96)) !important;
+  box-shadow:
+    0 0 18px rgba(0, 234, 255, 0.12),
+    inset 0 0 18px rgba(0, 234, 255, 0.045) !important;
+  text-align: left !important;
+}
+
+.capture-the-flag-left-hud .capture-the-flag-collect-counter::before {
+  content: "" !important;
+  display: block !important;
+  position: absolute !important;
+  inset: 0 auto auto 0 !important;
+  width: 100% !important;
+  height: 2px !important;
+  border-radius: 13px 13px 0 0 !important;
+  background: linear-gradient(90deg, #00eaff, rgba(103, 255, 177, 0.36), transparent) !important;
+  opacity: 0.96 !important;
+}
+
+.capture-the-flag-left-hud .capture-the-flag-collect-counter::after {
+  content: "" !important;
+  display: block !important;
+  position: absolute !important;
+  width: 86px !important;
+  height: 86px !important;
+  right: -43px !important;
+  bottom: -48px !important;
+  border-radius: 50% !important;
+  background: radial-gradient(circle, rgba(0, 234, 255, 0.16), transparent 68%) !important;
+  pointer-events: none !important;
+}
+
+.capture-the-flag-left-hud .capture-the-flag-collect-counter span {
+  position: relative !important;
+  z-index: 1 !important;
+  display: block !important;
+  color: #8cefff !important;
+  font-size: 10px !important;
+  font-weight: 1000 !important;
+  letter-spacing: 1.15px !important;
+  line-height: 1 !important;
+}
+
+.capture-the-flag-left-hud .capture-the-flag-collect-counter strong {
+  position: relative !important;
+  z-index: 1 !important;
+  display: block !important;
+  margin-top: 6px !important;
+  color: #ffffff !important;
+  font-size: 24px !important;
+  font-weight: 1000 !important;
+  line-height: 1 !important;
+  letter-spacing: 0.2px !important;
+  text-shadow: 0 0 11px rgba(0, 234, 255, 0.38) !important;
+}
+
+.capture-the-flag-left-hud .capture-the-flag-collect-counter small {
+  position: relative !important;
+  z-index: 1 !important;
+  display: block !important;
+  margin-top: 6px !important;
+  color: rgba(204, 239, 255, 0.78) !important;
+  font-size: 10px !important;
+  font-weight: 800 !important;
+  line-height: 1.05 !important;
+}
+
+/* Desktop/laptop: keep the two cards in one clean horizontal row. */
+@media (min-width: 781px) {
+  .capture-the-flag-left-hud {
+    top: 14px !important;
+    left: 16px !important;
+    gap: 12px !important;
+    transform: none !important;
+  }
+
+  .capture-the-flag-left-hud .capture-the-flag-hp-panel {
+    flex: 0 0 194px !important;
+    min-width: 194px !important;
+  }
+  
+}
+
+/* Phones keep the same two-card layout, only compacted by the existing HUD scale. */
+@media (max-width: 780px) {
+  .capture-the-flag-left-hud .capture-the-flag-collect-counter {
+    flex-basis: 132px !important;
+    width: 132px !important;
+    min-width: 132px !important;
+    min-height: 104px !important;
+    padding: 10px 11px 9px !important;
+    border-radius: 11px !important;
+  }
+
+  .capture-the-flag-left-hud .capture-the-flag-collect-counter strong {
+    margin-top: 5px !important;
+    font-size: 21px !important;
+  }
+
+  .capture-the-flag-left-hud .capture-the-flag-collect-counter small {
+    margin-top: 5px !important;
+    font-size: 9px !important;
+  }
+}
+
+/* DESKTOP / LAPTOP ONLY — ORB COUNT mutat la dreapta de HP + ENERGY */
+@media (min-width: 781px) and (hover: hover) and (pointer: fine) {
+  .capture-the-flag-left-hud {
+    top: 14px !important;
+    left: 16px !important;
+    display: block !important;
+    transform: none !important;
+  }
+
+  .capture-the-flag-left-hud .capture-the-flag-hp-panel {
+    width: 194px !important;
+    min-width: 194px !important;
+  }
+
+  .capture-the-flag-left-hud .capture-the-flag-collect-counter {
+    position: absolute !important;
+    top: 6px !important;
+    left: 224px !important;
+
+    width: 142px !important;
+    min-width: 142px !important;
+    margin: 0 !important;
+    transform: none !important;
+
+    border: 1px solid rgba(0, 234, 255, 0.34) !important;
+    border-radius: 14px !important;
+    background: rgba(2, 10, 24, 0.88) !important;
+    box-shadow: 0 0 18px rgba(0, 234, 255, 0.12) !important;
   }
 }

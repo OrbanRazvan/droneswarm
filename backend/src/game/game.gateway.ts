@@ -165,6 +165,41 @@ const CAPTURE_THE_FLAG_BOT_EDGE_RECOVERY_PUSH = 610;
 const CAPTURE_THE_FLAG_ROLE_REVEAL_DURATION_MS = 7000;
 const CAPTURE_THE_FLAG_ROLE_ORDER = ["attack-alpha", "attack-bravo", "tank", "defense"] as const;
 
+// Shop packs only choose the visual family. Blue/Red team is still randomized
+// at match start; this table resolves the role-specific hull after assignment.
+const CAPTURE_THE_FLAG_PACK_ROLE_VARIANTS: Record<string, Record<string, string>> = {
+  "ctf-pack-starter-command": {
+    "attack-alpha": "basic-scout",
+    "attack-bravo": "basic-wingman",
+    tank: "basic-bastion",
+    defense: "basic-sentinel",
+  },
+  "ctf-pack-galactic-command": {
+    "attack-alpha": "raptor",
+    "attack-bravo": "phantom",
+    tank: "bastion",
+    defense: "aegis",
+  },
+  "ctf-pack-medieval-forge": {
+    "attack-alpha": "viper",
+    "attack-bravo": "scythe",
+    tank: "juggernaut",
+    defense: "warden",
+  },
+  "ctf-pack-military-prototype": {
+    "attack-alpha": "talon",
+    "attack-bravo": "eclipse",
+    tank: "atlas",
+    defense: "bulwark",
+  },
+  "ctf-pack-dark-galactic": {
+    "attack-alpha": "dark-voidfang",
+    "attack-bravo": "dark-voidfang",
+    tank: "dark-voidfang",
+    defense: "dark-voidfang",
+  },
+};
+
 // CTF role-combat tuning. These rules are isolated to Capture The Flag only.
 const CAPTURE_THE_FLAG_DEFENDER_SHIELD_DURATION_MS = 4000;
 const CAPTURE_THE_FLAG_DEFENDER_AEGIS_PULSE_INTERVAL_MS = 700;
@@ -187,6 +222,7 @@ const CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS: Record<
 > = {
   cyan: {
     "attack-alpha": [
+      { key: "basic-scout", name: "CADET SCOUT", family: "STARTER", skin: "ctf-blue-attack-alpha-basic-scout" },
       { key: "raptor", name: "NOVA SABRE", family: "GALACTIC", skin: "ctf-blue-attack-alpha-raptor" },
       { key: "comet", name: "ION FALCON", family: "GALACTIC", skin: "ctf-blue-attack-alpha-comet" },
       { key: "viper", name: "DRAGON LANCE", family: "MEDIEVAL", skin: "ctf-blue-attack-alpha-viper" },
@@ -199,6 +235,7 @@ const CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS: Record<
       { key: "dark-blacksun", name: "BLACK SUN LANCER", family: "DARK GALACTIC", skin: "ctf-blue-attack-alpha-dark-blacksun" },
     ],
     "attack-bravo": [
+      { key: "basic-wingman", name: "CADET WINGMAN", family: "STARTER", skin: "ctf-blue-attack-bravo-basic-wingman" },
       { key: "phantom", name: "VOID WRAITH", family: "GALACTIC", skin: "ctf-blue-attack-bravo-phantom" },
       { key: "specter", name: "STARFALL GHOST", family: "GALACTIC", skin: "ctf-blue-attack-bravo-specter" },
       { key: "scythe", name: "RUNEBLADE ARC", family: "MEDIEVAL", skin: "ctf-blue-attack-bravo-scythe" },
@@ -211,6 +248,7 @@ const CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS: Record<
       { key: "dark-blacksun", name: "BLACK SUN RAZOR", family: "DARK GALACTIC", skin: "ctf-blue-attack-bravo-dark-blacksun" },
     ],
     tank: [
+      { key: "basic-bastion", name: "CADET BASTION", family: "STARTER", skin: "ctf-blue-tank-basic-bastion" },
       { key: "bastion", name: "ORBITAL DREADNOUGHT", family: "GALACTIC", skin: "ctf-blue-tank-bastion" },
       { key: "titan", name: "SOLAR TITAN", family: "GALACTIC", skin: "ctf-blue-tank-titan" },
       { key: "juggernaut", name: "IRON JUGGERNAUT", family: "MEDIEVAL", skin: "ctf-blue-tank-juggernaut" },
@@ -223,6 +261,7 @@ const CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS: Record<
       { key: "dark-blacksun", name: "BLACK SUN FORTRESS", family: "DARK GALACTIC", skin: "ctf-blue-tank-dark-blacksun" },
     ],
     defense: [
+      { key: "basic-sentinel", name: "CADET SENTINEL", family: "STARTER", skin: "ctf-blue-defense-basic-sentinel" },
       { key: "aegis", name: "AURORA AEGIS", family: "GALACTIC", skin: "ctf-blue-defense-aegis" },
       { key: "sentinel", name: "SENTINEL ORBIT", family: "GALACTIC", skin: "ctf-blue-defense-sentinel" },
       { key: "warden", name: "RUNE WARDEN", family: "MEDIEVAL", skin: "ctf-blue-defense-warden" },
@@ -237,6 +276,7 @@ const CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS: Record<
   },
   orange: {
     "attack-alpha": [
+      { key: "basic-scout", name: "CADET SCOUT", family: "STARTER", skin: "ctf-red-attack-alpha-basic-scout" },
       { key: "raptor", name: "NOVA SABRE", family: "GALACTIC", skin: "ctf-red-attack-alpha-raptor" },
       { key: "comet", name: "ION FALCON", family: "GALACTIC", skin: "ctf-red-attack-alpha-comet" },
       { key: "viper", name: "DRAGON LANCE", family: "MEDIEVAL", skin: "ctf-red-attack-alpha-viper" },
@@ -249,6 +289,7 @@ const CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS: Record<
       { key: "dark-blacksun", name: "BLACK SUN LANCER", family: "DARK GALACTIC", skin: "ctf-red-attack-alpha-dark-blacksun" },
     ],
     "attack-bravo": [
+      { key: "basic-wingman", name: "CADET WINGMAN", family: "STARTER", skin: "ctf-red-attack-bravo-basic-wingman" },
       { key: "phantom", name: "VOID WRAITH", family: "GALACTIC", skin: "ctf-red-attack-bravo-phantom" },
       { key: "specter", name: "STARFALL GHOST", family: "GALACTIC", skin: "ctf-red-attack-bravo-specter" },
       { key: "scythe", name: "RUNEBLADE ARC", family: "MEDIEVAL", skin: "ctf-red-attack-bravo-scythe" },
@@ -261,6 +302,7 @@ const CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS: Record<
       { key: "dark-blacksun", name: "BLACK SUN RAZOR", family: "DARK GALACTIC", skin: "ctf-red-attack-bravo-dark-blacksun" },
     ],
     tank: [
+      { key: "basic-bastion", name: "CADET BASTION", family: "STARTER", skin: "ctf-red-tank-basic-bastion" },
       { key: "bastion", name: "ORBITAL DREADNOUGHT", family: "GALACTIC", skin: "ctf-red-tank-bastion" },
       { key: "titan", name: "SOLAR TITAN", family: "GALACTIC", skin: "ctf-red-tank-titan" },
       { key: "juggernaut", name: "IRON JUGGERNAUT", family: "MEDIEVAL", skin: "ctf-red-tank-juggernaut" },
@@ -273,6 +315,7 @@ const CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS: Record<
       { key: "dark-blacksun", name: "BLACK SUN FORTRESS", family: "DARK GALACTIC", skin: "ctf-red-tank-dark-blacksun" },
     ],
     defense: [
+      { key: "basic-sentinel", name: "CADET SENTINEL", family: "STARTER", skin: "ctf-red-defense-basic-sentinel" },
       { key: "aegis", name: "AURORA AEGIS", family: "GALACTIC", skin: "ctf-red-defense-aegis" },
       { key: "sentinel", name: "SENTINEL ORBIT", family: "GALACTIC", skin: "ctf-red-defense-sentinel" },
       { key: "warden", name: "RUNE WARDEN", family: "MEDIEVAL", skin: "ctf-red-defense-warden" },
@@ -7513,6 +7556,11 @@ export class GameGateway {
       isBot: Boolean(isBot),
       username,
       skin,
+      // Used only by Capture The Flag role assignment. Normal PvP and both
+      // Battle Royale modes never read or mutate this field.
+      ctfSelectedPackId: isBot
+        ? null
+        : this.normalizeCaptureTheFlagPackId(data?.ctfSelectedPackId),
       team,
       x,
       y,
@@ -7750,6 +7798,27 @@ export class GameGateway {
     this.assignCaptureTheFlagBotRoles(room, true);
   }
 
+  private normalizeCaptureTheFlagPackId(value: any) {
+    const packId = String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/_/g, "-")
+      .replace(/\s+/g, "-");
+
+    // Guests, older saved profiles and brand-new pilots always land on the
+    // free Starter Command Pack when no explicit valid pack is available.
+    return CAPTURE_THE_FLAG_PACK_ROLE_VARIANTS[packId]
+      ? packId
+      : "ctf-pack-starter-command";
+  }
+
+  private getCaptureTheFlagSelectedPackVariant(packId: any, role: string) {
+    const validPackId = this.normalizeCaptureTheFlagPackId(packId);
+    if (!validPackId) return null;
+
+    return CAPTURE_THE_FLAG_PACK_ROLE_VARIANTS[validPackId]?.[String(role || "")] || null;
+  }
+
   private getCaptureTheFlagRoleProfile(team: string, role: string, preferredSkinVariantKey: string | null = null) {
     const normalizedTeam = String(team || "cyan") === "orange" ? "orange" : "cyan";
     const normalizedRole = String(role || "attack-bravo");
@@ -7852,7 +7921,14 @@ export class GameGateway {
           String(player?.ctfSkinTeam || "") === team
             ? String(player?.ctfSkinVariantKey || "")
             : null;
-        const profile = this.getCaptureTheFlagRoleProfile(team, role, keepExistingVariant);
+        const selectedPackVariant = player.isBot
+          ? null
+          : this.getCaptureTheFlagSelectedPackVariant(player.ctfSelectedPackId, role);
+        const profile = this.getCaptureTheFlagRoleProfile(
+          team,
+          role,
+          selectedPackVariant || keepExistingVariant,
+        );
         const roleChanged = String(player?.ctfRole || "") !== String(profile.role || "") ||
           String(player?.ctfSkinVariantKey || "") !== String(profile.skinVariantKey || "") ||
           String(player?.ctfSkinFamily || "") !== String(profile.skinFamily || "") ||
@@ -8703,6 +8779,7 @@ export class GameGateway {
       ctfRoleVariant: player.ctfRoleVariant || null,
       ctfSkinFamily: player.ctfSkinFamily || null,
       ctfSkinVariantKey: player.ctfSkinVariantKey || null,
+      ctfSelectedPackId: player.ctfSelectedPackId || null,
       ctfRoleMoveSpeedMultiplier: Number(player.ctfRoleMoveSpeedMultiplier || 1),
       ctfRoleAttackDroneSpeedMultiplier: Number(player.ctfRoleAttackDroneSpeedMultiplier || 1),
     };

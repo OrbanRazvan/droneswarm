@@ -59,6 +59,18 @@ const SKIN_THEMES = {
   "emerald-rift-b": [0x00d47a, 0x7cffc4, 0x001f14, 0xffffff],
   "emerald-rift-c": [0x45ffb0, 0xd8ffef, 0x003322, 0xffffff],
 
+  // CTF Starter Command Pack. These free role hulls are the default
+  // CTF visuals for new accounts and Guest pilots; their geometry remains
+  // role-specific so Attack, Tank and Defender stay readable in live matches.
+  "ctf-blue-attack-alpha-basic-scout": [0x2f7fff, 0xeaf7ff, 0x061322, 0xffd166],
+  "ctf-blue-attack-bravo-basic-wingman": [0x2f7fff, 0xeaf7ff, 0x061322, 0xffd166],
+  "ctf-blue-tank-basic-bastion": [0x2f7fff, 0xeaf7ff, 0x061322, 0xffd166],
+  "ctf-blue-defense-basic-sentinel": [0x2f7fff, 0xeaf7ff, 0x061322, 0xffd166],
+  "ctf-red-attack-alpha-basic-scout": [0xff5668, 0xffead5, 0x2a0b12, 0xffd166],
+  "ctf-red-attack-bravo-basic-wingman": [0xff5668, 0xffead5, 0x2a0b12, 0xffd166],
+  "ctf-red-tank-basic-bastion": [0xff5668, 0xffead5, 0x2a0b12, 0xffd166],
+  "ctf-red-defense-basic-sentinel": [0xff5668, 0xffead5, 0x2a0b12, 0xffd166],
+
   // CTF-exclusive premium collection. Every role has five genuinely distinct
   // hull variants per team; none of these names are regular Hangar skins.
   "ctf-blue-attack-alpha-raptor": [0x00ddff, 0x9dfff8, 0x00192d, 0xf2ffff],
@@ -520,6 +532,15 @@ function createDroneContext(colors) {
 }
 
 const CTF_ROLE_SKIN_META = Object.freeze({
+  // Starter Command Pack — free default CTF loadout.
+  "ctf-blue-attack-alpha-basic-scout": { role: "attack-alpha", variant: "basic-scout" },
+  "ctf-blue-attack-bravo-basic-wingman": { role: "attack-bravo", variant: "basic-wingman" },
+  "ctf-blue-tank-basic-bastion": { role: "tank", variant: "basic-bastion" },
+  "ctf-blue-defense-basic-sentinel": { role: "defense", variant: "basic-sentinel" },
+  "ctf-red-attack-alpha-basic-scout": { role: "attack-alpha", variant: "basic-scout" },
+  "ctf-red-attack-bravo-basic-wingman": { role: "attack-bravo", variant: "basic-wingman" },
+  "ctf-red-tank-basic-bastion": { role: "tank", variant: "basic-bastion" },
+  "ctf-red-defense-basic-sentinel": { role: "defense", variant: "basic-sentinel" },
   "ctf-blue-attack-alpha-raptor": { role: "attack-alpha", variant: "raptor" },
   "ctf-blue-attack-alpha-comet": { role: "attack-alpha", variant: "comet" },
   "ctf-blue-attack-alpha-viper": { role: "attack-alpha", variant: "viper" },
@@ -603,6 +624,10 @@ const CTF_ROLE_SKIN_META = Object.freeze({
 });
 
 const CTF_PREMIUM_VARIANT_FAMILIES = Object.freeze({
+  "basic-scout": "starter",
+  "basic-wingman": "starter",
+  "basic-bastion": "starter",
+  "basic-sentinel": "starter",
   raptor: "galactic", comet: "galactic", phantom: "galactic", specter: "galactic",
   bastion: "galactic", titan: "galactic", aegis: "galactic", sentinel: "galactic",
   viper: "medieval", valkyrie: "medieval", scythe: "medieval", helix: "medieval",
@@ -620,6 +645,32 @@ function getCtfPremiumFamily(variant = "") {
 function drawCtfFactionSignature(ctx, colors, role, variant) {
   const [primary, secondary, dark, highlight] = colors;
   const family = getCtfPremiumFamily(variant);
+
+  if (family === "starter") {
+    // Starter Command: clean training-frame hardware with a restrained
+    // tactical silhouette. It is intentionally more understated than paid
+    // collections, while keeping each role immediately recognizable.
+    if (role === "tank") {
+      ctx.roundRect(-58, -20, 18, 58, 7).fill({ color: dark, alpha: 0.98 }).stroke({ color: secondary, width: 1.8, alpha: 0.68 });
+      ctx.roundRect(40, -20, 18, 58, 7).fill({ color: dark, alpha: 0.98 }).stroke({ color: secondary, width: 1.8, alpha: 0.68 });
+      ctx.roundRect(-33, -48, 66, 17, 8).fill({ color: primary, alpha: 0.80 }).stroke({ color: highlight, width: 1.2, alpha: 0.62 });
+      ctx.circle(0, -39, 6).fill({ color: highlight, alpha: 0.92 });
+    } else if (role === "defense") {
+      ctx.circle(0, 1, 53).stroke({ color: secondary, width: 3.2, alpha: 0.66 });
+      ctx.circle(0, 1, 41).stroke({ color: primary, width: 1.4, alpha: 0.56 });
+      ctx.moveTo(-49, -15).lineTo(-62, 8).lineTo(-45, 30).stroke({ color: highlight, width: 3.2, alpha: 0.68 });
+      ctx.moveTo(49, -15).lineTo(62, 8).lineTo(45, 30).stroke({ color: highlight, width: 3.2, alpha: 0.68 });
+    } else if (role === "attack-bravo") {
+      ctx.poly([-58, -6, -25, -18, -15, 4, -49, 26]).fill({ color: dark, alpha: 0.96 }).stroke({ color: secondary, width: 1.6, alpha: 0.68 });
+      ctx.poly([58, -6, 25, -18, 15, 4, 49, 26]).fill({ color: dark, alpha: 0.96 }).stroke({ color: secondary, width: 1.6, alpha: 0.68 });
+      ctx.circle(0, -9, 8).fill({ color: highlight, alpha: 0.86 });
+    } else {
+      ctx.poly([-64, -12, -27, -23, -16, -1, -53, 24]).fill({ color: dark, alpha: 0.96 }).stroke({ color: secondary, width: 1.6, alpha: 0.70 });
+      ctx.poly([64, -12, 27, -23, 16, -1, 53, 24]).fill({ color: dark, alpha: 0.96 }).stroke({ color: secondary, width: 1.6, alpha: 0.70 });
+      ctx.poly([0, -50, 10, -16, 0, 22, -10, -16]).fill({ color: highlight, alpha: 0.82 });
+    }
+    return;
+  }
 
   if (family === "dark-galactic") {
     // Dark space-opera: razor silhouette, matte-black armor, split ion blades
@@ -672,6 +723,22 @@ function createCtfPremiumAuraContext(colors, variant = "") {
   const [primary, secondary, dark, highlight] = colors;
   const family = getCtfPremiumFamily(variant);
   const ctx = new PIXI.GraphicsContext();
+
+  if (family === "starter") {
+    // Academy command HUD: an octagonal range marker with four gold command
+    // brackets. This prevents the free loadout from reading like the circular
+    // premium Galactic aura.
+    ctx.poly([0, -82, 47, -64, 82, -20, 82, 20, 47, 64, 0, 82, -47, 64, -82, 20, -82, -20, -47, -64])
+      .stroke({ color: primary, width: 1.8, alpha: 0.42 });
+    ctx.poly([0, -62, 35, -48, 62, -15, 62, 15, 35, 48, 0, 62, -35, 48, -62, 15, -62, -15, -35, -48])
+      .stroke({ color: secondary, width: 1.2, alpha: 0.38 });
+    [-1, 1].forEach((side) => {
+      ctx.roundRect(side * 47 - (side > 0 ? 7 : 0), -35, 7, 22, 2).fill({ color: highlight, alpha: 0.50 });
+      ctx.roundRect(side * 47 - (side > 0 ? 7 : 0), 13, 7, 22, 2).fill({ color: highlight, alpha: 0.50 });
+    });
+    ctx.roundRect(-18, -18, 36, 36, 9).stroke({ color: highlight, width: 1.2, alpha: 0.32 });
+    return ctx;
+  }
 
   if (family === "dark-galactic") {
     ctx.poly([0, -92, 76, -42, 90, 13, 0, 86, -90, 13, -76, -42])
@@ -854,10 +921,104 @@ function drawCtfVariantPremiumDetails(ctx, colors, role, variant) {
   }
 }
 
+
+function createStarterCommandDroneContext(colors, role) {
+  const [primary, secondary, dark, highlight] = colors;
+  const ctx = new PIXI.GraphicsContext();
+  const rotors = [
+    [-59, -45],
+    [59, -45],
+    [-59, 45],
+    [59, 45],
+  ];
+
+  // Starter Command is deliberately not a reduced version of the premium hulls.
+  // It uses an academy-command language: graphite structural rails, a shared
+  // team-color enamel shell, and gold command markings. The three classes have
+  // visibly different silhouettes even at a quick glance in live combat.
+  const drawCommandArm = (x, y, fromX, fromY, width = 10.5, accent = 4.6, rotor = 22) => {
+    ctx.moveTo(fromX, fromY).lineTo(x, y).stroke({ color: dark, width, alpha: 1 });
+    ctx.moveTo(fromX, fromY).lineTo(x, y).stroke({ color: primary, width: accent, alpha: 0.90 });
+    ctx.moveTo(fromX, fromY).lineTo(x, y).stroke({ color: highlight, width: 1.1, alpha: 0.72 });
+    createRotorModule(ctx, x, y, rotor, colors, false);
+  };
+
+  if (role === "attack-alpha") {
+    rotors.forEach(([x, y]) => drawCommandArm(x, y, x < 0 ? -14 : 14, y < 0 ? -9 : 12, 9.8, 4.2, 21));
+
+    // Cadet Scout — narrow arrowhead and two swept stabilizers.
+    ctx.poly([0, -74, 14, -41, 38, -17, 29, 3, 18, 43, 0, 62, -18, 43, -29, 3, -38, -17, -14, -41])
+      .fill({ color: dark, alpha: 1 });
+    ctx.poly([0, -66, 9, -37, 30, -15, 20, 4, 10, 35, 0, 51, -10, 35, -20, 4, -30, -15, -9, -37])
+      .fill({ color: primary, alpha: 1 });
+    ctx.poly([-54, -9, -24, -9, -17, 7, -53, 28]).fill({ color: dark, alpha: 0.98 }).stroke({ color: secondary, width: 1.65, alpha: 0.78 });
+    ctx.poly([54, -9, 24, -9, 17, 7, 53, 28]).fill({ color: dark, alpha: 0.98 }).stroke({ color: secondary, width: 1.65, alpha: 0.78 });
+    ctx.poly([-43, -5, -27, -5, -23, 5, -45, 19]).fill({ color: highlight, alpha: 0.92 });
+    ctx.poly([43, -5, 27, -5, 23, 5, 45, 19]).fill({ color: highlight, alpha: 0.92 });
+    ctx.poly([0, -56, 7, -26, 5, 2, 0, 15, -5, 2, -7, -26]).fill({ color: secondary, alpha: 0.98 });
+    ctx.poly([0, 22, 12, 38, 0, 49, -12, 38]).fill({ color: highlight, alpha: 0.88 });
+    return ctx;
+  }
+
+  if (role === "attack-bravo") {
+    rotors.forEach(([x, y], index) => drawCommandArm(x, y, x < 0 ? -21 : 21, y < 0 ? -14 : 15, 10.2, 4.3, index < 2 ? 21 : 22));
+
+    // Cadet Wingman — broader interceptor with a separate tail frame.
+    ctx.poly([0, -60, 38, -31, 49, -2, 31, 34, 0, 59, -31, 34, -49, -2, -38, -31])
+      .fill({ color: dark, alpha: 1 });
+    ctx.poly([0, -52, 29, -27, 38, -1, 22, 27, 0, 48, -22, 27, -38, -1, -29, -27])
+      .fill({ color: primary, alpha: 1 });
+    ctx.poly([-60, 5, -28, 10, -37, 40, -69, 25]).fill({ color: dark, alpha: 0.98 }).stroke({ color: secondary, width: 1.6, alpha: 0.76 });
+    ctx.poly([60, 5, 28, 10, 37, 40, 69, 25]).fill({ color: dark, alpha: 0.98 }).stroke({ color: secondary, width: 1.6, alpha: 0.76 });
+    ctx.poly([-49, 11, -30, 15, -35, 28, -55, 20]).fill({ color: highlight, alpha: 0.86 });
+    ctx.poly([49, 11, 30, 15, 35, 28, 55, 20]).fill({ color: highlight, alpha: 0.86 });
+    ctx.poly([0, -46, 15, -19, 11, 7, 0, 20, -11, 7, -15, -19]).fill({ color: secondary, alpha: 0.90 });
+    ctx.roundRect(-18, 29, 36, 10, 4).fill({ color: dark, alpha: 0.98 }).stroke({ color: highlight, width: 1.6, alpha: 0.86 });
+    return ctx;
+  }
+
+  if (role === "tank") {
+    rotors.forEach(([x, y]) => drawCommandArm(x, y, x < 0 ? -31 : 31, y < 0 ? -15 : 22, 16, 7.0, 27));
+
+    // Cadet Bastion — a wide command carrier with slab armor and yellow
+    // identification plates rather than an orb-shaped body.
+    ctx.roundRect(-52, -44, 104, 88, 22).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.6, alpha: 0.82 });
+    ctx.poly([-42, -37, 42, -37, 48, -15, 37, 35, 19, 55, -19, 55, -37, 35, -48, -15])
+      .fill({ color: primary, alpha: 0.96 });
+    ctx.roundRect(-30, -29, 60, 20, 7).fill({ color: dark, alpha: 0.93 }).stroke({ color: highlight, width: 1.8, alpha: 0.90 });
+    [-26, -8, 8, 26].forEach((x) => ctx.roundRect(x - 5, -23, 10, 7, 2).fill({ color: highlight, alpha: 0.96 }));
+    ctx.poly([0, -5, 18, 8, 14, 30, 0, 41, -14, 30, -18, 8]).fill({ color: dark, alpha: 0.88 }).stroke({ color: secondary, width: 2.0, alpha: 0.86 });
+    ctx.poly([0, 1, 8, 11, 6, 25, 0, 30, -6, 25, -8, 11]).fill({ color: secondary, alpha: 0.96 });
+    ctx.roundRect(-58, -12, 13, 44, 5).fill({ color: dark, alpha: 1 }).stroke({ color: highlight, width: 1.65, alpha: 0.76 });
+    ctx.roundRect(45, -12, 13, 44, 5).fill({ color: dark, alpha: 1 }).stroke({ color: highlight, width: 1.65, alpha: 0.76 });
+    return ctx;
+  }
+
+  // Cadet Sentinel — perimeter platform with a hard octagonal guard and
+  // twin command pylons. It reads as defensive, not like a premium Aegis ring.
+  rotors.forEach(([x, y]) => drawCommandArm(x, y, x < 0 ? -22 : 22, y < 0 ? -19 : 19, 12.6, 5.5, 24));
+  ctx.poly([0, -68, 38, -45, 59, -7, 49, 35, 20, 64, -20, 64, -49, 35, -59, -7, -38, -45])
+    .fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.6, alpha: 0.84 });
+  ctx.poly([0, -57, 30, -38, 46, -5, 37, 26, 15, 52, -15, 52, -37, 26, -46, -5, -30, -38])
+    .fill({ color: primary, alpha: 0.98 });
+  ctx.poly([0, -42, 17, -21, 25, 0, 15, 24, 0, 40, -15, 24, -25, 0, -17, -21])
+    .fill({ color: dark, alpha: 0.90 }).stroke({ color: highlight, width: 2.1, alpha: 0.90 });
+  ctx.poly([0, -29, 8, -9, 10, 8, 0, 23, -10, 8, -8, -9]).fill({ color: secondary, alpha: 0.96 });
+  ctx.roundRect(-64, -22, 14, 52, 5).fill({ color: dark, alpha: 1 }).stroke({ color: highlight, width: 1.8, alpha: 0.76 });
+  ctx.roundRect(50, -22, 14, 52, 5).fill({ color: dark, alpha: 1 }).stroke({ color: highlight, width: 1.8, alpha: 0.76 });
+  ctx.moveTo(-44, 40).lineTo(0, 59).lineTo(44, 40).stroke({ color: highlight, width: 3.6, alpha: 0.82 });
+  return ctx;
+}
+
 function createCtfRoleDroneContext(colors, role, variant = "raptor") {
   const [primary, secondary, dark, highlight] = colors;
   const ctx = new PIXI.GraphicsContext();
   const family = getCtfPremiumFamily(variant);
+
+  if (family === "starter") {
+    return createStarterCommandDroneContext(colors, role);
+  }
+
   const rotors = [
     [-59, -45],
     [59, -45],
@@ -950,6 +1111,26 @@ function createCtfRoleLiteDroneContext(colors, role, variant = "default") {
   const [primary, secondary, dark, highlight] = colors;
   const ctx = new PIXI.GraphicsContext();
   const family = getCtfPremiumFamily(variant);
+
+  if (family === "starter") {
+    if (role === "tank") {
+      ctx.roundRect(-27, -25, 54, 51, 13).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.2, alpha: 0.80 });
+      ctx.roundRect(-18, -18, 36, 12, 4).fill({ color: primary, alpha: 0.96 });
+      [-12, 0, 12].forEach((x) => ctx.roundRect(x - 3, -15, 6, 4, 1).fill({ color: highlight, alpha: 0.96 }));
+      return ctx;
+    }
+    if (role === "defense") {
+      ctx.poly([0, -31, 20, -20, 29, 0, 19, 23, 0, 31, -19, 23, -29, 0, -20, -20]).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 2.1, alpha: 0.82 });
+      ctx.poly([0, -25, 15, -15, 22, 0, 14, 17, 0, 24, -14, 17, -22, 0, -15, -15]).fill({ color: primary, alpha: 0.98 });
+      ctx.moveTo(-19, 17).lineTo(0, 27).lineTo(19, 17).stroke({ color: highlight, width: 2.5, alpha: 0.86 });
+      return ctx;
+    }
+    ctx.poly([0, -33, 9, -17, 23, -8, 14, 8, 8, 24, 0, 30, -8, 24, -14, 8, -23, -8, -9, -17]).fill({ color: dark, alpha: 1 }).stroke({ color: secondary, width: 1.9, alpha: 0.82 });
+    ctx.poly([0, -28, 6, -14, 18, -7, 10, 7, 5, 19, 0, 23, -5, 19, -10, 7, -18, -7, -6, -14]).fill({ color: primary, alpha: 1 });
+    ctx.moveTo(-19, -2).lineTo(-9, 6).lineTo(-19, 14).stroke({ color: highlight, width: 2.1, alpha: 0.88 });
+    ctx.moveTo(19, -2).lineTo(9, 6).lineTo(19, 14).stroke({ color: highlight, width: 2.1, alpha: 0.88 });
+    return ctx;
+  }
 
   if (role === "tank") {
     ctx.poly([0, -26, 18, -16, 23, 7, 13, 25, 0, 31, -13, 25, -23, 7, -18, -16]).fill({ color: dark, alpha: 1 });
