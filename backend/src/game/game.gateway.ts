@@ -165,8 +165,9 @@ const CAPTURE_THE_FLAG_BOT_EDGE_RECOVERY_PUSH = 610;
 const CAPTURE_THE_FLAG_ROLE_REVEAL_DURATION_MS = 7000;
 const CAPTURE_THE_FLAG_ROLE_ORDER = ["attack-alpha", "attack-bravo", "tank", "defense"] as const;
 
-// Shop packs only choose the visual family. Blue/Red team is still randomized
-// at match start; this table resolves the role-specific hull after assignment.
+// Shop packs choose the exact canonical visual shown in Hangar and Shop.
+// Blue/Red remains randomized at match start, but team identity is shown
+// through HUD/base markers without replacing the equipped hull.
 const CAPTURE_THE_FLAG_PACK_ROLE_VARIANTS: Record<string, Record<string, string>> = {
   "ctf-pack-starter-command": {
     "attack-alpha": "basic-scout",
@@ -7819,8 +7820,28 @@ export class GameGateway {
     return CAPTURE_THE_FLAG_PACK_ROLE_VARIANTS[validPackId]?.[String(role || "")] || null;
   }
 
-  private getCaptureTheFlagRoleProfile(team: string, role: string, preferredSkinVariantKey: string | null = null) {
-    const normalizedTeam = String(team || "cyan") === "orange" ? "orange" : "cyan";
+  private getCaptureTheFlagPreviewRole(role: string, preferredSkinVariantKey: string | null = null) {
+    const normalizedRole = String(role || "attack-bravo");
+    const variant = String(preferredSkinVariantKey || "");
+
+    // Shop and Hangar show a single Attack hull per CTF pack. Both gameplay
+    // Attack roles therefore render that exact purchased Attack hull; only
+    // their movement/fire-rate profile differs. This prevents an Attack Bravo
+    // seat from silently receiving a different cosmetic than the one equipped.
+    const exactAttackPreviewVariants = new Set([
+      "basic-scout",
+      "raptor",
+      "viper",
+      "talon",
+      "dark-voidfang",
+    ]);
+
+    return normalizedRole === "attack-bravo" && exactAttackPreviewVariants.has(variant)
+      ? "attack-alpha"
+      : normalizedRole;
+  }
+
+  private getCaptureTheFlagRoleProfile(_team: string, role: string, preferredSkinVariantKey: string | null = null) {
     const normalizedRole = String(role || "attack-bravo");
 
     const roleProfiles: Record<string, any> = {
@@ -7855,12 +7876,17 @@ export class GameGateway {
     };
 
     const profile = roleProfiles[normalizedRole] || roleProfiles["attack-bravo"];
-    const teamCollection = CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS[normalizedTeam] || CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS.cyan;
-    const variants = teamCollection[normalizedRole] || teamCollection["attack-bravo"];
+
+    // Cosmetics are independent of the randomized Blue/Red team. Use the
+    // canonical Shop/Hangar collection (cyan) for every player and keep team
+    // identity exclusively in bars, flags, bases and the minimap.
+    const canonicalCollection = CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS.cyan;
+    const previewRole = this.getCaptureTheFlagPreviewRole(normalizedRole, preferredSkinVariantKey);
+    const variants = canonicalCollection[previewRole] || canonicalCollection["attack-alpha"];
     const selectedVariant =
       variants.find((candidate) => String(candidate.key) === String(preferredSkinVariantKey || "")) ||
-      variants[Math.floor(Math.random() * variants.length)] ||
-      teamCollection["attack-bravo"][0];
+      variants[0] ||
+      canonicalCollection["attack-alpha"][0];
 
     return {
       ...profile,
@@ -7868,6 +7894,8 @@ export class GameGateway {
       variant: selectedVariant.name,
       skinFamily: selectedVariant.family || "GALACTIC",
       skinVariantKey: selectedVariant.key,
+      // Authoritative exact cosmetic ID shown in Shop/Hangar. Do not remap it
+      // by team and do not replace it with a neutral/recolored variant.
       skin: selectedVariant.skin,
     };
   }
@@ -7922,7 +7950,7 @@ export class GameGateway {
             ? String(player?.ctfSkinVariantKey || "")
             : null;
         const selectedPackVariant = player.isBot
-          ? null
+          ? this.getCaptureTheFlagSelectedPackVariant("ctf-pack-starter-command", role)
           : this.getCaptureTheFlagSelectedPackVariant(player.ctfSelectedPackId, role);
         const profile = this.getCaptureTheFlagRoleProfile(
           team,

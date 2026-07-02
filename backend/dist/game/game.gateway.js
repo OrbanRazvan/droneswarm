@@ -6012,8 +6012,21 @@ let GameGateway = class GameGateway {
             return null;
         return CAPTURE_THE_FLAG_PACK_ROLE_VARIANTS[validPackId]?.[String(role || "")] || null;
     }
-    getCaptureTheFlagRoleProfile(team, role, preferredSkinVariantKey = null) {
-        const normalizedTeam = String(team || "cyan") === "orange" ? "orange" : "cyan";
+    getCaptureTheFlagPreviewRole(role, preferredSkinVariantKey = null) {
+        const normalizedRole = String(role || "attack-bravo");
+        const variant = String(preferredSkinVariantKey || "");
+        const exactAttackPreviewVariants = new Set([
+            "basic-scout",
+            "raptor",
+            "viper",
+            "talon",
+            "dark-voidfang",
+        ]);
+        return normalizedRole === "attack-bravo" && exactAttackPreviewVariants.has(variant)
+            ? "attack-alpha"
+            : normalizedRole;
+    }
+    getCaptureTheFlagRoleProfile(_team, role, preferredSkinVariantKey = null) {
         const normalizedRole = String(role || "attack-bravo");
         const roleProfiles = {
             "attack-alpha": {
@@ -6046,11 +6059,12 @@ let GameGateway = class GameGateway {
             },
         };
         const profile = roleProfiles[normalizedRole] || roleProfiles["attack-bravo"];
-        const teamCollection = CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS[normalizedTeam] || CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS.cyan;
-        const variants = teamCollection[normalizedRole] || teamCollection["attack-bravo"];
+        const canonicalCollection = CAPTURE_THE_FLAG_ROLE_SKIN_COLLECTIONS.cyan;
+        const previewRole = this.getCaptureTheFlagPreviewRole(normalizedRole, preferredSkinVariantKey);
+        const variants = canonicalCollection[previewRole] || canonicalCollection["attack-alpha"];
         const selectedVariant = variants.find((candidate) => String(candidate.key) === String(preferredSkinVariantKey || "")) ||
-            variants[Math.floor(Math.random() * variants.length)] ||
-            teamCollection["attack-bravo"][0];
+            variants[0] ||
+            canonicalCollection["attack-alpha"][0];
         return {
             ...profile,
             role: normalizedRole,
@@ -6100,7 +6114,7 @@ let GameGateway = class GameGateway {
                     ? String(player?.ctfSkinVariantKey || "")
                     : null;
                 const selectedPackVariant = player.isBot
-                    ? null
+                    ? this.getCaptureTheFlagSelectedPackVariant("ctf-pack-starter-command", role)
                     : this.getCaptureTheFlagSelectedPackVariant(player.ctfSelectedPackId, role);
                 const profile = this.getCaptureTheFlagRoleProfile(team, role, selectedPackVariant || keepExistingVariant);
                 const roleChanged = String(player?.ctfRole || "") !== String(profile.role || "") ||

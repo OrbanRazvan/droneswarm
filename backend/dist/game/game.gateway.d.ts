@@ -337,6 +337,7 @@ export declare class GameGateway {
     private randomizeCaptureTheFlagTeamsAndRoles;
     private normalizeCaptureTheFlagPackId;
     private getCaptureTheFlagSelectedPackVariant;
+    private getCaptureTheFlagPreviewRole;
     private getCaptureTheFlagRoleProfile;
     private assignCaptureTheFlagBotRoles;
     private updateCaptureTheFlagBots;

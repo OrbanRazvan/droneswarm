@@ -1311,52 +1311,6 @@ function getCaptureTheFlagRoleLabel(role, fallback = "PILOT") {
 
 const DEFAULT_CTF_PACK_ID = "ctf-pack-starter-command";
 
-const CTF_EQUIPPED_PACK_VARIANTS = Object.freeze({
-  "ctf-pack-starter-command": {
-    "attack-alpha": "basic-scout",
-    "attack-bravo": "basic-wingman",
-    tank: "basic-bastion",
-    defense: "basic-sentinel",
-  },
-  "ctf-pack-galactic-command": {
-    "attack-alpha": "raptor",
-    "attack-bravo": "phantom",
-    tank: "bastion",
-    defense: "aegis",
-  },
-  "ctf-pack-medieval-forge": {
-    "attack-alpha": "viper",
-    "attack-bravo": "scythe",
-    tank: "juggernaut",
-    defense: "warden",
-  },
-  "ctf-pack-military-prototype": {
-    "attack-alpha": "talon",
-    "attack-bravo": "eclipse",
-    tank: "atlas",
-    defense: "bulwark",
-  },
-  "ctf-pack-dark-galactic": {
-    "attack-alpha": "dark-voidfang",
-    "attack-bravo": "dark-voidfang",
-    tank: "dark-voidfang",
-    defense: "dark-voidfang",
-  },
-});
-
-function getEquippedCaptureTheFlagSkin(user, unit) {
-  const packId = String(user?.ctfSelectedPackId || DEFAULT_CTF_PACK_ID).trim() || DEFAULT_CTF_PACK_ID;
-  const role = String(unit?.ctfRole || "").trim().toLowerCase();
-  const variant = CTF_EQUIPPED_PACK_VARIANTS[packId]?.[role];
-
-  if (!variant || !role) return null;
-
-  const team = String(unit?.team || unit?.ctfTeam || "cyan").toLowerCase() === "orange"
-    ? "red"
-    : "blue";
-
-  return `ctf-${team}-${role}-${variant}`;
-}
 
 function getCaptureTheFlagSkinFamilyLabel(family) {
   const normalized = String(family || "").trim().toUpperCase();
@@ -3945,24 +3899,20 @@ function CapturetheFlag({ user, onExitToMenu, graphicsQuality = "normal" }) {
     .filter((projectile) => isVisible(projectile, bounds, 180))
     .slice(reactiveRenderLimits.projectiles, reactiveRenderLimits.projectiles + reactiveRenderLimits.simpleProjectiles);
 
+  // The backend assigns one authoritative cosmetic ID after roles are rolled.
+  // Render that exact server skin for the local player and spectators. Never
+  // reconstruct a cosmetic locally from team/role, because that can silently
+  // replace the pack selected in Shop/Hangar (especially Attack Bravo).
   const rendererPlayer = isDead && spectatorTarget
     ? {
         ...spectatorTarget,
-        skin: normalizeSkin(
-          getEquippedCaptureTheFlagSkin(user, spectatorTarget) ||
-          spectatorTarget.skin ||
-          getSelectedSkin(user),
-        ),
+        skin: normalizeSkin(spectatorTarget.skin || "cyan"),
         isSpectatorTarget: true,
       }
     : you?.alive !== false
       ? {
           ...you,
-          skin: normalizeSkin(
-            getEquippedCaptureTheFlagSkin(user, you) ||
-            you?.skin ||
-            getSelectedSkin(user),
-          ),
+          skin: normalizeSkin(you?.skin || "cyan"),
         }
       : null;
 
